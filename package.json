@@ -46,9 +46,20 @@
         "to": "backend"
       }
     ],
+    "extraFiles": [
+      {
+        "from": "resources/portable-template/data",
+        "to": "data",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "win": {
       "target": [
-        "portable"
+        "portable",
+        "nsis",
+        "zip"
       ],
       "icon": "public/icon.ico"
     },

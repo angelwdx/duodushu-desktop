@@ -17,7 +17,7 @@ hiddenimports = [
     'uvicorn.lifespan.on',
     'engineio.async_drivers.threading',
     'sqlalchemy.sql.default_comparator',
-    'pydantic_settings', 
+    'pydantic_settings',
     'pydantic.deprecated.decorator'
 ]
 
@@ -25,6 +25,8 @@ hiddenimports = [
 tmp_ret = collect_all('fastapi')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 datas += [('app', 'app')]
+# 仅包含 ecdict.db，其他数据文件在运行时生成
+datas += [('data/ecdict.db', 'data')]
 tmp_ret = collect_all('uvicorn')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('sqlalchemy')
