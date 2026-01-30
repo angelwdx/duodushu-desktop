@@ -90,10 +90,3 @@ CLAUDE.md
 logs/
 frontend/lint_*.txt
 
-# Project Documentation (internal use only)
-CLAUDE.md
-
-# Temporary lint and test logs
-frontend/lint_*.txt
-logs/
-
