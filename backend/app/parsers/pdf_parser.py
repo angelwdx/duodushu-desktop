@@ -317,9 +317,9 @@ class PDFParser(BaseParser):
             book_id: 书籍 ID
         """
         try:
-            from ..models.database import BASE_DIR
+            from ..models.database import UPLOADS_DIR
 
-            thumbnail_service = ThumbnailService(BASE_DIR)
+            thumbnail_service = ThumbnailService(UPLOADS_DIR)
             thumbnail_service.generate_thumbnails(file_path, book_id, resolution=100)
         except Exception as e:
             logger.error(f"Failed to generate thumbnails: {e}")

@@ -7,18 +7,17 @@ from pathlib import Path
 class ThumbnailService:
     """Service for generating and managing PDF page thumbnails"""
 
-    def __init__(self, base_dir: Path):
-        self.base_dir = base_dir
+    def __init__(self, uploads_dir: Path):
+        self.uploads_dir = uploads_dir  # 直接使用 UPLOADS_DIR
 
     def get_thumbnails_dir(self, book_id: str) -> Path:
-        """Get the thumbnails directory for a specific book"""
-        thumbnails_dir = self.base_dir / "uploads" / "thumbnails" / book_id
+        """Get thumbnails directory for a specific book"""
+        # 使用 uploads_dir 而不是 base_dir
+        thumbnails_dir = self.uploads_dir / "thumbnails" / book_id
         thumbnails_dir.mkdir(parents=True, exist_ok=True)
         return thumbnails_dir
 
-    def generate_thumbnails(
-        self, pdf_path: str, book_id: str, resolution: int = 150
-    ) -> Optional[bool]:
+    def generate_thumbnails(self, pdf_path: str, book_id: str, resolution: int = 150) -> Optional[bool]:
         """
         Generate thumbnails for all pages of a PDF
 
@@ -63,22 +62,22 @@ class ThumbnailService:
 
     def get_thumbnail_path(self, book_id: str, page_number: int) -> Optional[str]:
         """
-        Get the relative path to a thumbnail image
+        Get relative path to a thumbnail image
 
         Args:
-            book_id: Unique identifier for the book
+            book_id: Unique identifier for book
             page_number: Page number (1-indexed)
 
         Returns:
             Relative path from uploads directory or None if not found
         """
         thumbnail_filename = f"page_{page_number}.png"
-        relative_path = f"uploads/thumbnails/{book_id}/{thumbnail_filename}"
+        relative_path = f"thumbnails/{book_id}/{thumbnail_filename}"
 
         # Check if file exists
-        full_path = self.base_dir / relative_path
+        full_path = self.uploads_dir / relative_path
         if full_path.exists():
-            return relative_path
+            return f"uploads/{relative_path}"
 
         return None
 
