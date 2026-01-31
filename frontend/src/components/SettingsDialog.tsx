@@ -344,6 +344,7 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
                type="password"
                value={currentState?.apiKey || ''}
                onChange={(e) => updateState('apiKey', e.target.value)}
+               autoComplete="off"
                placeholder={currentSupplier?.configured ? "已配置 (重新输入以更改)..." : "sk-..."}
                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 text-sm focus:ring-2 focus:ring-black focus:border-transparent outline-none transition-all"
              />
@@ -365,12 +366,12 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
                </label>
                <div className="relative">
                    <select
-                     value={currentState?.model === currentState?.customModel && currentState?.customModel ? "__custom__" : (currentState?.model || "")}
+                     value={(currentState?.model && currentModels.some(m => m.id === currentState.model)) ? currentState.model : "__custom__"}
                      onChange={(e) => {
                        const val = e.target.value;
                        if (val === "__custom__") {
+                         // Switch to custom input mode
                          updateState('model', currentState?.customModel || "__typing__");
-                         if (!currentState?.customModel) updateState('customModel', "");
                        } else {
                          updateState('model', val);
                          updateState('customModel', "");
@@ -378,11 +379,11 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
                      }}
                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 text-sm focus:ring-2 focus:ring-black focus:border-transparent outline-none appearance-none cursor-pointer transition-all hover:bg-gray-100"
                    >
-                     {!currentState?.model && currentModels.length > 0 && <option value="" disabled>请选择模型...</option>}
+                     {currentModels.length === 0 && <option value="__custom__">无预设模型 (手动输入)</option>}
                      {currentModels.map(m => (
                        <option key={m.id} value={m.id}>{m.name}</option>
                      ))}
-                     <option value="__custom__">手动输入模型名称...</option>
+                     {currentModels.length > 0 && <option value="__custom__">手动输入模型名称...</option>}
                    </select>
                  <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500">
                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -392,10 +393,10 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
                </div>
                
                {/* Custom Model Input */}
-               {(currentState?.model === "__typing__" || (currentState?.model === currentState?.customModel && currentState?.customModel) || currentModels.length === 0 || selectedSupplierType === 'custom') && (
+               {(currentState?.model === "__typing__" || !currentModels.some(m => m.id === currentState?.model) || selectedSupplierType === 'custom') && (
                  <input
                    type="text"
-                   value={currentState?.customModel || ""}
+                   value={currentState?.customModel || (currentState?.model !== "__typing__" ? currentState?.model : "") || ""}
                    onChange={(e) => {
                      updateState('customModel', e.target.value);
                      updateState('model', e.target.value);

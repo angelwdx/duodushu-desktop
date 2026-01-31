@@ -101,11 +101,13 @@ def run_example_extraction_task(word: str, max_total: int = 10):
             logger.info(f"[后台任务] 开始为单词 '{word}' 提取例句，上限 {max_total} 个")
 
             db = SessionLocal()
-            find_and_save_example_contexts_native(word, db, max_total=max_total)
-
-            extraction_logger.info(f"[后台任务] 完成单词 '{word}' 的例句提取")
-            logger.info(f"[后台任务] 完成单词 '{word}' 的例句提取")
-            break  # 成功，退出重试
+            try:
+                find_and_save_example_contexts_native(word, db, max_total=max_total)
+                extraction_logger.info(f"[后台任务] 完成单词 '{word}' 的例句提取")
+                logger.info(f"[后台任务] 完成单词 '{word}' 的例句提取")
+                break  # 成功，退出重试
+            finally:
+                db.close()
 
         except Exception as e:
             retry_count += 1
@@ -891,12 +893,8 @@ def find_and_save_example_contexts_native(word: str, db: Session, exclude_book_i
                     # 每一页只取一个例句，避免同页多句冲突，也增加了例句的多样性
                     break
 
-        # 手动提交事务
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
+        # 显式提交
+        db.commit()
 
         extraction_logger.info(
             f"[例句提取] ✓ 成功为单词 '{word}' 保存 {contexts_found} 个新例句 "
