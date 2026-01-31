@@ -137,7 +137,7 @@ async function createWindow() {
     logToFile('URL loaded successfully');
       
       // TEMPORARY: Open DevTools in production to debug blank screen
-      mainWindow.webContents.openDevTools();
+      // mainWindow.webContents.openDevTools();
   }
 
   // 处理外部链接打开请求
