@@ -1,7 +1,7 @@
 # 多读书 (Duodushu) 桌面客户端
 
 **版本**: 1.0.0
-**最后更新**: 2026-01-30
+**最后更新**: 2026-01-31
 
 一款**本地优先（Local-First）且支持绿色便携（Portable）**的沉浸式英语学习工作站。
 
@@ -33,6 +33,9 @@ npm run dev
 - ✅ **绿色便携** - 解压即用，数据随身携带
 - ✅ **本地优先** - 所有数据存储在本地，无需上传云端
 - ✅ **高性能阅读** - 秒开数百 MB 的 PDF/EPUB 大文件
+- ✅ **AI 辅助** - 基于 FTS5 全文搜索，支持智能问答与辅助阅读
+- ✅ **智能词典** - 多源词典聚合，支持生词本与复习
+- ✅ **语音朗读** - 集成 Edge TTS，提供高质量文本转语音
 - ✅ **系统集成** - 全局快捷键、文件关联、系统通知
 - ✅ **离线支持** - 基础功能完全离线，AI 功能可选联网
 - ✅ **跨平台** - Windows、macOS、Linux 支持
@@ -46,12 +49,14 @@ npm run dev
 
 ### 开发文档
 - **[开发指南](./docs/DEVELOPMENT.md)** - 环境设置和开发命令
-- **[技术架构](./docs/桌面端_技术架构文档.md)** - 系统设计和架构
+- **[技术架构](./docs/TDD.md)** - 系统设计和架构
+- **[多供应商指南](./docs/MULTI_SUPPLIER_GUIDE.md)** - 词典与 AI 服务商扩展
 - **[API 文档](./docs/API.md)** - 后端 API 参考
 - **[代码约定](./docs/CONVENTIONS.md)** - 代码规范和最佳实践
+- **[测试报告](./docs/TEST_REPORT.md)** - 测试覆盖率与状态
 
 ### 产品文档
-- **[产品需求](./docs/桌面端_PRD.md)** - 功能需求和版本规划
+- **[产品需求](./docs/PRD.md)** - 功能需求和版本规划
 
 ## 🏗️ 项目结构
 
@@ -60,7 +65,7 @@ duodushu-desktop/
 ├── electron/                # Electron 主进程
 │   ├── main.ts
 │   ├── preload.ts
-│   └── python-manager.ts
+│   └── tsconfig.json
 ├── frontend/                # Next.js 前端
 │   ├── src/
 │   ├── public/
@@ -80,8 +85,7 @@ duodushu-desktop/
 |------|------|
 | `npm run dev` | 启动完整开发环境 |
 | `npm run build` | 构建生产版本 |
-| `npm run lint` | 代码检查 |
-| `npm run test` | 运行测试 |
+| `npm run lint` | 代码检查 (前端) |
 | `npm run electron:dev` | 仅启动 Electron |
 
 ## 📊 三种运行模式
@@ -107,7 +111,7 @@ duodushu-desktop/
 
 | 模块 | 技术 |
 |------|------|
-| **应用框架** | Electron 16+ |
+| **应用框架** | Electron 28+ |
 | **前端** | Next.js 16 + React 19 + Tailwind CSS 4 |
 | **后端** | FastAPI + SQLAlchemy 2.0 |
 | **数据库** | SQLite |
