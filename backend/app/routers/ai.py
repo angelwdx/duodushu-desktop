@@ -93,10 +93,13 @@ def classify_user_intent(
         "chapter summary",
     ]
 
-    # 强制排除项：如果包含“这一页”、“本页”、“当前页”，绝对不进入全书检索模式
-    page_keywords = ["这一页", "本页", "当前页", "this page", "current page"]
+    # 强制排除项：如果包含“这一页”、“本页”、“当前页”、“讲解”、“这段内容”等，优先进入单页模式
+    page_keywords = [
+        "这一页", "本页", "当前页", "this page", "current page",
+        "讲解", "这段", "解析", "下一段", "这段内容", "explain this", "analyze this"
+    ]
     if any(kw in lower_msg for kw in page_keywords):
-        logger.info(f"检测到页面指令关键词，强制设为单页学习模式: {lower_msg}")
+        logger.info(f"检测到页面指令关键词，设为单页学习模式: {lower_msg}")
         return "language_learning"
 
     # 明确的全书/定位关键词
@@ -129,10 +132,6 @@ def classify_user_intent(
         return "knowledge_retrieval"  # 统称为知识检索
 
     # 默认回落到单页模式
-    # 包括：翻译、解释、总结(默认本页)、语法、词汇等
-    return "language_learning"
-
-    # 3. 默认回落到单页模式
     # 包括：翻译、解释、总结(默认本页)、语法、词汇等
     return "language_learning"
 
@@ -211,8 +210,23 @@ def knowledge_based_chat_fts5(request: ChatRequest, db: Session) -> dict:
         """)
 
         # 构建搜索查询（支持多个关键词）
-        keywords = request.message.strip()
-        logger.info(f"FTS5 搜索关键词: {keywords}")
+        # 修复：清理搜索词，防止特殊字符导致 FTS5 语法错误
+        raw_keywords = request.message.strip()
+        # 简单清理：只保留字母、数字、空格和中文字符，限制长度
+        import re
+        clean_keywords = re.sub(r'[^\w\s\u4e00-\u9fa5]', ' ', raw_keywords)
+        keywords = " ".join(clean_keywords.split()[:10]) # 只取前10个单词/词组
+        
+        if not keywords:
+             logger.warning(f"搜索词为空或无效: '{raw_keywords}'")
+             return {
+                "reply": "关键词不足，请尝试输入更具体的词汇。",
+                "role": "assistant",
+                "sources": [],
+                "intent": "no_content",
+            }
+        
+        logger.info(f"FTS5 搜索原词: '{raw_keywords}' -> 清理后: '{keywords}'")
 
         result = db.execute(
             search_query,
