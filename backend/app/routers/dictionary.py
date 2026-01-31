@@ -37,12 +37,14 @@ class TranslationRequest(BaseModel):
 
 @router.post("/translate")
 def translate_text_endpoint(req: TranslationRequest):
-    from ..services import deepseek_service
+    from ..services import supplier_factory
 
     try:
         print(f"[DEBUG translate_text] Received: text='{req.text}'")
-        translation = deepseek_service.translate_text(req.text)
+        translation = supplier_factory.translate_with_active_supplier(req.text)
         print(f"[DEBUG translate_text] Result: {repr(translation)}")
+        if not translation:
+             raise HTTPException(status_code=500, detail="Translation returned empty")
         return {"translation": translation}
     except Exception as e:
         print(f"[DEBUG translate_text] Exception: {type(e).__name__}: {e}")

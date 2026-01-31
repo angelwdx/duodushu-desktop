@@ -428,6 +428,31 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
             imported_res["phonetic"] = ecdict_phonetic
         return imported_res
 
+    # 1.5. 尝试词形还原后重新查询 MDX（仅在 MDX 查询失败时）
+    if _should_try_lemma(original_word, imported_res):
+        lemma_candidates = _get_lemma_candidates(original_word, validate_candidates=True)
+        if lemma_candidates:
+            logger.info(f"Trying lemma candidates for '{original_word}': {lemma_candidates}")
+            for lemma in lemma_candidates:
+                try:
+                    lemma_result = dict_manager.lookup_word(lemma, source=source)
+                    if lemma_result:
+                        logger.info(f"Found via lemma reduction: '{original_word}' → '{lemma}'")
+                        # 用原词作为显示词，但使用 lemma 的释义
+                        lemma_result["word"] = original_word
+                        lemma_result["lemma_from"] = lemma
+                        # 补充 ECDICT 翻译和音标
+                        lemma_cn_translation = ecdict_service.get_translation(lemma)
+                        if lemma_cn_translation:
+                            lemma_result["chinese_translation"] = lemma_cn_translation
+                        lemma_phonetic = ecdict_service.get_word_details(lemma).get("phonetic") if ecdict_service.get_word_details(lemma) else None
+                        if lemma_phonetic:
+                            lemma_result["phonetic"] = lemma_phonetic
+                        return lemma_result
+                except Exception as e:
+                    logger.warning(f"Lemma lookup failed for '{lemma}': {e}")
+                    continue
+
     # 2. Use Full ECDICT as Primary Local Fallback
     if ecdict_data:
         # Map ECDICT fields to frontend expected structure

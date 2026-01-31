@@ -1086,9 +1086,7 @@ export default function EPUBReader({
             <div className="text-center"><p className="text-gray-500">加载 EPUB...</p></div>
           </div>
         )}
-        <div className="absolute left-0 top-0 w-16 h-full cursor-pointer z-10 hover:bg-black/5 transition-colors" onClick={goPrev} />
         <div ref={containerRef} className={`h-full bg-white mx-auto shadow-sm transition-all duration-300 ${fitMode === 'page' ? 'max-w-5xl w-full' : 'w-full px-4'}`} />
-        <div className="absolute right-0 top-0 w-16 h-full cursor-pointer z-10 hover:bg-black/5 transition-colors" onClick={goNext} />
         
 
       </div>

@@ -558,10 +558,10 @@ export async function fetchDicts(): Promise<DictInfo[]> {
 }
 
 /**
- * 删除词典
+ * 删除词典（使用更长超时，因为删除大型词典数据库记录需要时间）
  */
 export async function deleteDict(dictName: string): Promise<void> {
-  const res = await fetchWithTimeout(`${API_URL}/api/dicts/${dictName}`, 5000, {
+  const res = await fetchWithTimeout(`${API_URL}/api/dicts/${dictName}`, 30000, {
     method: 'DELETE',
   });
   if (!res.ok) throw new Error('Failed to delete dict');

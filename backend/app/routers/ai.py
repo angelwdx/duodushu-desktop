@@ -140,14 +140,33 @@ def classify_user_intent(
 # ========== 策略：单页英语学习（现有逻辑） ==========
 async def language_learning_chat(request: ChatRequest):
     """单页英语学习模式（复用现有逻辑）"""
-    result = deepseek_service.chat_with_teacher(
-        user_message=request.message,
-        history=request.history,
-        page_content=request.page_content,
-        current_page=request.current_page,
-        book_title=request.book_title,
+    from ..services import supplier_factory
+    from ..services.deepseek_service import SYSTEM_PROMPT_TEACHER
+
+    # 构建带上下文的消息
+    content_prompt = ""
+    if request.page_content and request.book_title and request.current_page:
+        content_preview = request.page_content[:5000] if len(request.page_content) > 5000 else request.page_content
+        content_prompt = f"【当前阅读内容】\n书名：《{request.book_title}》\n第 {request.current_page} 页\n内容摘要：\n{content_preview}\n\n"
+
+    user_message = content_prompt + request.message
+
+    # 转换历史格式
+    history = []
+    if request.history:
+        for msg in request.history:
+            history.append({"role": msg["role"], "content": msg["content"]})
+
+    reply = supplier_factory.chat_with_active_supplier(
+        message=user_message,
+        history=history,
+        system_prompt=SYSTEM_PROMPT_TEACHER,
+        temperature=0.7
     )
-    return result
+
+    if reply:
+        return {"reply": reply, "role": "assistant"}
+    return None
 
 
 # ========== 策略：知识库检索 ==========

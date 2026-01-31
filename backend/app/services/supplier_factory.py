@@ -236,6 +236,71 @@ def get_active_model() -> str:
     return default_models.get(config.supplier_type, "deepseek-chat")
 
 
+def translate_with_active_supplier(text: str) -> Optional[str]:
+    """
+    使用当前活跃的供应商进行翻译
+
+    Args:
+        text: 待翻译的英文文本
+
+    Returns:
+        中文翻译或 None
+    """
+    if not text or not text.strip():
+        return None
+
+    client = get_active_client()
+    if not client:
+        logger.error("无法获取客户端进行翻译")
+        return None
+
+    model = get_active_model()
+    supplier_type = get_supplier_factory().get_active_supplier_type()
+
+    prompt = f"Translate the following English text to Chinese (Simplified). Only provide the translation, no explanations:\n\n{text}"
+
+    try:
+        # 使用 OpenAI 兼容接口 (DeepSeek, Qwen, Custom, OpenAI)
+        if supplier_type in [SupplierType.OPENAI, SupplierType.DEEPSEEK, SupplierType.QWEN, SupplierType.CUSTOM]:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are a professional translator."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                max_tokens=1000,
+            )
+            result = response.choices[0].message.content
+            if result:
+                result = result.strip()
+                # 去除引号
+                if result.startswith('"') and result.endswith('"'):
+                    result = result[1:-1].strip()
+                return result
+
+        elif supplier_type == SupplierType.GEMINI:
+            import google.generativeai as genai
+            model_instance = genai.GenerativeModel(model)
+            response = model_instance.generate_content(prompt)
+            return response.text.strip()
+
+        elif supplier_type == SupplierType.CLAUDE:
+            response = client.messages.create(
+                model=model,
+                max_tokens=1000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.content[0].text.strip()
+
+        logger.warning(f"未实现的翻译供应商类型: {supplier_type}")
+        return None
+
+    except Exception as e:
+        logger.error(f"翻译失败: {e}")
+        return None
+
+
 def chat_with_active_supplier(
     message: str,
     history: Optional[List[Dict]] = None,
