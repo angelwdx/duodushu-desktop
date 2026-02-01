@@ -146,6 +146,14 @@ async function createWindow() {
   ipcMain.on('open-external', (event, url) => {
     shell.openExternal(url);
   });
+
+  // 获取后端 URL（用于前端动态检测）
+  ipcMain.handle('get-backend-url', (event) => {
+    const port = 8000;
+    const backendUrl = `http://127.0.0.1:${port}`;
+    logToFile(`Providing backend URL: ${backendUrl}`);
+    return backendUrl;
+  });
   
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
       logErrorToFile(`Page failed to load: ${errorCode} - ${errorDescription}`);

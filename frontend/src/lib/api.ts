@@ -1,4 +1,29 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+// 尝试从 Electron 获取后端 URL（便携版使用）
+// 在开发环境或 Electron 未提供 URL 时，使用默认值
+let API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
+// 如果在 Electron 环境中（检测 window.electronAPI）
+if (typeof window !== 'undefined' && (window as any).electronAPI) {
+  try {
+    const backendUrl = await (window as any).electronAPI.getBackendUrl();
+    if (backendUrl) {
+      API_URL = backendUrl;
+      console.log('[API] Using backend URL from Electron:', backendUrl);
+    }
+  } catch (e) {
+    console.warn('[API] Failed to get backend URL from Electron:', e);
+  }
+}
+
+// 如果在 Electron 环境中但没有提供 URL，使用 localhost
+if (typeof window !== 'undefined' && !(window as any).electronAPI) {
+  // 默认：检测是否是 Electron 环境（通过 electronAPI 是否存在判断）
+  // 如果是 Electron，说明主进程应该提供后端 URL
+  // 但如果 electronAPI 不存在，可能是开发模式的 Electron
+  API_URL = "http://127.0.0.1:8000";
+}
+
+console.log('[API] Final API URL:', API_URL);
 
 // 带超时的 fetch 函数
 async function fetchWithTimeout(url: string, timeout: number, options?: RequestInit): Promise<Response> {
