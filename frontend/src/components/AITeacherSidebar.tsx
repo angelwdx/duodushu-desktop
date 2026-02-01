@@ -13,6 +13,8 @@ const log = createLogger('AITeacherSidebar');
 import { getApiUrl } from '../lib/api';
 
 const API_URL = getApiUrl();
+
+interface Message {
   role: "user" | "assistant";
   content: string;
   recommendedQuestions?: string[];
