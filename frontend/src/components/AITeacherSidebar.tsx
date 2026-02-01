@@ -5,9 +5,14 @@ import ReactMarkdown from "react-markdown";
 import { createLogger } from "../lib/logger";
 
 const log = createLogger('AITeacherSidebar');
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-interface Message {
+// 注意：API_URL 已在 frontend/src/lib/api.ts 中正确处理
+// 使用从 api.ts 导入的 getApiUrl() 函数来获取后端 URL
+// 这样可以确保便携版和开发环境都使用正确的后端地址
+
+import { getApiUrl } from '../lib/api';
+
+const API_URL = getApiUrl();
   role: "user" | "assistant";
   content: string;
   recommendedQuestions?: string[];
