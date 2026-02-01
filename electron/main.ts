@@ -225,14 +225,33 @@ function startPythonBackend() {
     scriptPath = path.join(process.cwd(), 'backend', 'run_backend.py'); // 我们需要创建一个 run_backend.py
     args = [scriptPath, '--port', '8000', '--data-dir', dataPath];
   } else {
-    // 生产模式：运行打包后的可执行文件
-    const backendPath = path.join(process.resourcesPath, PY_DIST_FOLDER);
-    // Windows 下通常是 backend/backend.exe
-    const exeName = process.platform === 'win32' ? 'backend.exe' : 'backend';
-    scriptPath = path.join(backendPath, exeName);
-    cmd = scriptPath;
-    args = ['--port', '8000', '--data-dir', dataPath];
-  }
+      // 生产模式：运行打包后的可执行文件
+      const backendPath = path.join(process.resourcesPath, PY_DIST_FOLDER);
+      const exeName = process.platform === 'win32' ? 'backend.exe' : 'backend';
+      const exePath = path.join(backendPath, exeName);
+
+      // 确定工作目录：backend.exe 所在的实际目录
+      // PyInstaller 将可执行文件放在 _internal/ 子目录中
+      // 设置工作目录为 _internal 目录，确保数据目录正确创建
+      let workingDir = path.dirname(exePath);
+      const internalDir = path.join(backendPath, '_internal');
+      if (fs.existsSync(internalDir)) {
+        workingDir = internalDir;
+      }
+
+      // 传递绝对路径作为 --data-dir 参数
+      scriptPath = exePath;
+      cmd = scriptPath;
+
+      // 将 dataPath 转换为绝对路径（相对于 exe 所在目录）
+      const absoluteDataPath = path.resolve(workingDir, dataPath);
+
+      args = ['--port', '8000', '--data-dir', absoluteDataPath];
+
+      logToFile(`Starting Python backend in directory: ${workingDir}`);
+      logToFile(`Script: ${scriptPath}`);
+      logToFile(`Args: ${args.join(' ')}`);
+   }
 
   logToFile(`Starting Python backend: ${cmd} ${args.join(' ')}`);
 
