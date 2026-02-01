@@ -285,12 +285,25 @@ function ReaderContent() {
         source = arg2;
     }
 
+    let displaySource = source;
+    if (source === 'pdf' || source === 'epub') {
+        displaySource = book?.title || '书籍正文';
+    } else if (source === 'dictionary') {
+        displaySource = '词典';
+    } else if (source === 'ai') {
+        displaySource = 'AI老师';
+    } else if (source === 'notes') {
+        displaySource = '笔记列表';
+    } else if (source === 'vocab') {
+        displaySource = '生词本';
+    }
+
     const newNote: Note = {
       id: `note-${Date.now()}`,
       bookId: id,
       pageNumber: pageNum,
       highlightedText: text,
-      comment: source ? `来源: ${source}` : "",
+      comment: displaySource ? `来源: ${displaySource}` : "",
       createdAt: Date.now(),
       color: "#fef08a", // yellow-200
     };
