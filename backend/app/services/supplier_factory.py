@@ -14,10 +14,12 @@ logger = logging.getLogger(__name__)
 
 # ========== 导入各供应商服务 ==========
 
+
 def get_gemini_client():
     """获取 Gemini 客户端"""
     try:
         import google.generativeai as genai
+
         return genai
     except ImportError:
         logger.error("google.generativeai 未安装")
@@ -28,6 +30,7 @@ def get_openai_client():
     """获取 OpenAI 客户端"""
     try:
         from openai import OpenAI
+
         return OpenAI
     except ImportError:
         logger.error("openai 未安装")
@@ -38,6 +41,7 @@ def get_anthropic_client():
     """获取 Anthropic 客户端"""
     try:
         from anthropic import Anthropic
+
         return Anthropic
     except ImportError:
         logger.error("anthropic 未安装")
@@ -45,6 +49,7 @@ def get_anthropic_client():
 
 
 # ========== 供应商工厂 ==========
+
 
 class SupplierFactory:
     """供应商工厂类 - 根据配置动态选择AI服务"""
@@ -65,6 +70,7 @@ class SupplierFactory:
                 # 尝试加载新版配置
                 if "suppliers" in config_data:
                     from app.supplier_config import SupplierConfig, SupplierType
+
                     suppliers = {}
                     for supplier_type_str, supplier_data in config_data.get("suppliers", {}).items():
                         try:
@@ -86,6 +92,7 @@ class SupplierFactory:
                     active_supplier = SupplierType(active_supplier_str) if active_supplier_str else None
 
                     from app.supplier_config import MultiSupplierConfig
+
                     self.config = MultiSupplierConfig(
                         suppliers=suppliers,
                         active_supplier=active_supplier,
@@ -93,13 +100,20 @@ class SupplierFactory:
                 else:
                     # 使用旧版配置
                     from app.supplier_config import migrate_old_config
+
                     self.config = migrate_old_config(config_data)
 
             except Exception as e:
                 logger.error(f"加载配置失败: {e}")
                 self.config = None
         else:
-            self.config = None
+            # 首次运行：创建默认配置（空配置）
+            logger.info("首次运行：创建默认 AI 配置")
+            from app.supplier_config import MultiSupplierConfig
+
+            self.config = MultiSupplierConfig(suppliers={}, active_supplier=None)
+            # 保存默认配置
+            self._save_config()
 
     def get_active_supplier_config(self):
         """获取当前活跃的供应商配置"""
@@ -119,6 +133,30 @@ class SupplierFactory:
         """重新加载配置"""
         self._load_config()
 
+    def _save_config(self):
+        """保存配置到文件"""
+        from app.supplier_config import SupplierConfig
+
+        config_file = DATA_DIR / "app_config.json"
+        config_data = {
+            "suppliers": {
+                supplier_type.value: {
+                    "name": config.name,
+                    "api_key": config.api_key,
+                    "api_endpoint": config.api_endpoint,
+                    "model": config.model,
+                    "custom_model": config.custom_model,
+                    "enabled": config.enabled,
+                    "is_active": config.is_active,
+                }
+                for supplier_type, config in self.config.suppliers.items()
+            },
+            "active_supplier": self.config.active_supplier.value if self.config.active_supplier else None,
+        }
+        with open(config_file, "w", encoding="utf-8") as f:
+            json.dump(config_data, f, indent=2, ensure_ascii=False)
+        logger.info(f"配置已保存到 {config_file}")
+
 
 # ========== 单例工厂实例 ==========
 
@@ -134,6 +172,7 @@ def get_supplier_factory() -> SupplierFactory:
 
 
 # ========== 便捷函数 ==========
+
 
 def get_active_client():
     """
@@ -173,26 +212,17 @@ def get_active_client():
         elif supplier_type == SupplierType.DEEPSEEK:
             OpenAI = get_openai_client()
             if OpenAI:
-                return OpenAI(
-                    api_key=api_key,
-                    base_url="https://api.deepseek.com/v1"
-                )
+                return OpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
 
         elif supplier_type == SupplierType.QWEN:
             OpenAI = get_openai_client()
             if OpenAI:
-                return OpenAI(
-                    api_key=api_key,
-                    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-                )
+                return OpenAI(api_key=api_key, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
 
         elif supplier_type == SupplierType.CUSTOM:
             OpenAI = get_openai_client()
             if OpenAI and api_endpoint:
-                return OpenAI(
-                    api_key=api_key,
-                    base_url=api_endpoint
-                )
+                return OpenAI(api_key=api_key, base_url=api_endpoint)
 
         logger.warning(f"无法创建 {supplier_type.value} 客户端")
         return None
@@ -266,7 +296,7 @@ def translate_with_active_supplier(text: str) -> Optional[str]:
                 model=model,
                 messages=[
                     {"role": "system", "content": "You are a professional translator."},
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
                 max_tokens=1000,
@@ -281,6 +311,7 @@ def translate_with_active_supplier(text: str) -> Optional[str]:
 
         elif supplier_type == SupplierType.GEMINI:
             import google.generativeai as genai
+
             model_instance = genai.GenerativeModel(model)
             response = model_instance.generate_content(prompt)
             return response.text.strip()
@@ -371,10 +402,7 @@ def chat_with_active_supplier(
                 if msg["role"] == "system":
                     continue
                 role = "user" if msg["role"] == "user" else "model"
-                gemini_messages.append({
-                    "role": role,
-                    "parts": [{"text": msg["content"]}]
-                })
+                gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
 
             # 创建模型实例
             model_instance = genai.GenerativeModel(model)
@@ -385,7 +413,7 @@ def chat_with_active_supplier(
                 generation_config={
                     "temperature": temperature,
                     "max_output_tokens": max_tokens,
-                }
+                },
             )
             return response.text
 

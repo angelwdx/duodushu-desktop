@@ -1,7 +1,10 @@
 import os
+import logging
 from pathlib import Path
 from typing import Dict, Any, List
 from .base import BaseParser
+
+logger = logging.getLogger(__name__)
 
 
 class TXTParser(BaseParser):
