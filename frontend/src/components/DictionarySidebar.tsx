@@ -563,7 +563,7 @@ function DictionarySidebar({
 
             {/* Content Display */}
             {/* 当没有启用的导入词典时，显示提示 */}
-            {sources.length === 0 && (wordData as any)?.is_ecdict ? (
+            {sources.length === 0 && !(wordData as any)?.multiple_sources ? (
               <div className="min-h-[200px] flex flex-col items-center justify-center text-center py-12">
                 <div className="w-16 h-16 mb-4 text-gray-300">
                   <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">

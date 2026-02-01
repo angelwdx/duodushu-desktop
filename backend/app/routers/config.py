@@ -251,6 +251,11 @@ def save_api_keys(keys: APIKeysConfig):
 
     logger.info("API keys 已更新")
 
+    # 刷新工厂单例配置，使配置立即生效
+    from ..services import supplier_factory
+    factory = supplier_factory.get_supplier_factory()
+    factory.reload_config()
+
     return {
         "status": "success",
         "message": "API keys 已保存",
@@ -357,6 +362,11 @@ def save_supplier_config(request: SupplierConfigRequest):
 
     logger.info(f"供应商配置已保存: {request.supplier_type}")
 
+    # 刷新工厂单例配置，使配置立即生效
+    from ..services import supplier_factory
+    factory = supplier_factory.get_supplier_factory()
+    factory.reload_config()
+
     return {
         "status": "success",
         "message": f"{preset.get('name', request.supplier_type)} 配置已保存",
@@ -406,6 +416,11 @@ def set_active_supplier(request: SetActiveSupplierRequest):
     save_multi_supplier_config(multi_config)
 
     logger.info(f"活跃供应商已设置为: {request.supplier_type}")
+
+    # 刷新工厂单例配置，使配置立即生效
+    from ..services import supplier_factory
+    factory = supplier_factory.get_supplier_factory()
+    factory.reload_config()
 
     return {
         "status": "success",

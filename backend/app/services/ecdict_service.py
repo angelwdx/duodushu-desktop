@@ -19,55 +19,14 @@ _pool_lock = threading.Lock()
 
 def get_db_path():
     """
-    Locate ecdict.db in multiple possible locations.
-    Priority (for packaged app):
-    1. _internal/data/ecdict.db (PyInstaller packaged)
-    2. Project Root data/ (development)
-    3. Backend data/ (development)
-    4. CWD data/ (fallback)
+    获取 ecdict.db 路径。
+    
+    使用 config.py 中统一配置的 ECDICT_DB_PATH，
+    该路径已正确处理开发环境和 PyInstaller 打包环境。
     """
-    current_file = Path(__file__).resolve()
-    # current_file: .../backend/app/services/ecdict_service.py (dev)
-    #            or .../backend/_internal/app/services/ecdict_service.py (packaged)
+    from app.config import ECDICT_DB_PATH
+    return str(ECDICT_DB_PATH)
 
-    # .../backend/app/services
-    services_dir = current_file.parent
-
-    # .../backend/app
-    app_dir = services_dir.parent
-
-    # .../backend (or .../backend/_internal in packaged app)
-    backend_dir = app_dir.parent
-
-    # 1. Check PyInstaller packaged location: _internal/data/ecdict.db
-    path_internal = backend_dir / "_internal" / "data" / "ecdict.db"
-    if path_internal.exists():
-        logger.info(f"Found ecdict.db in packaged location: {path_internal}")
-        return str(path_internal)
-
-    # 2. Check Root data/ (development)
-    # .../duodushu (Root)
-    project_root = backend_dir.parent
-    path_root = project_root / "data" / "ecdict.db"
-    if path_root.exists():
-        logger.info(f"Found ecdict.db in project root: {path_root}")
-        return str(path_root)
-
-    # 3. Check Backend data/ (development)
-    path_backend = backend_dir / "data" / "ecdict.db"
-    if path_backend.exists():
-        logger.info(f"Found ecdict.db in backend dir: {path_backend}")
-        return str(path_backend)
-
-    # 4. Check relative CWD (fallback)
-    path_cwd = Path("data/ecdict.db").resolve()
-    if path_cwd.exists():
-        logger.info(f"Found ecdict.db in CWD: {path_cwd}")
-        return str(path_cwd)
-
-    # Default to packaged location for error reporting
-    logger.error(f"ecdict.db not found in any location. Checked: {path_internal}, {path_root}, {path_backend}, {path_cwd}")
-    return str(path_internal)
 
 
 def _get_connection() -> Optional[sqlite3.Connection]:

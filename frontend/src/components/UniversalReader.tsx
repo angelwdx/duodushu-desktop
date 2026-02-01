@@ -56,6 +56,9 @@ export default function UniversalReader(props: ReaderProps) {
       return (
         <TXTReader
           textContent={props.textContent}
+          pageNumber={props.pageNumber}
+          totalPages={props.totalPages}
+          onPageChange={props.onPageChange}
           onWordClick={props.onWordClick}
         />
       );

@@ -60,6 +60,90 @@ scheduler.add_job(scheduled_priority_update, "cron", hour=3, minute=0, id="daily
 from contextlib import asynccontextmanager
 
 
+def ensure_fts5_index(db_path: str):
+    """
+    确保 FTS5 全文搜索索引存在
+    
+    在应用启动时自动执行，创建 pages_fts 虚拟表和同步触发器。
+    这是幂等操作，使用 IF NOT EXISTS 避免重复创建。
+    """
+    import sqlite3
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # 检查 FTS5 是否可用
+        try:
+            cursor.execute("CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_test USING fts5(t);")
+            cursor.execute("DROP TABLE IF EXISTS _fts5_test;")
+        except sqlite3.OperationalError as e:
+            if "no such module: fts5" in str(e):
+                logger.error("FTS5 模块不可用，例句提取功能将无法正常工作")
+                return False
+            raise
+        
+        # 创建 pages_fts 虚拟表
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
+                id UNINDEXED,
+                book_id UNINDEXED,
+                page_number UNINDEXED,
+                text_content,
+                content='pages',
+                content_rowid='id'
+            );
+        """)
+        
+        # 检查是否需要同步数据（仅当 pages_fts 为空且 pages 有数据时）
+        fts_count = cursor.execute("SELECT COUNT(*) FROM pages_fts").fetchone()[0]
+        pages_count = cursor.execute("SELECT COUNT(*) FROM pages WHERE text_content IS NOT NULL").fetchone()[0]
+        
+        if fts_count == 0 and pages_count > 0:
+            logger.info(f"同步 {pages_count} 页到 FTS5 索引...")
+            cursor.execute("""
+                INSERT OR REPLACE INTO pages_fts(id, book_id, page_number, text_content)
+                SELECT id, book_id, page_number, text_content
+                FROM pages
+                WHERE text_content IS NOT NULL;
+            """)
+            logger.info(f"FTS5 索引同步完成")
+        
+        # 创建自动同步触发器（INSERT）
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS pages_ai AFTER INSERT ON pages BEGIN
+                INSERT INTO pages_fts(id, book_id, page_number, text_content)
+                VALUES (NEW.id, NEW.book_id, NEW.page_number, NEW.text_content);
+            END;
+        """)
+        
+        # 创建自动同步触发器（UPDATE）
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
+                INSERT INTO pages_fts(id, book_id, page_number, text_content)
+                VALUES (NEW.id, NEW.book_id, NEW.page_number, NEW.text_content);
+            END;
+        """)
+        
+        # 创建自动同步触发器（DELETE）
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS pages_ad AFTER DELETE ON pages BEGIN
+                INSERT INTO pages_fts(pages_fts, id) VALUES('delete', OLD.id);
+            END;
+        """)
+        
+        conn.commit()
+        logger.info("FTS5 全文搜索索引初始化完成")
+        return True
+        
+    except Exception as e:
+        logger.error(f"FTS5 初始化失败: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Initialize database and start scheduler
@@ -93,8 +177,13 @@ async def lifespan(app: FastAPI):
                     except Exception as e:
                         logger.warning(f"添加列 {col_name} 失败（可能已存在）: {e}")
 
+        # 初始化 FTS5 全文搜索索引（用于例句提取功能）
+        from app.config import DB_PATH
+        ensure_fts5_index(str(DB_PATH))
+
     except Exception as e:
         logger.error(f"数据库初始化失败: {e}")
+
 
     # 启动调度器
     logger.info("启动后台任务调度器...")
