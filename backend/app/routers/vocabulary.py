@@ -97,7 +97,9 @@ def run_example_extraction_task(word: str, max_total: int = 10):
                     return
                 processing_words.add(word_lower)
 
-            extraction_logger.info(f"[后台任务] 开始为单词 '{word}' 提取例句，上限 {max_total} 个（尝试 {retry_count + 1}/{max_retries}）")
+            extraction_logger.info(
+                f"[后台任务] 开始为单词 '{word}' 提取例句，上限 {max_total} 个（尝试 {retry_count + 1}/{max_retries}）"
+            )
             logger.info(f"[后台任务] 开始为单词 '{word}' 提取例句，上限 {max_total} 个")
 
             db = SessionLocal()
@@ -776,10 +778,12 @@ def find_examples_task(word: str, exclude_book_id: Optional[str] = None):
         db.close()
 
 
-def find_and_save_example_contexts_native(word: str, db: Session, exclude_book_id: Optional[str] = None, max_total: int = 10):
+def find_and_save_example_contexts_native(
+    word: str, db: Session, exclude_book_id: Optional[str] = None, max_total: int = 10
+):
     """
     在其他书里查找这个词的例句并保存
-    只从 book_type='example_library' 的书籍中提取
+    优先从 book_type='example_library' 的书籍中提取，如果没有则从所有书籍中提取
     使用 FTS5 全文搜索提升性能和准确性
 
     Args:
@@ -792,14 +796,17 @@ def find_and_save_example_contexts_native(word: str, db: Session, exclude_book_i
         extraction_logger.info(f"[例句提取] 开始为单词 '{word}' 提取例句，上限 {max_total} 个")
 
         # 先查询已有的 example_library 例句数量（在事务外查询，避免事务冲突）
-        existing_count = db.execute(
-            text("""
+        existing_count = (
+            db.execute(
+                text("""
                 SELECT COUNT(*) FROM word_contexts
                 WHERE lower(word) = lower(:word)
                   AND source_type = 'example_library'
             """),
-            {"word": word},
-        ).scalar() or 0
+                {"word": word},
+            ).scalar()
+            or 0
+        )
 
         extraction_logger.info(f"[例句提取] 单词 '{word}' 已有 {existing_count} 个例句库例句")
 
@@ -813,14 +820,28 @@ def find_and_save_example_contexts_native(word: str, db: Session, exclude_book_i
 
         # 使用 FTS5 全文搜索（单词边界匹配，性能更好）
         # MATCH 会自动进行单词边界匹配，不需要额外的正则表达式
-        query_str = """
-            SELECT p.id, p.book_id, p.page_number, p.text_content
-            FROM pages p
-            INNER JOIN pages_fts fts ON p.id = fts.rowid
-            INNER JOIN books b ON p.book_id = b.id
-            WHERE fts.text_content MATCH :word
-              AND b.book_type = 'example_library'
-        """
+        # 优先从 example_library 书籍中提取，如果没有则从所有书籍中提取
+        lib_books_count = (
+            db.execute(text("SELECT COUNT(*) FROM books WHERE book_type = 'example_library'")).scalar() or 0
+        )
+
+        if lib_books_count > 0:
+            query_str = """
+                SELECT p.id, p.book_id, p.page_number, p.text_content
+                FROM pages p
+                INNER JOIN pages_fts fts ON p.id = fts.rowid
+                INNER JOIN books b ON p.book_id = b.id
+                WHERE fts.text_content MATCH :word
+                  AND b.book_type = 'example_library'
+            """
+        else:
+            extraction_logger.warning(f"[例句提取] 没有例句库书籍，从所有书籍中提取例句")
+            query_str = """
+                SELECT p.id, p.book_id, p.page_number, p.text_content
+                FROM pages p
+                INNER JOIN pages_fts fts ON p.id = fts.rowid
+                WHERE fts.text_content MATCH :word
+            """
 
         # 使用引号包裹搜索词以进行精确匹配，并添加首字母大写变体以支持更全的 FTS5 搜索
         search_variants = [f'"{word}"']
@@ -842,7 +863,9 @@ def find_and_save_example_contexts_native(word: str, db: Session, exclude_book_i
         total_sentences = 0
         for page in pages:
             if contexts_found >= need_to_extract:  # 达到需要提取的数量
-                extraction_logger.info(f"[例句提取] 已提取足够数量的例句 ({contexts_found}/{need_to_extract})，停止提取")
+                extraction_logger.info(
+                    f"[例句提取] 已提取足够数量的例句 ({contexts_found}/{need_to_extract})，停止提取"
+                )
                 break
 
             # 提取包含这个词的句子
@@ -1033,7 +1056,7 @@ def extract_sentences_with_word_native(text: str, word: str) -> list:
 
         # 优先级4：放宽匹配（词根匹配/子串匹配），作为最后的保底
         if len(matching_sentences) < 3 and word_lower in sentence_lower:
-             matching_sentences.append(cleaned)
+            matching_sentences.append(cleaned)
 
     # 去重
     seen = set()
@@ -1417,14 +1440,17 @@ def extract_examples_manual(vocab_id: int, background_tasks: BackgroundTasks, db
         word = vocab[0]
 
         # 检查当前例句数量（只统计 example_library 类型的例句）
-        current_count = db.execute(
-            text("""
+        current_count = (
+            db.execute(
+                text("""
                 SELECT COUNT(*) FROM word_contexts
                 WHERE lower(word) = lower(:word)
                   AND source_type = 'example_library'
             """),
-            {"word": word},
-        ).scalar() or 0
+                {"word": word},
+            ).scalar()
+            or 0
+        )
 
         # 最多20个例句，已达到上限则不提取
         if current_count >= 20:
