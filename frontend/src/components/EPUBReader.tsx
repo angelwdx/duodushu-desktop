@@ -187,6 +187,30 @@ export default function EPUBReader({
                   // 错误来源于 epub.js 的 requestAnimationFrame 队列，无法被 try-catch 捕获
                   log.debug('Search positioned successfully, skipping display(cfi) to avoid IndexSizeError');
 
+                  // --- 关键改进：手动滚动到找到的文本位置，确保准确定位 ---
+                  try {
+                      // 获取找到的文本的位置
+                      const rect = range.getBoundingClientRect();
+
+                      // 计算需要滚动的距离，使文本位置在视口中心
+                      const viewportHeight = win.innerHeight;
+                      const targetScrollY = win.scrollY + rect.top - viewportHeight / 2 + rect.height / 2;
+
+                      // 平滑滚动到目标位置
+                      win.scrollTo({
+                          top: Math.max(0, targetScrollY),
+                          behavior: 'smooth'
+                      });
+
+                      log.debug('Scrolled to found text position', {
+                          rectTop: rect.top,
+                          targetScrollY: Math.max(0, targetScrollY),
+                          viewportHeight
+                      });
+                  } catch (scrollErr) {
+                      log.debug('Manual scroll failed, relying on window.find() auto-scroll:', scrollErr);
+                  }
+
                   // --- 关键改进：只高亮单词，不高亮整段上下文 ---
                   try {
                       const searchOverlay = doc.getElementById('search-highlight-overlay');
@@ -297,13 +321,22 @@ export default function EPUBReader({
     setIsClient(true);
   }, []);
 
-  // 关键修复：当 renditionReady 变为 true 时，处理之前保存的 jumpRequest
+   // 关键修复：当 renditionReady 变为 true 时，处理之前保存的 jumpRequest
   useEffect(() => {
+    log.info('Jump useEffect triggered:', { 
+      renditionReady, 
+      hasRenditionRef: !!renditionRef.current, 
+      hasBookRef: !!bookRef.current,
+      savedJumpTs: jumpRequestedBeforeReadyRef.current?.ts,
+      lastProcessedTs: lastProcessedJumpTs.current
+    });
+    
     if (renditionReady && renditionRef.current && bookRef.current) {
       const savedJump = jumpRequestedBeforeReadyRef.current;
-      if (savedJump && savedJump.ts !== lastProcessedJumpTs.current) {
+      // 关键修复：使用 > 而不是 !==，因为可能有多个跳转请求
+      if (savedJump && savedJump.ts > lastProcessedJumpTs.current) {
         log.info('Rendition ready, processing saved jump:', savedJump);
-        lastProcessedJumpTs.current = savedJump.ts;
+        lastProcessedJumpTs.current = savedJump.ts; // 只在实际执行时更新
         pendingJumpRef.current = savedJump;
         
         // 直接复制 tryJump 逻辑到这里
@@ -355,22 +388,30 @@ export default function EPUBReader({
   // Handle jump requests (注意：refs 已在文件顶部定义)
   useEffect(() => {
     if (jumpRequest?.dest) {
-      if (jumpRequest.ts === lastProcessedJumpTs.current) return;
-      lastProcessedJumpTs.current = jumpRequest.ts;
+      // 关键修复：不要在这里更新 lastProcessedJumpTs，否则 savedJump > lastProcessed 会失败
+      // lastProcessedJumpTs 只在实际执行跳转时更新
 
       log.info('Jump request received:', { 
         dest: jumpRequest.dest, 
         text: jumpRequest.text, 
         word: jumpRequest.word,
-        renditionReady 
+        renditionReady,
+        lastProcessedTs: lastProcessedJumpTs.current
       });
 
       pendingJumpRef.current = jumpRequest;
       
-      // 关键修复：如果 rendition 还没准备好，保存 jumpRequest 供后续处理
+      // 如果 rendition 还没准备好，保存 jumpRequest 供后续处理
       if (!renditionReady) {
         log.info('Rendition not ready yet, saving jump request for later');
         jumpRequestedBeforeReadyRef.current = jumpRequest;
+        return;
+      }
+      
+      // 关键修复：如果 jumpRequestedBeforeReadyRef 存在，说明已经由 renditionReady useEffect 处理
+      if (jumpRequestedBeforeReadyRef.current) {
+        log.info('Jump already handled by renditionReady useEffect, skipping');
+        jumpRequestedBeforeReadyRef.current = null; // 清除标记
         return;
       }
       
@@ -954,7 +995,12 @@ export default function EPUBReader({
 
       
 
-      if (!isCancelled) setRenditionReady(true);
+      if (!isCancelled) {
+        log.info('Setting renditionReady to true');
+        setRenditionReady(true);
+      } else {
+        log.warn('EPUB initialization was cancelled, renditionReady will not be set');
+      }
       
       // 新增：初始化完成后立即同步一次内容
       if (!isCancelled && onContentChange && rendition) {

@@ -111,17 +111,27 @@ function ReaderContent() {
       .then((data) => {
         setBook(data);
         
+        // 调试日志
+        log.info('Book status loaded:', { 
+          format: data.format, 
+          targetPage, 
+          hasSearchText: !!searchText, 
+          hasTargetWord: !!targetWord 
+        });
+        
         // 优先级：URL参数 > 历史进度 > 第一页
         if (targetPage && targetPage > 0) {
           setCurrentPage(targetPage);
           // Set jumpRequest for all formats to handle specific text highlighting
           if (['epub', 'pdf', 'txt'].includes(data.format?.toLowerCase())) {
-            setJumpRequest({
+            const newJumpRequest = {
               dest: targetPage - 1, // EPUB and PDFReader use 0-based index or equivalent logic
               text: searchText || undefined,
               word: targetWord || undefined,
               ts: Date.now()
-            });
+            };
+            log.info('Setting jumpRequest:', newJumpRequest);
+            setJumpRequest(newJumpRequest);
           }
         } else if (data.last_page && data.last_page > 0) {
           setCurrentPage(data.last_page);
