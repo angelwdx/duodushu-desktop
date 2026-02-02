@@ -5,6 +5,10 @@ import "../styles/dictionary/variables.css";
 import "../styles/dictionary/longman.css";
 import "../styles/dictionary/oxford.css";
 import "../styles/dictionary/webster.css";
+import GlobalMenuHandler from "../components/GlobalMenuHandler";
+
+import { SettingsProvider } from "../contexts/SettingsContext";
+import { GlobalDialogsProvider } from "../contexts/GlobalDialogsContext";
 
 const geistSans = { variable: "--font-geist-sans" };
 const geistMono = { variable: "--font-geist-mono" };
@@ -29,7 +33,12 @@ export default function RootLayout({
           src="/pdf-polyfill.js"
           strategy="beforeInteractive"
         />
-        {children}
+        <SettingsProvider>
+          <GlobalDialogsProvider>
+            <GlobalMenuHandler />
+            {children}
+          </GlobalDialogsProvider>
+        </SettingsProvider>
       </body>
     </html>
   );

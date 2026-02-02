@@ -15,7 +15,13 @@ export const useReaderGestures = (
   enabled: boolean = true
 ) => {
   const bind = useDrag(
-    ({ down, movement: [mx], direction: [xDir], swipe: [swipeX] }) => {
+    ({ down, movement: [mx], direction: [xDir], swipe: [swipeX], event }) => {
+      // 如果目标是文本层元素，则忽略手势，允许原生文本选择
+      const target = event.target as HTMLElement;
+      if (target?.closest('.react-pdf__Page__textContent')) {
+        return;
+      }
+
       // 左右滑动阈值: 50px
       const threshold = 50;
 
@@ -34,6 +40,7 @@ export const useReaderGestures = (
       filterTaps: true,        // 忽略点击
       rubberband: true,       // 橡皮筋效果
       axis: 'x',             // 只响应水平方向
+      pointer: { touch: true }, // 显式启用触摸支持
       swipe: {                // 滑动配置
         distance: 50,         // 滑动距离阈值
         duration: 250,        // 滑动时间阈值（毫秒）

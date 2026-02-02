@@ -242,6 +242,18 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
     }));
   };
 
+  // SSR Protection & Logging
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+    console.log('[SettingsDialog] Component mounted');
+  }, []);
+
+  useEffect(() => {
+    console.log('[SettingsDialog] isOpen changed:', isOpen);
+  }, [isOpen]);
+
+  if (!mounted) return null;
   if (!isOpen) return null;
 
   return (

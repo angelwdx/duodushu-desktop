@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 
 // 定义 electronAPI 类型
 declare global {
@@ -21,7 +20,6 @@ declare global {
 interface MenuHandlerProps {
   onImportBook?: () => void;
   onExportNotes?: () => void;
-  onOpenSettings?: () => void;
   onShowAbout?: () => void;
   onCheckUpdate?: () => void;
 }
@@ -29,31 +27,28 @@ interface MenuHandlerProps {
 /**
  * 菜单事件处理组件
  * 监听 Electron 菜单操作并执行相应的动作
+ * 注意：导航事件由 GlobalMenuHandler 在根布局中处理
  */
 export default function MenuHandler({
   onImportBook,
   onExportNotes,
-  onOpenSettings,
   onShowAbout,
   onCheckUpdate,
 }: MenuHandlerProps) {
-  const router = useRouter();
-
   useEffect(() => {
     // 检查是否在 Electron 环境中
     if (typeof window === 'undefined' || !window.electronAPI) {
       return;
     }
 
-    // 监听导航事件
-    window.electronAPI.onNavigate((path: string) => {
-      console.log('[MenuHandler] Navigate to:', path);
-      router.push(path);
-    });
-
-    // 监听菜单操作事件
-    window.electronAPI.onMenuAction((action: string) => {
-      console.log('[MenuHandler] Menu action:', action);
+    // 监听来自 GlobalMenuHandler 广播的自定义事件
+    // 不再直接监听 window.electronAPI.onMenuAction，避免 removeListener 冲突
+    const handleMenuAction = (event: Event) => {
+      const customEvent = event as CustomEvent<string>;
+      const action = customEvent.detail;
+      
+      console.log('[MenuHandler] Received DOM menu action:', action);
+      
       switch (action) {
         case 'import-book':
           onImportBook?.();
@@ -61,28 +56,26 @@ export default function MenuHandler({
         case 'export-notes':
           onExportNotes?.();
           break;
-        case 'open-settings':
-          onOpenSettings?.();
-          break;
         case 'show-about':
           onShowAbout?.();
           break;
         case 'check-update':
           onCheckUpdate?.();
           break;
+        // open-settings 由 GlobalMenuHandler 直接处理，这里无需 break; // Ignore
         default:
-          console.warn('[MenuHandler] Unknown action:', action);
+          // Ignore other actions
+          break;
       }
-    });
+    };
+
+    window.addEventListener('app-menu-action', handleMenuAction);
 
     // 清理监听器
     return () => {
-      if (window.electronAPI) {
-        window.electronAPI.removeNavigateListener();
-        window.electronAPI.removeMenuActionListener();
-      }
+      window.removeEventListener('app-menu-action', handleMenuAction);
     };
-  }, [router, onImportBook, onExportNotes, onOpenSettings, onShowAbout, onCheckUpdate]);
+  }, [onImportBook, onExportNotes, onShowAbout, onCheckUpdate]);
 
   // 这是一个纯逻辑组件，不渲染任何内容
   return null;

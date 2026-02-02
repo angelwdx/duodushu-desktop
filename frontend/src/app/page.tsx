@@ -3,18 +3,20 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { getBooks, deleteBook, updateBookType, Book } from '../lib/api';
-import UploadDialog from '../components/UploadDialog';
-import SettingsDialog from '../components/SettingsDialog';
+// import UploadDialog from '../components/UploadDialog'; // Removed, handled globally
 import MenuHandler from '../components/MenuHandler';
 import Link from 'next/link';
+import { useSettings } from '../contexts/SettingsContext';
+import { useGlobalDialogs } from '../contexts/GlobalDialogsContext';
 
 export default function Home() {
   const [books, setBooks] = useState<Book[]>([]);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [bookToDelete, setBookToDelete] = useState<string | null>(null);
-  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
-  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
+  const { openSettings } = useSettings();
+  const { openUpload } = useGlobalDialogs();
   const [pollingError, setPollingError] = useState<string | null>(null);
+  
   const [hoveredBookId, setHoveredBookId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -97,6 +99,17 @@ export default function Home() {
 
   useEffect(() => {
     fetchBooks();
+    
+    // Listen for global book uploaded event
+    const handleBookUploaded = () => {
+        console.log('[Home] Received book-uploaded event, refreshing list...');
+        fetchBooks();
+    };
+    window.addEventListener('book-uploaded', handleBookUploaded);
+    
+    return () => {
+        window.removeEventListener('book-uploaded', handleBookUploaded);
+    };
   }, [fetchBooks]);
 
   // Poll for updates if any book is processing
@@ -147,7 +160,7 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-2 sm:gap-4">
             <button
-              onClick={() => setUploadDialogOpen(true)}
+              onClick={openUpload}
               className="w-11 h-11 inline-grid place-items-center text-gray-500 hover:text-gray-900 transition-colors group hover:bg-gray-100 rounded-full border-none outline-none shrink-0 touch-icon-btn"
               title="上传书籍"
               aria-label="上传书籍"
@@ -179,7 +192,7 @@ export default function Home() {
               </svg>
             </Link>
             <button
-              onClick={() => setSettingsDialogOpen(true)}
+              onClick={openSettings}
               className="w-11 h-11 inline-grid place-items-center text-gray-500 hover:text-gray-900 transition-colors hover:bg-gray-100 rounded-full shrink-0 touch-icon-btn"
               title="API 配置"
               aria-label="设置"
@@ -328,24 +341,10 @@ export default function Home() {
         </section>
       </div>
 
-      {/* Menu Handler - 处理 Electron 菜单事件 */}
-      <MenuHandler
-        onImportBook={() => setUploadDialogOpen(true)}
-        onOpenSettings={() => setSettingsDialogOpen(true)}
-      />
+      {/* Menu Handler - 处理 Electron 菜单事件 (首页特定) */}
+      <MenuHandler />
 
-      {/* Upload Dialog */}
-      <UploadDialog
-        isOpen={uploadDialogOpen}
-        onClose={() => setUploadDialogOpen(false)}
-        onUploadSuccess={fetchBooks}
-      />
-
-      {/* Settings Dialog */}
-      <SettingsDialog
-        isOpen={settingsDialogOpen}
-        onClose={() => setSettingsDialogOpen(false)}
-      />
+      {/* Upload Dialog has been moved to GlobalDialogsContext */}
 
       {/* Delete Confirmation Modal */}
       {deleteConfirmOpen && (
