@@ -7,6 +7,7 @@ import {
   translateText,
   lookupWord,
   extractExamplesManual,
+  checkTranslationConfigured,
 } from "../lib/api";
 import ContextAwareLayout from "./ContextAwareLayout";
 import ClickableText from "./ClickableText";
@@ -77,6 +78,7 @@ export default function VocabDetailContent({
   const [markingMastered, setMarkingMastered] = useState(false);
   const [translationMap, setTranslationMap] = useState<{ [key: string]: string }>({});
   const [translatingSet, setTranslatingSet] = useState<Set<string>>(new Set());
+  const [failedSet, setFailedSet] = useState<Set<string>>(new Set());
   const [extracting, setExtracting] = useState(false);
   const [recentlyAddedWords, setRecentlyAddedWords] = useState<any[]>([]);
 
@@ -246,6 +248,13 @@ export default function VocabDetailContent({
       } catch (e) {
         const errorMessage = e instanceof Error ? e.message : String(e);
         console.error(`翻译失败 [${sentence.substring(0, 30)}...]:`, errorMessage);
+        // 记录失败，避免无限重试
+        setFailedSet((prev) => {
+            if (prev.has(sentence)) return prev;
+            const next = new Set(prev);
+            next.add(sentence);
+            return next;
+        });
       } finally {
         setTranslatingSet((prev) => {
           if (!prev.has(sentence)) return prev;
@@ -258,9 +267,21 @@ export default function VocabDetailContent({
     [],
   );
 
+  const [isTranslationConfigured, setIsTranslationConfigured] = useState<boolean>(false);
+
+  // 检查翻译服务配置
+  useEffect(() => {
+    const checkConfig = async () => {
+        const configured = await checkTranslationConfigured();
+        setIsTranslationConfigured(configured);
+    };
+    checkConfig();
+  }, []);
+
   // 自动翻译所有句子
   useEffect(() => {
-    if (!vocab || loading) return;
+    // 只有在明确检测到已配置的情况下才进行自动翻译
+    if (!vocab || loading || !isTranslationConfigured) return;
 
     const sentences: string[] = [];
     if (vocab.primary_context?.context_sentence) {
@@ -272,7 +293,7 @@ export default function VocabDetailContent({
       }
     });
 
-    const nextToTranslate = sentences.find(s => !translationMap[s] && !translatingSet.has(s));
+    const nextToTranslate = sentences.find(s => !translationMap[s] && !translatingSet.has(s) && !failedSet.has(s));
 
     if (nextToTranslate) {
       const timer = setTimeout(() => {
@@ -280,7 +301,7 @@ export default function VocabDetailContent({
       }, 300);
       return () => clearTimeout(timer);
     }
-  }, [vocab, translationMap, translatingSet, autoTranslate, loading]);
+  }, [vocab, translationMap, translatingSet, failedSet, autoTranslate, loading, isTranslationConfigured]);
 
   const loadVocab = useCallback(async () => {
     try {

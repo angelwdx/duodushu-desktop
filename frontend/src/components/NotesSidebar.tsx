@@ -17,6 +17,7 @@ export interface Note {
 
 interface NotesSidebarProps {
   bookId: string;
+  bookTitle?: string;
   notes: Note[];
   onDeleteNote: (noteId: string) => void;
   onUpdateComment: (noteId: string, comment: string) => void;
@@ -29,6 +30,7 @@ interface NotesSidebarProps {
  */
 export default function NotesSidebar({
   bookId,
+  bookTitle,
   notes,
   onDeleteNote,
   onUpdateComment,
@@ -60,7 +62,7 @@ export default function NotesSidebar({
       return;
     }
 
-    let md = `# 阅读笔记\n\n`;
+    let md = `# ${bookTitle || '阅读笔记'}\n\n`;
     md += `导出时间: ${new Date().toLocaleString()}\n\n---\n\n`;
 
     bookNotes.forEach((note, index) => {
@@ -77,7 +79,9 @@ export default function NotesSidebar({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `notes-${bookId}-${Date.now()}.md`;
+    // 使用书籍名称作为文件名，如果不存在则使用 bookId
+    const safeTitle = (bookTitle || bookId || "notes").replace(/[\\/:*?"<>|]/g, "_");
+    a.download = `${safeTitle}.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

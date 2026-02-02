@@ -811,6 +811,43 @@ export default function EPUBReader({
           `;
           doc.head.appendChild(style);
 
+          // Monkey Patch Range methods to silence IndexSizeError
+          try {
+            const originalSetEnd = win.Range.prototype.setEnd;
+            win.Range.prototype.setEnd = function(node: Node, offset: number) {
+              try {
+                return originalSetEnd.call(this, node, offset);
+              } catch (e: any) {
+                const isIndexSizeError = e.name === 'IndexSizeError' || 
+                                       (e.message && e.message.includes('IndexSizeError')) ||
+                                       (e.message && e.message.includes('The offset is larger than'));
+                if (isIndexSizeError) {
+                   console.debug('[EPUB] Silenced IndexSizeError in setEnd', e);
+                   return;
+                }
+                throw e;
+              }
+            };
+
+            const originalSetStart = win.Range.prototype.setStart;
+            win.Range.prototype.setStart = function(node: Node, offset: number) {
+              try {
+                return originalSetStart.call(this, node, offset);
+              } catch (e: any) {
+                 const isIndexSizeError = e.name === 'IndexSizeError' || 
+                                       (e.message && e.message.includes('IndexSizeError')) ||
+                                       (e.message && e.message.includes('The offset is larger than'));
+                if (isIndexSizeError) {
+                   console.debug('[EPUB] Silenced IndexSizeError in setStart', e);
+                   return;
+                }
+                throw e;
+              }
+            };
+          } catch (err) {
+            log.warn('Failed to patch Range methods:', err);
+          }
+
           // Create Highlight Overlay
           const overlay = doc.createElement('div');
           overlay.id = 'word-highlight-overlay';

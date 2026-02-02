@@ -730,3 +730,24 @@ export function saveSettings(settings: { apiUrl: string }): void {
 
   localStorage.setItem('duodushu_settings', JSON.stringify(settings));
 }
+/**
+ * 检查翻译功能是否已配置（是否有活跃且有效的供应商）
+ */
+export async function checkTranslationConfigured(): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_URL}/api/config/suppliers-status`);
+    if (!res.ok) return false;
+    const data = await res.json();
+    
+    // 必须有活跃的供应商
+    if (!data.active_supplier) return false;
+    
+    // 且该供应商必须已配置
+    const active = data.suppliers.find((s: any) => s.type === data.active_supplier);
+    return active && active.configured;
+  } catch (e) {
+    console.error("Failed to check translation config:", e);
+    // 发生错误时保守返回 false，避免无效请求
+    return false;
+  }
+}

@@ -360,7 +360,7 @@ function ReaderContent() {
       bookId: id,
       pageNumber: pageNum,
       highlightedText: text,
-      comment: displaySource ? `来源: ${displaySource}` : "",
+      comment: "",
       createdAt: Date.now(),
       color: "#fef08a", // yellow-200
     };
@@ -775,7 +775,7 @@ function ReaderContent() {
         </header>
 
         {/* Main Content Area: Left Sidebar + PDF + Right Sidebar */}
-        <main className="flex-1 flex overflow-hidden">
+        <main className="flex-1 flex overflow-hidden min-h-0">
           {/* Floating Left Sidebar Toggle (when collapsed) */}
           {leftSidebarCollapsed && (
             <button
@@ -853,7 +853,7 @@ function ReaderContent() {
           )}
 
           {/* Center: Universal Reader */}
-          <div className="flex-1 relative bg-gray-50 overflow-hidden flex flex-col">
+          <div className="flex-1 relative bg-gray-50 overflow-hidden flex flex-col min-h-0">
             {book?.format?.toLowerCase() === "pdf" ? (
               <PDFReader
                 fileUrl={fileUrl}
@@ -1117,6 +1117,7 @@ function ReaderContent() {
               >
                 <NotesSidebar
                   bookId={id}
+                  bookTitle={book?.title}
                   notes={notes}
                   onDeleteNote={handleDeleteNote}
                   onUpdateComment={handleUpdateComment}

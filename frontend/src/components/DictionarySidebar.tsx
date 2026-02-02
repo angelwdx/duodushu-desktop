@@ -145,9 +145,28 @@ function DictionarySidebar({
   }, [loadTranslationCache, saveTranslationCache]);
 
   // 自动翻译逻辑
+  const [isTranslationConfigured, setIsTranslationConfigured] = useState<boolean>(false);
+
+  // 检查翻译服务配置
+  useEffect(() => {
+    const checkConfig = async () => {
+       try {
+        const { checkTranslationConfigured } = await import("../lib/api");
+        const configured = await checkTranslationConfigured();
+        setIsTranslationConfigured(configured);
+       } catch (e) {
+         console.error("Failed to check translation config:", e);
+       }
+    };
+    checkConfig();
+  }, []);
+
   const autoTranslateSentence = useCallback(
     async (sentence: string) => {
       if (!sentence || !sentence.trim()) return;
+
+      // 如果未配置翻译服务，直接跳过，避免报错
+      if (!isTranslationConfigured) return;
 
       // 检查缓存
       if (translationMap[sentence]) {
@@ -187,7 +206,11 @@ function DictionarySidebar({
         } catch (e) {
           // 如果是取消操作，不显示错误
           if ((e as Error).name !== "AbortError") {
-            console.error("Translation failed:", e);
+            const msg = (e as Error).message;
+            // 忽略特定的 500 错误，避免控制台刷屏
+            if (!msg.includes("500") && !msg.includes("Translation returned empty")) {
+                 console.error("Translation failed:", e);
+            }
           }
         } finally {
           setIsTranslating(false);
@@ -195,7 +218,7 @@ function DictionarySidebar({
         }
       }, 500);
     },
-    [translationMap, saveTranslationCache],
+    [translationMap, saveTranslationCache, isTranslationConfigured],
   );
 
   // 监听 context_sentence 变化，触发自动翻译
