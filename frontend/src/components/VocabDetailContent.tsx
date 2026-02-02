@@ -513,7 +513,7 @@ export default function VocabDetailContent({
               <button
                 onClick={() =>
                   router.push(
-                    `/read?id=${vocab.primary_context!.book_id}&page=${vocab.primary_context!.page_number}&text=${encodeURIComponent(cleanSentenceForSearch(vocab.primary_context!.context_sentence || ""))}&word=${encodeURIComponent(vocab.word)}&backUrl=${encodeURIComponent(window.location.pathname + window.location.search)}`
+                    `/read?backUrl=${encodeURIComponent(window.location.pathname + window.location.search)}&id=${vocab.primary_context!.book_id}&page=${vocab.primary_context!.page_number}&text=${encodeURIComponent(cleanSentenceForSearch(vocab.primary_context!.context_sentence || ""))}&word=${encodeURIComponent(vocab.word)}`
                   )
                 }
                 className="ml-auto text-gray-400 hover:text-blue-600 transition-colors p-1"
@@ -579,7 +579,7 @@ export default function VocabDetailContent({
                                       <button
                                           onClick={() =>
                                             router.push(
-                                              `/read?id=${ctx.book_id}&page=${ctx.page_number}&text=${encodeURIComponent(cleanSentenceForSearch(ctx.context_sentence || ""))}&word=${encodeURIComponent(vocab.word)}&backUrl=${encodeURIComponent(window.location.pathname + window.location.search)}`
+                                              `/read?backUrl=${encodeURIComponent(window.location.pathname + window.location.search)}&id=${ctx.book_id}&page=${ctx.page_number}&text=${encodeURIComponent(cleanSentenceForSearch(ctx.context_sentence || ""))}&word=${encodeURIComponent(vocab.word)}`
                                             )
                                           }                    className="ml-2 text-gray-400 hover:text-blue-600 transition-colors p-1 shrink-0"
                     title="查看原文"

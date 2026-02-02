@@ -45,20 +45,34 @@ export function useDictionaryAudio({
   const playTTSFallback = useCallback(async (targetElement: HTMLElement) => {
     let text = "";
 
-    // 方法1: 查找例句文本
-    const exampleEl =
-      targetElement.closest(".example") ||
-      targetElement.closest(".gramexa") ||
-      targetElement.closest(".colloexa") ||
-      targetElement.closest("li");
-    if (exampleEl) {
-      const clone = exampleEl.cloneNode(true) as HTMLElement;
-      clone
-        .querySelectorAll(
-          "a.voice, expcn, .freq, .gloss, .ACTIV, .neutral, .REFHWD, .crossRef, var, .unx, .webster-audio-icon, .webster-word-audio, .audio-icon",
-        )
-        .forEach((el) => el.remove());
+    // 方法0: 牛津词典 Extra Examples 特殊处理 (span.unx 结构)
+    const unxEl = targetElement.closest(".unx") || targetElement.querySelector(".unx");
+    if (unxEl) {
+      // span.unx 结构：英文例句是直接文本节点，<unxt> 内是中文翻译
+      const clone = unxEl.cloneNode(true) as HTMLElement;
+      // 移除翻译和音频按钮
+      clone.querySelectorAll("unxt, a.sound, a.audio_play_button, .audio-icon").forEach((el) => el.remove());
       text = (clone.innerText || clone.textContent || "").trim();
+      console.log("[playTTSFallback] Oxford unx text:", text);
+    }
+
+    // 方法1: 查找普通例句文本
+    if (!text) {
+      const exampleEl =
+        targetElement.closest(".example") ||
+        targetElement.closest(".gramexa") ||
+        targetElement.closest(".colloexa") ||
+        targetElement.closest("li");
+      if (exampleEl) {
+        const clone = exampleEl.cloneNode(true) as HTMLElement;
+        // 注意：不再移除 .unx，因为它包含例句文本
+        clone
+          .querySelectorAll(
+            "a.voice, expcn, .freq, .gloss, .ACTIV, .neutral, .REFHWD, .crossRef, var, unxt, chn, oald, ai, a.sound, a.audio_play_button, .webster-audio-icon, .webster-word-audio, .audio-icon",
+          )
+          .forEach((el) => el.remove());
+        text = (clone.innerText || clone.textContent || "").trim();
+      }
     }
 
     // 方法2: 查找单词标题
@@ -194,17 +208,40 @@ export function useDictionaryAudio({
       }
 
       if (source === "牛津") {
-        const oxfordExampleLi = target.closest(".examples > li");
-        const oxfordAudio = target.closest(
-          "a.audio_play_button",
-        ) as HTMLElement;
-        if (oxfordExampleLi || oxfordAudio) {
+        // 检查是否点击了例句区域的音频按钮
+        const oxfordAudio = target.closest("a.audio_play_button") as HTMLElement;
+        
+        if (oxfordAudio) {
           e.preventDefault();
           e.stopPropagation();
           e.stopImmediatePropagation();
-          const elementToSpeak = (oxfordAudio ||
-            oxfordExampleLi) as HTMLElement;
-          await playTTSFallback(elementToSpeak);
+          
+          // 优先查找包含这个音频按钮的例句容器
+          // 牛津词典例句结构：.examples > li, .gramexa, .unx 等
+          const exampleContainer = 
+            oxfordAudio.closest(".examples > li") ||
+            oxfordAudio.closest(".gramexa") ||
+            oxfordAudio.closest(".colloexa") ||
+            oxfordAudio.closest(".unx") ||
+            oxfordAudio.closest("li");
+          
+          if (exampleContainer) {
+            // 找到例句容器，朗读整个例句
+            await playTTSFallback(exampleContainer as HTMLElement);
+          } else {
+            // 没找到例句容器，降级为朗读音频按钮附近的内容
+            await playTTSFallback(oxfordAudio);
+          }
+          return;
+        }
+        
+        // 直接点击例句 li 元素
+        const oxfordExampleLi = target.closest(".examples > li");
+        if (oxfordExampleLi) {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          await playTTSFallback(oxfordExampleLi as HTMLElement);
           return;
         }
       }

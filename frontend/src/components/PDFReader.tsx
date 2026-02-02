@@ -119,11 +119,6 @@ interface ReaderProps {
     onHighlight: _onHighlight,
     onContentChange, // 新增
   }: ReaderProps) {
-    console.log(`[PDFReader] Component rendered`, {
-      onContentChangeExists: !!onContentChange,
-      pageNumber,
-      timestamp: new Date().toISOString()
-    });
   // Inject CSS to narrow the text layer selection blocks
   useEffect(() => {
     const styleId = "pdf-reader-selection-style";
@@ -435,11 +430,20 @@ interface ReaderProps {
           const r2 = startSpan.getBoundingClientRect();
           if (Math.abs(r1.top - r2.top) < 20 && r2.left - r1.right < 15) {
             isExpanding = true;
-            const newRange = document.createRange();
-            newRange.setStart(prevSpan.firstChild || prevSpan, 0);
-            newRange.setEnd(range.endContainer, range.endOffset);
-            selection.removeAllRanges();
-            selection.addRange(newRange);
+            try {
+              const newRange = document.createRange();
+              newRange.setStart(prevSpan.firstChild || prevSpan, 0);
+              // 安全边界检查
+              const endNode = range.endContainer;
+              const maxEnd = endNode.nodeType === 3 
+                ? (endNode.textContent?.length || 0) 
+                : endNode.childNodes.length;
+              newRange.setEnd(endNode, Math.min(range.endOffset, maxEnd));
+              selection.removeAllRanges();
+              selection.addRange(newRange);
+            } catch (e) {
+              console.warn('[PDFReader] Selection expansion failed:', e);
+            }
             setTimeout(() => {
               isExpanding = false;
             }, 50);
@@ -603,7 +607,6 @@ interface ReaderProps {
     // 修复：当 PDF 页面加载完成时，提取文本内容并同步给 AI
     // 优先使用实时提取的文本，如果失败则使用后端返回的textContent
     const extractPageText = async () => {
-      console.log(`[PDFReader] extractPageText called for page ${pageNumber}`);
       try {
         const textContentFromPDF = await page.getTextContent();
         if (textContentFromPDF && textContentFromPDF.items && textContentFromPDF.items.length > 0) {
@@ -614,18 +617,12 @@ interface ReaderProps {
             .join(" ");
 
           if (extractedText && extractedText.trim().length > 0) {
-            console.log(`[PDFReader] Extracted page ${pageNumber} text (len: ${extractedText.length})`);
-            console.log(`[PDFReader] onContentChange exists:`, !!onContentChange);
             if (onContentChange) {
-              console.log(`[PDFReader] Calling onContentChange with text (first 100 chars):`, extractedText.substring(0, 100));
               try {
                 onContentChange(extractedText);
-                console.log(`[PDFReader] onContentChange called successfully`);
               } catch (err) {
-                console.error(`[PDFReader] Error calling onContentChange:`, err);
+                // 静默处理
               }
-            } else {
-              console.warn(`[PDFReader] onContentChange is not defined!`);
             }
           } else if (textContent) {
             // 如果提取失败，降级使用后端提供的文本内容

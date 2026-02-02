@@ -93,6 +93,32 @@ export default function EPUBReader({
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+  // 搜索中遮罩状态
+  const [isSearching, setIsSearching] = useState(false);
+
+  // 辅助函数：安全设置 Range 边界
+  const safeSetRangeStart = (range: Range, node: Node, offset: number) => {
+      try {
+          const maxOffset = node.nodeType === 3 
+              ? (node.textContent?.length || 0) 
+              : node.childNodes.length;
+          range.setStart(node, Math.min(Math.max(0, offset), maxOffset));
+      } catch (e) {
+          log.debug('safeSetRangeStart failed:', e);
+      }
+  };
+
+  const safeSetRangeEnd = (range: Range, node: Node, offset: number) => {
+      try {
+          const maxOffset = node.nodeType === 3 
+              ? (node.textContent?.length || 0) 
+              : node.childNodes.length;
+          range.setEnd(node, Math.min(Math.max(0, offset), maxOffset));
+      } catch (e) {
+          log.debug('safeSetRangeEnd failed:', e);
+      }
+  };
+
   // 辅助函数：处理文本搜索和高亮
   const handleTextSearch = useCallback(async (text: string, word?: string, maxAttempts = 15, pageOffset = 0, retryLevel = 0) => {
       try {
@@ -144,66 +170,93 @@ export default function EPUBReader({
 
           log.debug(`Searching (Level ${retryLevel}): "${query}"`);
 
-              win.getSelection()?.removeAllRanges();
+          win.getSelection()?.removeAllRanges();
 
-              // 关键修复：关闭 WholeWord (第5个参数设为 false)，允许部分匹配
-              if (win.find(query, false, false, true, false, true, false)) {
-                  log.debug('Search success!');
-                  const selection = win.getSelection();
-                  if (selection && selection.rangeCount > 0) {
-                      const range = selection.getRangeAt(0);
+          // 关键修复：关闭 WholeWord (第5个参数设为 false)，允许部分匹配
+          if (win.find(query, false, false, true, false, true, false)) {
+              log.debug('Search success!');
+              const selection = win.getSelection();
+              if (selection && selection.rangeCount > 0) {
+                  const range = selection.getRangeAt(0);
 
-                      try {
-                          let cfi;
-                          try {
-                              const node = range.startContainer;
-                              const element = node.nodeType === 3 ? node.parentElement : (node as Element);
-                              if (element) {
-                                  cfi = contents.cfiFromNode(element);
-                                   log.debug("Correcting alignment via Element CFI:", cfi);
-                              }
-                          } catch (cfiErr) {
-                               log.warn("Element CFI failed:", cfiErr);
-                              const simpleRange = doc.createRange();
-                              try {
-                                  const node = range.startContainer;
-                                  const maxOff = node.nodeType === 3 ? (node.textContent?.length || 0) : node.childNodes.length;
-                                  simpleRange.setStart(node, Math.min(range.startOffset, maxOff));
-                               } catch (reErr) {
-                                  log.warn("Secondary CFI range failed:", reErr);
-                               }
+                  // 注意：此处不再调用 rendition.display(cfi)
+                  // 原因：window.find() 已经成功定位到文本位置
+                  // 额外调用 display(cfi) 会触发 epub.js 内部的 IndexSizeError
+                  // 错误来源于 epub.js 的 requestAnimationFrame 队列，无法被 try-catch 捕获
+                  log.debug('Search positioned successfully, skipping display(cfi) to avoid IndexSizeError');
 
-                              simpleRange.collapse(true);
-                              cfi = contents.cfiFromRange(simpleRange);
-                          }
-
-                           if (cfi) {
-                               renditionRef.current.display(cfi).catch((e: any) => log.debug('CFI display failed (epub.js internal error):', e));
-                           }
-                       } catch (e) {
-                           log.debug("Alignment correction failed (epub.js internal error):", e);
-                       }
-
-                      // --- 关键修复：使用 Overlay 而非修改 DOM 节点 ---
+                  // --- 关键改进：只高亮单词，不高亮整段上下文 ---
+                  try {
                       const searchOverlay = doc.getElementById('search-highlight-overlay');
-                      if (searchOverlay) {
-                          const rect = range.getBoundingClientRect();
-                          searchOverlay.style.width = `${rect.width + 4}px`;
-                          searchOverlay.style.height = `${rect.height + 4}px`;
-                          searchOverlay.style.top = `${rect.top + win.scrollY - 2}px`;
-                          searchOverlay.style.left = `${rect.left + win.scrollX - 2}px`;
-                          searchOverlay.style.display = 'block';
+                      if (searchOverlay && word) {
+                          // 在找到的范围内二次搜索单词
+                          const foundText = range.toString();
+                          const wordIndex = foundText.toLowerCase().indexOf(word.toLowerCase());
+                          
+                          if (wordIndex !== -1) {
+                              // 计算单词在 range 内的精确位置
+                              const startNode = range.startContainer;
+                              if (startNode.nodeType === 3) {
+                                  try {
+                                      const wordRange = doc.createRange();
+                                      const textContent = startNode.textContent || '';
+                                      const baseOffset = range.startOffset;
+                                      const wordStart = baseOffset + wordIndex;
+                                      const wordEnd = wordStart + word.length;
+                                      const maxLen = textContent.length;
+                                      
+                                      safeSetRangeStart(wordRange, startNode, Math.min(wordStart, maxLen));
+                                      safeSetRangeEnd(wordRange, startNode, Math.min(wordEnd, maxLen));
+                                      
+                                      const wordRect = wordRange.getBoundingClientRect();
+                                      searchOverlay.style.width = `${wordRect.width + 4}px`;
+                                      searchOverlay.style.height = `${wordRect.height + 4}px`;
+                                      searchOverlay.style.top = `${wordRect.top + win.scrollY - 2}px`;
+                                      searchOverlay.style.left = `${wordRect.left + win.scrollX - 2}px`;
+                                      searchOverlay.style.display = 'block';
+                                  } catch (wordRangeErr) {
+                                      log.debug('Word range calculation failed, using full range:', wordRangeErr);
+                                      // 降级：使用完整范围
+                                      const rect = range.getBoundingClientRect();
+                                      searchOverlay.style.width = `${rect.width + 4}px`;
+                                      searchOverlay.style.height = `${rect.height + 4}px`;
+                                      searchOverlay.style.top = `${rect.top + win.scrollY - 2}px`;
+                                      searchOverlay.style.left = `${rect.left + win.scrollX - 2}px`;
+                                      searchOverlay.style.display = 'block';
+                                  }
+                              } else {
+                                  // 非文本节点，降级使用完整范围
+                                  const rect = range.getBoundingClientRect();
+                                  searchOverlay.style.width = `${rect.width + 4}px`;
+                                  searchOverlay.style.height = `${rect.height + 4}px`;
+                                  searchOverlay.style.top = `${rect.top + win.scrollY - 2}px`;
+                                  searchOverlay.style.left = `${rect.left + win.scrollX - 2}px`;
+                                  searchOverlay.style.display = 'block';
+                              }
+                          } else {
+                              // 单词不在范围内，不显示高亮
+                              searchOverlay.style.display = 'none';
+                          }
                           
                           // 3秒后自动隐藏
                           setTimeout(() => {
                               searchOverlay.style.display = 'none';
                           }, 3000);
+                      } else if (searchOverlay) {
+                          // 没有指定 word，不显示高亮
+                          searchOverlay.style.display = 'none';
                       }
-
-                      lastHighlightRef.current = { text, word, ts: Date.now() };
+                  } catch (overlayErr) {
+                      log.debug('Overlay positioning failed:', overlayErr);
                   }
-                  return true;
+
+                  lastHighlightRef.current = { text, word, ts: Date.now() };
+                  
+                  // 搜索成功，隐藏遮罩
+                  setIsSearching(false);
               }
+              return true;
+          }
 
           // --- 搜索失败处理逻辑 ---
           
@@ -213,19 +266,24 @@ export default function EPUBReader({
               return handleTextSearch(text, word, maxAttempts, pageOffset, retryLevel + 1);
           }
           
-          // --- 参考 65fc3c2：在长章节内受控翻页搜索 ---
-          // 仅在当前页未找到且还有重试次数时，尝试 rendition.next() 翻页
+          // --- 翻页搜索（用遮罩隐藏翻页过程）---
           if (maxAttempts > 0) {
               log.debug('Text not found on current view, turning to next view...');
+              // 显示搜索遮罩，隐藏翻页过程
+              if (pageOffset === 0) {
+                  setIsSearching(true);
+              }
               renditionRef.current.next();
               setTimeout(() => {
                   handleTextSearch(text, word, maxAttempts - 1, pageOffset + 1, 0);
-              }, 400); // 等待新视图渲染
+              }, 300); // 缩短等待时间，加快搜索
           } else {
-              log.warn('Text not found on current view');
+              log.warn('Text not found after all attempts');
+              setIsSearching(false);
           }
       } catch (err) {
           log.warn('Search error:', err);
+          setIsSearching(false);
       }
       return false;
   }, []);
@@ -752,7 +810,11 @@ export default function EPUBReader({
       } catch (err) {
         log.warn("Initial display failed (invalid CFI?), resetting startLocation:", err);
         // Fallback: try displaying the beginning
-        await rendition.display();
+        try {
+            await rendition.display();
+        } catch (fallbackErr) {
+            log.debug('Fallback display to beginning also failed:', fallbackErr);
+        }
       }
 
       
@@ -768,10 +830,19 @@ export default function EPUBReader({
                 if (loc && loc.start) {
                     const start = loc.start.cfi;
                     const end = loc.end.cfi;
-                   // FIX: await range extraction and construct range manually
+                   // FIX: await range extraction with try-catch for epub.js internal errors
                    try {
-                     const rangeStart = await book.getRange(start);
-                     const rangeEnd = await book.getRange(end);
+                     let rangeStart, rangeEnd;
+                     try {
+                       rangeStart = await book.getRange(start);
+                     } catch (e) {
+                       log.debug('INIT SYNC - getRange(start) failed (IndexSizeError from epub.js):', e);
+                     }
+                     try {
+                       rangeEnd = await book.getRange(end);
+                     } catch (e) {
+                       log.debug('INIT SYNC - getRange(end) failed (IndexSizeError from epub.js):', e);
+                     }
                      
                      if (rangeStart && rangeEnd) {
                          const startContainer = rangeStart.startContainer;
@@ -800,16 +871,23 @@ export default function EPUBReader({
                              log.debug('INIT SYNC (Fallback) - Text length:', text.length);
                              onContentChange(text);
                          }
+                     } else if (rangeStart) {
+                         // 只有 start 成功
+                         onContentChange(rangeStart.toString());
                      }
                    } catch (err) {
-                     log.warn('Manual range construction failed:', err);
-                     // Simple fallback
-                     const range = await book.getRange(start);
-                     if (range) onContentChange(range.toString());
+                     log.debug('Manual range construction failed (likely IndexSizeError from epub.js):', err);
+                     // Simple fallback - 最后尝试
+                     try {
+                       const range = await book.getRange(start);
+                       if (range) onContentChange(range.toString());
+                     } catch (finalErr) {
+                       log.debug('Final getRange fallback failed:', finalErr);
+                     }
                    }
                 }
              } catch (e) {
-                log.warn('Init sync failed:', e);
+                log.debug('Init sync failed:', e);
              }
           });
       }
@@ -873,8 +951,18 @@ export default function EPUBReader({
                   // 1. 尝试主提取方式：基于范围的提取
                   let text = "";
                   try {
-                    const rangeStart = await book.getRange(start);
-                    const rangeEnd = await book.getRange(end);
+                    let rangeStart, rangeEnd;
+                    // 分别 try-catch 每个 getRange，因为 epub.js 内部可能抛出 IndexSizeError
+                    try {
+                      rangeStart = await book.getRange(start);
+                    } catch (e) {
+                      log.debug('Relocated sync - getRange(start) failed (IndexSizeError from epub.js):', e);
+                    }
+                    try {
+                      rangeEnd = await book.getRange(end);
+                    } catch (e) {
+                      log.debug('Relocated sync - getRange(end) failed (IndexSizeError from epub.js):', e);
+                    }
                     
                     if (rangeStart && rangeEnd) {
                          const startContainer = rangeStart.startContainer;
@@ -898,6 +986,8 @@ export default function EPUBReader({
                          } else {
                              text = (rangeStart.toString() + "\n...\n" + rangeEnd.toString()).trim();
                          }
+                    } else if (rangeStart) {
+                         text = rangeStart.toString().trim();
                     }
                   } catch (rangeErr) {
                     log.debug('Range extraction failed, trying fallback...');
@@ -1137,10 +1227,20 @@ export default function EPUBReader({
                   const targetY = win.scrollY + elementCenter - viewportHeight * 0.4;
                   win.scrollTo({ top: targetY });
               } else if (currentCfi) {
-                  renditionRef.current.display(currentCfi);
+                  try {
+                      renditionRef.current.display(currentCfi);
+                  } catch (displayErr) {
+                      log.debug('Resize restore display failed:', displayErr);
+                  }
               }
           } catch (e) {
-              if (currentCfi) renditionRef.current.display(currentCfi);
+              if (currentCfi) {
+                  try {
+                      renditionRef.current.display(currentCfi);
+                  } catch (displayErr) {
+                      log.debug('Resize fallback display failed:', displayErr);
+                  }
+              }
           }
         }
       }, 150); // 150ms debounce (响应更迅速)
@@ -1176,6 +1276,15 @@ export default function EPUBReader({
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center bg-white z-20">
             <div className="text-center"><p className="text-gray-500">加载 EPUB...</p></div>
+          </div>
+        )}
+        {/* 搜索遮罩层 - 隐藏翻页搜索过程 */}
+        {isSearching && (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/95 z-30 backdrop-blur-sm">
+            <div className="text-center">
+              <div className="inline-block w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+              <p className="text-gray-600 text-sm">正在定位原文...</p>
+            </div>
           </div>
         )}
         <div ref={containerRef} className={`h-full bg-white mx-auto shadow-sm transition-all duration-300 ${fitMode === 'page' ? 'max-w-5xl w-full' : 'w-full px-2 sm:px-4'}`} />

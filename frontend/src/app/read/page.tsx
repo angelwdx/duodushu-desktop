@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useMemo, useCallback, Suspense } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import DictionarySidebar from "../../components/DictionarySidebar";
 import AITeacherSidebar from "../../components/AITeacherSidebar";
@@ -9,7 +9,7 @@ import NotesSidebar, { Note } from "../../components/NotesSidebar";
 import LeftSidebar from "../../components/LeftSidebar";
 import SelectionToolbar from "../../components/SelectionToolbar";
 import { useGlobalTextSelection } from "../../hooks/useGlobalTextSelection";
-import Link from "next/link";
+
 import { trackWordQuery } from "../../lib/api";
 import { createLogger } from "../../lib/logger";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
@@ -44,6 +44,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 function ReaderContent() {
   const params = useParams();
   const searchParams = useSearchParams();
+  const router = useRouter();
   
   // 适配静态导出：优先从查询参数获取 ID
   const id = searchParams.get("id") || (params?.id as string) || "";
@@ -739,12 +740,20 @@ function ReaderContent() {
               </svg>
             </button>
 
-            <Link
-              href={backUrl ? decodeURIComponent(backUrl) : "/"}
+            <button
+              onClick={() => {
+                try {
+                  const target = backUrl ? decodeURIComponent(backUrl) : "/";
+                  router.push(target);
+                } catch (e) {
+                  console.error("Navigation error:", e);
+                  router.push("/");
+                }
+              }}
               className="text-gray-500 hover:text-gray-900 text-sm font-medium"
             >
               ← {backUrl ? "返回" : "返回书架"}
-            </Link>
+            </button>
             <h1 className="font-medium text-gray-900 truncate max-w-md text-sm border-l pl-4 border-gray-200">
               {book.title}
             </h1>
