@@ -124,12 +124,19 @@ export default function EPUBReader({
   // 辅助函数：处理文本搜索和高亮
   const handleTextSearch = useCallback(async (text: string, word?: string, maxAttempts = 15, pageOffset = 0, retryLevel = 0) => {
       log.info('handleTextSearch called:', { text: text.substring(0, 30), word, maxAttempts, pageOffset, retryLevel });
+
       try {
+          log.debug('Checking refs:', {
+              hasRenditionRef: !!renditionRef.current,
+              hasBookRef: !!bookRef.current
+          });
+
           if (!renditionRef.current || !bookRef.current) {
               log.warn('handleTextSearch: rendition or book not ready');
               return false;
           }
 
+          log.debug('About to call getContents()...');
           const contents = renditionRef.current.getContents();
           log.debug('getContents() returned:', {
               contentsLength: contents?.length,
