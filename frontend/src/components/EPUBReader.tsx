@@ -126,7 +126,7 @@ export default function EPUBReader({
       log.info('handleTextSearch called:', { text: text.substring(0, 30), word, maxAttempts, pageOffset, retryLevel });
 
       try {
-          log.debug('Checking refs:', {
+          log.info('Checking refs:', {
               hasRenditionRef: !!renditionRef.current,
               hasBookRef: !!bookRef.current
           });
@@ -136,9 +136,9 @@ export default function EPUBReader({
               return false;
           }
 
-          log.debug('About to call getContents()...');
+          log.info('About to call getContents()...');
           const contents = renditionRef.current.getContents();
-          log.debug('getContents() returned:', {
+          log.info('getContents() returned:', {
               contentsLength: contents?.length,
               hasWindow: contents?.[0]?.window ? 'yes' : 'no',
               hasDocument: contents?.[0]?.document ? 'yes' : 'no'
@@ -156,8 +156,10 @@ export default function EPUBReader({
               return false;
           }
 
-          const win = contents[0].window;
-          const doc = contents[0].document;
+          // 关键：保存完整的 Contents 对象，它有 cfiFromNode 和 cfiFromRange 方法
+          const contentsObj = contents[0];
+          const win = contentsObj.window;
+          const doc = contentsObj.document;
 
           // --- 策略：多级降级搜索 ---
           let query = text.trim();
@@ -195,92 +197,85 @@ export default function EPUBReader({
               query = text.substring(0, 20).trim();
           }
 
-          log.debug(`Searching (Level ${retryLevel}): "${query}"`);
+          log.info(`Searching (Level ${retryLevel}): "${query}"`);
 
           win.getSelection()?.removeAllRanges();
 
           // 关键修复：关闭 WholeWord (第5个参数设为 false)，允许部分匹配
           const findResult = win.find(query, false, false, true, false, true, false);
-          log.debug(`window.find() result: ${findResult}`, { query });
+          log.info(`window.find() result: ${findResult}`, { query });
 
           if (findResult) {
-              log.debug('Search success!');
+              log.info('Search success!');
               const selection = win.getSelection();
               if (selection && selection.rangeCount > 0) {
                   const range = selection.getRangeAt(0);
 
-                  // 注意：此处不再调用 rendition.display(cfi)
-                  // 原因：window.find() 已经成功定位到文本位置
-                  // 额外调用 display(cfi) 会触发 epub.js 内部的 IndexSizeError
-                  // 错误来源于 epub.js 的 requestAnimationFrame 队列，无法被 try-catch 捕获
-                  log.debug('Search positioned successfully, skipping display(cfi) to avoid IndexSizeError');
-
-                  // --- 关键改进：手动滚动到找到的文本位置，确保准确定位 ---
+                  // 关键修复：使用旧版本的方法 - contentsObj.cfiFromNode() 来生成 CFI 并对齐页面
                   try {
-                      // 获取找到的文本的位置
-                      const rect = range.getBoundingClientRect();
+                      let cfi;
+                      try {
+                          const node = range.startContainer;
+                          const element = node.nodeType === 3 ? node.parentElement : (node as Element);
+                          if (element) {
+                              cfi = contentsObj.cfiFromNode(element);
+                              log.info("Correcting alignment via Element CFI:", cfi);
+                          }
+                      } catch (cfiErr) {
+                          log.info("Element CFI failed, trying range CFI:", cfiErr);
+                          const simpleRange = doc.createRange();
+                          try {
+                              const node = range.startContainer;
+                              const maxOff = node.nodeType === 3 ? (node.textContent?.length || 0) : node.childNodes.length;
+                              simpleRange.setStart(node, Math.min(range.startOffset, maxOff));
+                          } catch (reErr) {
+                              log.info("Secondary CFI range failed:", reErr);
+                          }
+                          simpleRange.collapse(true);
+                          cfi = contentsObj.cfiFromRange(simpleRange);
+                      }
 
-                      // 计算需要滚动的距离，使文本位置在视口中心
-                      const viewportHeight = win.innerHeight;
-                      const targetScrollY = win.scrollY + rect.top - viewportHeight / 2 + rect.height / 2;
-
-                      // 平滑滚动到目标位置
-                      win.scrollTo({
-                          top: Math.max(0, targetScrollY),
-                          behavior: 'smooth'
-                      });
-
-                      log.debug('Scrolled to found text position', {
-                          rectTop: rect.top,
-                          targetScrollY: Math.max(0, targetScrollY),
-                          viewportHeight
-                      });
-                  } catch (scrollErr) {
-                      log.debug('Manual scroll failed, relying on window.find() auto-scroll:', scrollErr);
+                      if (cfi) {
+                          log.info("Displaying CFI for alignment:", cfi);
+                          renditionRef.current!.display(cfi).catch((e: any) => log.info('CFI display failed (epub.js internal error):', e));
+                      }
+                  } catch (e) {
+                      log.info("Alignment correction failed (epub.js internal error):", e);
                   }
 
-                  // --- 关键改进：只高亮单词，不高亮整段上下文 ---
-                  try {
-                      const searchOverlay = doc.getElementById('search-highlight-overlay');
-                      if (searchOverlay && word) {
-                          // 在找到的范围内二次搜索单词
-                          const foundText = range.toString();
-                          const wordIndex = foundText.toLowerCase().indexOf(word.toLowerCase());
+                  // --- 关键修复：使用 Overlay 而非修改 DOM 节点 ---
+                  const searchOverlay = doc.getElementById('search-highlight-overlay');
+                  if (searchOverlay && word) {
+                      const rect = range.getBoundingClientRect();
 
-                          if (wordIndex !== -1) {
-                              // 计算单词在 range 内的精确位置
-                              const startNode = range.startContainer;
-                              if (startNode.nodeType === 3) {
-                                  try {
-                                      const wordRange = doc.createRange();
-                                      const textContent = startNode.textContent || '';
-                                      const baseOffset = range.startOffset;
-                                      const wordStart = baseOffset + wordIndex;
-                                      const wordEnd = wordStart + word.length;
-                                      const maxLen = textContent.length;
+                      // 在找到的范围内二次搜索单词位置
+                      const foundText = range.toString();
+                      const wordIndex = foundText.toLowerCase().indexOf(word.toLowerCase());
 
-                                      safeSetRangeStart(wordRange, startNode, Math.min(wordStart, maxLen));
-                                      safeSetRangeEnd(wordRange, startNode, Math.min(wordEnd, maxLen));
+                      if (wordIndex !== -1) {
+                          // 尝试精确定位单词
+                          const startNode = range.startContainer;
+                          if (startNode.nodeType === 3) {
+                              try {
+                                  const wordRange = doc.createRange();
+                                  const textContent = startNode.textContent || '';
+                                  const baseOffset = range.startOffset;
+                                  const wordStart = baseOffset + wordIndex;
+                                  const wordEnd = wordStart + word.length;
+                                  const maxLen = textContent.length;
 
-                                      const wordRect = wordRange.getBoundingClientRect();
-                                      searchOverlay.style.width = `${wordRect.width + 4}px`;
-                                      searchOverlay.style.height = `${wordRect.height + 4}px`;
-                                      searchOverlay.style.top = `${wordRect.top + win.scrollY - 2}px`;
-                                      searchOverlay.style.left = `${wordRect.left + win.scrollX - 2}px`;
-                                      searchOverlay.style.display = 'block';
-                                  } catch (wordRangeErr) {
-                                      log.debug('Word range calculation failed, using full range:', wordRangeErr);
-                                      // 降级：使用完整范围
-                                      const rect = range.getBoundingClientRect();
-                                      searchOverlay.style.width = `${rect.width + 4}px`;
-                                      searchOverlay.style.height = `${rect.height + 4}px`;
-                                      searchOverlay.style.top = `${rect.top + win.scrollY - 2}px`;
-                                      searchOverlay.style.left = `${rect.left + win.scrollX - 2}px`;
-                                      searchOverlay.style.display = 'block';
-                                  }
-                              } else {
-                                  // 非文本节点，降级使用完整范围
-                                  const rect = range.getBoundingClientRect();
+                                  safeSetRangeStart(wordRange, startNode, Math.min(wordStart, maxLen));
+                                  safeSetRangeEnd(wordRange, startNode, Math.min(wordEnd, maxLen));
+
+                                  const wordRect = wordRange.getBoundingClientRect();
+                                  searchOverlay.style.width = `${wordRect.width + 4}px`;
+                                  searchOverlay.style.height = `${wordRect.height + 4}px`;
+                                  searchOverlay.style.top = `${wordRect.top + win.scrollY - 2}px`;
+                                  searchOverlay.style.left = `${wordRect.left + win.scrollX - 2}px`;
+                                  searchOverlay.style.display = 'block';
+                                  log.info('Overlay displayed for word');
+                              } catch (wordRangeErr) {
+                                  // 降级：使用完整范围
                                   searchOverlay.style.width = `${rect.width + 4}px`;
                                   searchOverlay.style.height = `${rect.height + 4}px`;
                                   searchOverlay.style.top = `${rect.top + win.scrollY - 2}px`;
@@ -288,25 +283,41 @@ export default function EPUBReader({
                                   searchOverlay.style.display = 'block';
                               }
                           } else {
-                              // 单词不在范围内，不显示高亮
-                              searchOverlay.style.display = 'none';
+                              // 非文本节点，使用完整范围
+                              searchOverlay.style.width = `${rect.width + 4}px`;
+                              searchOverlay.style.height = `${rect.height + 4}px`;
+                              searchOverlay.style.top = `${rect.top + win.scrollY - 2}px`;
+                              searchOverlay.style.left = `${rect.left + win.scrollX - 2}px`;
+                              searchOverlay.style.display = 'block';
                           }
-
-                          // 3秒后自动隐藏
-                          setTimeout(() => {
-                              searchOverlay.style.display = 'none';
-                          }, 3000);
-                      } else if (searchOverlay) {
-                          // 没有指定 word，不显示高亮
-                          searchOverlay.style.display = 'none';
+                      } else {
+                          // 单词不在范围内，使用完整范围
+                          searchOverlay.style.width = `${rect.width + 4}px`;
+                          searchOverlay.style.height = `${rect.height + 4}px`;
+                          searchOverlay.style.top = `${rect.top + win.scrollY - 2}px`;
+                          searchOverlay.style.left = `${rect.left + win.scrollX - 2}px`;
+                          searchOverlay.style.display = 'block';
                       }
-                  } catch (overlayErr) {
-                      log.debug('Overlay positioning failed:', overlayErr);
+
+                      // 3秒后自动隐藏
+                      setTimeout(() => {
+                          searchOverlay.style.display = 'none';
+                      }, 3000);
+                  } else if (searchOverlay) {
+                      // 没有指定 word，使用完整范围
+                      const rect = range.getBoundingClientRect();
+                      searchOverlay.style.width = `${rect.width + 4}px`;
+                      searchOverlay.style.height = `${rect.height + 4}px`;
+                      searchOverlay.style.top = `${rect.top + win.scrollY - 2}px`;
+                      searchOverlay.style.left = `${rect.left + win.scrollX - 2}px`;
+                      searchOverlay.style.display = 'block';
+
+                      setTimeout(() => {
+                          searchOverlay.style.display = 'none';
+                      }, 3000);
                   }
 
                   lastHighlightRef.current = { text, word, ts: Date.now() };
-
-                  // 搜索成功，隐藏遮罩
                   setIsSearching(false);
               }
               return true;
@@ -316,7 +327,7 @@ export default function EPUBReader({
 
           // 如果是严格模式失败，先尝试降级，不翻页
           if (retryLevel < 3) {
-              log.debug(`Level ${retryLevel} failed, retrying with Level ${retryLevel + 1}...`);
+              log.info(`Level ${retryLevel} failed, retrying with Level ${retryLevel + 1}...`);
               // 关键修复：使用 setTimeout 异步重试，避免同步递归导致所有级别立即执行
               setTimeout(() => {
                   handleTextSearch(text, word, maxAttempts, pageOffset, retryLevel + 1);
