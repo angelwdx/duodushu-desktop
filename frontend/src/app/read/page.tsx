@@ -190,8 +190,8 @@ function ReaderContent() {
   };
 
   // --- Sidebar Layout State ---
-  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
-  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false);
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(true);
+  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(true);
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(320); // Compact for TOC/bookmarks
   const [rightSidebarWidth, setRightSidebarWidth] = useState(600); // Wider for dictionary/AI
   const [isResizingLeft, setIsResizingLeft] = useState(false);
