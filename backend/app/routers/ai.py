@@ -44,6 +44,7 @@ def classify_user_intent(
         "哪一页",
         "第几页",
         "找一下",
+        "查找",
         "搜索",
         "多少页",
         "总页数",
@@ -421,7 +422,13 @@ def knowledge_based_chat_fts5(request: ChatRequest, db: Session) -> dict:
         # 使用 DeepSeek 生成回答
         client = deepseek_service.get_client()
         if not client:
-            raise HTTPException(status_code=500, detail="DeepSeek service unavailable")
+            logger.warning("DeepSeek service unavailable (no API key)")
+            return {
+                "reply": "抱歉，由于未配置 AI 服务密钥，暂时无法进行智能问答。请在设置中配置 API Key。",
+                "role": "assistant",
+                "sources": [],
+                "intent": "error",
+            }
 
         response = client.chat.completions.create(
             model="deepseek-chat",

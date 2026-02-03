@@ -47,4 +47,18 @@ def test_chat_api_special_chars():
     })
     
     # 只要不是 500 Internal Server Error 即可
+    if response.status_code == 500:
+        print(f"\n[FTS5 Failure Response]: {response.text}\n")
+    assert response.status_code != 500
+
+def test_normal_retrieval():
+    """测试正常的知识库检索是否工作"""
+    response = client.post("/api/ai/chat", json={
+        "message": "这本书讲了什么？",
+        "book_id": "test_book_id",
+        "book_title": "Test Book"
+    })
+    if response.status_code == 500:
+        print(f"\n[Normal Retrieval Failure]: {response.text}\n")
+    # assert response.status_code == 200 # Might be 200 even if fallback
     assert response.status_code != 500

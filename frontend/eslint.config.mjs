@@ -12,8 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // 忽略第三方词典 JS 文件（包含大量 legacy 代码，lint 警告不可避免）
-    "public/dictionaries/**/*.js",
+    // 忽略第三方 JS 库文件
+    "public/**/*.js",
+    "public/**/*.mjs",
+    "scripts/**/*.js",
   ]),
   // 允许在组件中使用内联样式（PDF 阅读器中的动态定位需要）
   // 注意：react/no-inline-styles 全局禁用，因为 PDFReader 组件需要大量内联样式进行动态定位
