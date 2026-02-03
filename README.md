@@ -1,7 +1,7 @@
 # 多读书 (Duodushu) 桌面客户端
 
-**版本**: 1.0.0
-**最后更新**: 2026-01-31
+**版本**: 1.1.0
+**最后更新**: 2026-02-04
 
 一款**本地优先（Local-First）且支持绿色便携（Portable）**的沉浸式英语学习工作站。
 
@@ -18,7 +18,7 @@
 
 ```bash
 # 克隆项目
-git clone <repo-url>
+git clone https://github.com/angelwdx/duodushu-desktop.git
 cd duodushu-desktop
 
 # 安装依赖
@@ -34,12 +34,9 @@ npm run dev
 - ✅ **本地优先** - 所有数据存储在本地，无需上传云端
 - ✅ **高性能阅读** - 秒开数百 MB 的 PDF/EPUB 大文件
 - ✅ **AI 辅助** - 基于 FTS5 全文搜索，支持智能问答与辅助阅读
-- ✅ **多模型支持** - 集成 Gemini, OpenAI, Claude, DeepSeek, Qwen 等多种主流 AI 模型
-- ✅ **智能词典** - 多源词典聚合，支持生词本与复习
+- ✅ **自定义词典** - 支持自定义词典，支持生词本与复习
 - ✅ **语音朗读** - 集成 Edge TTS，提供高质量文本转语音
-- ✅ **系统集成** - 全局快捷键、文件关联、系统通知
 - ✅ **离线支持** - 基础功能完全离线，AI 功能可选联网
-- ✅ **跨平台** - Windows、macOS、Linux 支持
 
 ## 📖 文档导航
 
@@ -51,10 +48,8 @@ npm run dev
 ### 开发文档
 - **[开发指南](./docs/DEVELOPMENT.md)** - 环境设置和开发命令
 - **[技术架构](./docs/TDD.md)** - 系统设计和架构
-- **[多供应商指南](./docs/MULTI_SUPPLIER_GUIDE.md)** - 词典与 AI 服务商扩展
 - **[API 文档](./docs/API.md)** - 后端 API 参考
 - **[代码约定](./docs/CONVENTIONS.md)** - 代码规范和最佳实践
-- **[测试报告](./docs/TEST_REPORT.md)** - 测试覆盖率与状态
 
 ### 产品文档
 - **[产品需求](./docs/PRD.md)** - 功能需求和版本规划
@@ -87,7 +82,7 @@ duodushu-desktop/
 | `npm run dev` | 启动完整开发环境 |
 | `npm run build` | 构建生产版本 |
 | `npm run lint` | 代码检查 (前端) |
-| `npm run electron:dev` | 仅启动 Electron |
+| `npm run dev:electron` | 仅启动 Electron |
 
 ## 📊 三种运行模式
 
@@ -166,23 +161,20 @@ MIT License
 
 ## 🎯 版本规划
 
-### v1.0 (当前)
+### v1.0.0（当前）
 - ✅ 核心架构搭建
 - ✅ 复用 Web 版所有阅读功能
 - ✅ 本地 SQLite 数据库集成
 - ✅ 便携模式支持
-- ✅ **多模型 AI 支持 (Gemini, OpenAI, Claude, DeepSeek, Qwen)**
+- ✅ 多模型AI支持
 
 ### v1.1 (计划中)
-- 文件关联支持
+- 文件关联支持 (初步)
 - 自动更新支持
 - 性能优化
 
-### v2.0 (计划中)
-- 本地向量库
-- 多窗口支持
-- 本地 LLM 集成
-
----
+### v2.0（计划中）
+- 支持macos、ipad
+- 支持移动端
 
 **需要帮助？** 查看 [文档](./docs) 或提交 [Issue](https://github.com/xxx/duodushu-desktop/issues)
