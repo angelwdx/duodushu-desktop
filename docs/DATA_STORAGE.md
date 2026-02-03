@@ -102,9 +102,25 @@ C:\Users\<username>\AppData\Roaming\duodushu-desktop\
 | `books` | 书籍元数据 (标题、作者、路径等) |
 | `bookmarks` | 书签 |
 | `notes` | 笔记 |
-| `vocabulary` | 生词本 |
+| `vocabulary` | 生词本 (包含复习优先级字段) |
 | `reading_progress` | 阅读进度 |
 | `settings` | 应用设置 |
+| `pages` | 书籍页面文本内容 |
+| `pages_fts` | 全文搜索虚拟表 (FTS5) |
+
+**vocabulary 表新增字段**:
+- `query_count`: 查询次数 (Integer)
+- `last_queried_at`: 最后查询时间 (Timestamp)
+- `priority_score`: 复习优先级分数 (Float)
+- `learning_status`: 学习状态 (String: 'new', 'learning', 'mastered')
+
+### 全文搜索 (FTS5)
+
+应用使用 SQLite 的 FTS5 扩展实现高性能的本地全文搜索。
+
+- **pages_fts 表**: 这是一个虚拟表，自动与 `pages` 表同步。
+- **触发器**: 数据库包含 `INSERT`, `UPDATE`, `DELETE` 触发器，确保 `pages` 表的变更实时反映在 `pages_fts` 中。
+- **功能**: 支持快速的关键词搜索、布尔查询和上下文摘录 (Snippet)。
 
 ### 文件存储
 

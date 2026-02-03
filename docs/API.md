@@ -1,6 +1,6 @@
 # API 文档
 
-**最后更新**: 2026-01-30
+**最后更新**: 2026-02-04
 
 本文档列出所有后端 API 端点、请求/响应格式和使用示例。
 
@@ -263,6 +263,10 @@ GET /api/vocabulary
       "book_id": "book_001",
       "page": 45,
       "learned": false,
+      "learning_status": "new",
+      "priority_score": 0.0,
+      "query_count": 1,
+      "last_queried_at": "2026-01-30T10:00:00Z",
       "created_at": "2026-01-30T10:00:00Z"
     }
   ]
@@ -296,6 +300,7 @@ POST /api/vocabulary
   "book_id": "book_001",
   "page": 45,
   "learned": false,
+  "learning_status": "new",
   "created_at": "2026-01-30T10:00:00Z"
 }
 ```
@@ -342,14 +347,13 @@ DELETE /api/vocabulary/{vocab_id}
 ### 查询词典
 
 ```
-GET /api/dictionary/lookup
+GET /api/dict/{word}
 ```
 
 **查询参数**:
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `word` | str | 要查询的单词 |
-| `dict_type` | str | 词典类型 (ecdict/mdx) |
+| `source` | str | 词典来源（可选），默认查询所有 |
 
 **响应示例**:
 ```json
@@ -365,106 +369,134 @@ GET /api/dictionary/lookup
 }
 ```
 
-### 获取词典列表
+### 获取词典来源
 
 ```
-GET /api/dictionary/list
+GET /api/dict/{word}/sources
 ```
 
 **响应示例**:
 ```json
 {
-  "dictionaries": [
-    {
-      "id": "ecdict",
-      "name": "ECDICT",
-      "type": "ecdict",
-      "word_count": 100000,
-      "installed": true
-    },
-    {
-      "id": "mdx_001",
-      "name": "Oxford Dictionary",
-      "type": "mdx",
-      "word_count": 50000,
-      "installed": false
-    }
+  "ecdict": true,
+  "mdx": ["Oxford Dictionary"]
+}
+```
+
+### 获取例句
+
+```
+GET /api/dict/{word}/examples
+```
+
+**响应示例**:
+```json
+{
+  "word": "serendipity",
+  "examples": [
+    {"en": "It was pure serendipity.", "cn": "这纯属巧合。"}
   ]
+}
+```
+
+### 文本翻译
+
+```
+POST /api/dict/translate
+```
+
+**请求体**:
+```json
+{
+  "text": "The Great Gatsby is a masterpiece of American literature"
+}
+```
+
+**响应示例**:
+```json
+{
+  "translation": "《了不起的盖茨比》是美国文学的杰作"
 }
 ```
 
 ## 7. AI API
 
-### 获取 AI 回复
+### 统一 AI 对话
 
 ```
 POST /api/ai/chat
 ```
 
+自动识别意图（语言学习、内容定位、知识检索、阅读理解）并返回相应结果。支持 FTS5 全文检索作为知识库来源。
+
 **请求体**:
 ```json
 {
-  "message": "What does 'serendipity' mean?",
-  "context": {
-    "book_id": "book_001",
-    "page": 45,
-    "selected_text": "serendipity"
-  }
+  "message": "什么是 serendipity？",
+  "history": [{"role": "user", "content": "..."}],
+  "page_content": "当前页面的文本内容...",
+  "current_page": 45,
+  "book_title": "The Great Gatsby",
+  "book_id": "book_001",
+  "n_contexts": 5
 }
 ```
 
 **响应示例**:
 ```json
 {
-  "reply": "Serendipity means the occurrence of events by chance in a happy or beneficial way. It's often used to describe a fortunate coincidence.",
-  "sources": ["ECDICT", "Context from page 45"]
+  "reply": "Serendipity 指的是意外发现美好事物的运气...",
+  "role": "assistant",
+  "sources": [
+    {
+      "book_id": "book_001",
+      "page_number": 12,
+      "chunk_index": 0,
+      "distance": 0.5
+    }
+  ],
+  "intent": "language_learning"
 }
 ```
 
-### 翻译文本
+## 8. RAG API (语义搜索)
+
+### 语义搜索
 
 ```
-POST /api/ai/translate
+POST /api/rag/search
 ```
 
 **请求体**:
 ```json
 {
-  "text": "The Great Gatsby is a masterpiece of American literature",
-  "target_language": "zh"
+  "query": "Who is Gatsby?",
+  "n_results": 5
 }
 ```
 
 **响应示例**:
 ```json
 {
-  "original": "The Great Gatsby is a masterpiece of American literature",
-  "translated": "《了不起的盖茨比》是美国文学的杰作",
-  "target_language": "zh"
+  "success": true,
+  "results": [
+    {
+      "book_id": "test_book",
+      "page_number": 1,
+      "chunk_text": "Sample content about Gatsby...",
+      "distance": 0.1
+    }
+  ],
+  "message": "Found 1 results"
 }
 ```
 
-## 8. 配置 API
+## 9. 配置 API
 
 ### 获取所有供应商
 
 ```
 GET /api/config/suppliers
-```
-
-**响应示例**:
-```json
-{
-  "suppliers": [
-    {
-      "type": "gemini",
-      "name": "Google Gemini",
-      "description": "Google的AI模型服务",
-      "model_count": 4,
-      "requires_endpoint": false
-    }
-  ]
-}
 ```
 
 ### 获取供应商模型列表
@@ -478,41 +510,10 @@ GET /api/config/suppliers/{supplier_type}/models
 |------|------|------|
 | `supplier_type` | str | 供应商类型 (gemini/openai/claude/deepseek/qwen/custom) |
 
-**响应示例**:
-```json
-{
-  "supplier_type": "gemini",
-  "models": [
-    {
-      "id": "gemini-3-pro-preview",
-      "name": "Gemini 3 Pro",
-      "description": "Google最新一代顶级高性能模型",
-      "context_length": 2000000
-    }
-  ]
-}
-```
-
 ### 获取供应商配置状态
 
 ```
 GET /api/config/suppliers-status
-```
-
-**响应示例**:
-```json
-{
-  "suppliers": [
-    {
-      "type": "gemini",
-      "name": "Google Gemini",
-      "configured": true,
-      "model": "gemini-3-pro-preview",
-      "is_active": true
-    }
-  ],
-  "active_supplier": "gemini"
-}
 ```
 
 ### 保存供应商配置
@@ -566,7 +567,13 @@ POST /api/config/test-connection
 DELETE /api/config/suppliers/{supplier_type}
 ```
 
-## 9. 错误响应
+### 重新加载配置
+
+```
+POST /api/config/reload
+```
+
+## 10. 错误响应
 
 所有错误响应都遵循以下格式：
 
@@ -588,60 +595,13 @@ DELETE /api/config/suppliers/{supplier_type}
 | 409 | CONFLICT | 资源冲突 |
 | 500 | INTERNAL_ERROR | 服务器内部错误 |
 
-## 10. 使用示例
-
-### Python 示例
-
-```python
-import requests
-
-# 获取书籍列表
-response = requests.get('http://localhost:8000/api/books')
-books = response.json()
-
-# 上传书籍
-with open('book.pdf', 'rb') as f:
-    files = {'file': f}
-    data = {'title': 'My Book', 'author': 'John Doe'}
-    response = requests.post('http://localhost:8000/api/books/upload', files=files, data=data)
-    book = response.json()
-
-# 查询词典
-response = requests.get('http://localhost:8000/api/dictionary/lookup', params={'word': 'serendipity'})
-definition = response.json()
-```
-
-### JavaScript 示例
-
-```javascript
-// 获取书籍列表
-const response = await fetch('/api/books');
-const books = await response.json();
-
-// 上传书籍
-const formData = new FormData();
-formData.append('file', fileInput.files[0]);
-formData.append('title', 'My Book');
-formData.append('author', 'John Doe');
-
-const uploadResponse = await fetch('/api/books/upload', {
-  method: 'POST',
-  body: formData
-});
-const book = await uploadResponse.json();
-
-// 查询词典
-const dictResponse = await fetch('/api/dictionary/lookup?word=serendipity');
-const definition = await dictResponse.json();
-```
-
 ## 11. 速率限制
 
-暂无速率限制（后续可能添加）
+暂无速率限制
 
 ## 12. 版本控制
 
-当前 API 版本: **v1.0**
+当前 API 版本: **v1.1**
 
 所有端点都在 `/api/` 路径下。
 

@@ -1,6 +1,6 @@
 # 开发指南
 
-**最后更新**: 2026-01-30
+**最后更新**: 2026-02-04
 
 本文档指导开发者如何设置开发环境、运行项目和进行调试。
 
@@ -23,13 +23,13 @@ npm install
 ```bash
 cd backend
 # 创建虚拟环境 (可选)
-python -m venv venv
+python -m venv .venv
 
 # Windows 激活
-.\venv\Scripts\activate
+.\.venv\Scripts\activate
 
 # macOS/Linux 激活
-# source venv/bin/activate
+# source .venv/bin/activate
 
 # 安装依赖 (包含 PyInstaller)
 pip install -r requirements.txt
@@ -45,6 +45,7 @@ pip install -r requirements.txt
 npm run dev
 ```
 
+该命令会并行执行 `npm run dev:frontend` 和 `npm run dev:electron`。
 **注意**：开发模式下数据存储在 `backend/data` 目录。
 
 ### 单独启动各个模块
@@ -63,7 +64,8 @@ npm run dev
 
 **Electron 开发**：
 ```bash
-npm run electron:dev
+# 需确保前端(3000)和后端(8000)已启动
+npm run dev:electron
 ```
 
 ## 3. 调试技巧
@@ -71,6 +73,7 @@ npm run electron:dev
 ### 后端调试
 - 使用 `--reload` 标志启用热重载
 - 查看日志输出了解请求流程
+- **定时任务**: 后端包含 `APScheduler` 定时任务（如每日生词优先级更新），调试时留意日志中的 `apscheduler` 相关输出。
 - 使用 Python 调试器：
   ```python
   import pdb; pdb.set_trace()
@@ -90,10 +93,12 @@ npm run electron:dev
 
 | 命令 | 说明 |
 |------|------|
-| `npm run dev` | 启动完整开发环境 |
-| `npm run build` | 构建生产版本 |
+| `npm run dev` | 启动完整开发环境 (Frontend + Electron) |
+| `npm run build` | 构建完整生产版本 (Frontend + Backend + Electron + Package) |
+| `npm run build:frontend` | 仅构建 Next.js 前端 |
+| `npm run build:backend` | 使用 PyInstaller 打包 Python 后端 |
+| `npm run build:electron` | 编译 Electron 主进程 |
 | `npm run lint` | 运行代码检查 |
-| `npm run test` | 运行测试 |
 | `cd backend && pytest` | 运行后端单元测试 |
 
 ## 5. 代码规范
