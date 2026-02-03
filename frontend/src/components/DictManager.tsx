@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { DictImportDialog } from './DictImportDialog';
-import { fetchDicts, deleteDict, toggleDict, DictInfo } from '../lib/api';
+import { fetchDicts, deleteDict, toggleDict, setDictPriority, DictInfo } from '../lib/api';
 
 export function DictManager() {
   const [dicts, setDicts] = useState<DictInfo[]>([]);
@@ -8,6 +8,8 @@ export function DictManager() {
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null); // 正在删除的词典名
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [draggedItem, setDraggedItem] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // 显示Toast提示
@@ -69,6 +71,59 @@ export function DictManager() {
     }
   };
 
+  const handleDragStart = (dictName: string) => {
+    setDraggedItem(dictName);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = async (targetDictName: string) => {
+    if (!draggedItem || draggedItem === targetDictName) {
+      setDraggedItem(null);
+      return;
+    }
+
+    // 找到拖拽项和目标项的索引
+    const draggedIndex = dicts.findIndex(d => d.name === draggedItem);
+    const targetIndex = dicts.findIndex(d => d.name === targetDictName);
+
+    if (draggedIndex === -1 || targetIndex === -1) {
+      setDraggedItem(null);
+      return;
+    }
+
+    // 创建新的排序列表
+    const newDicts = [...dicts];
+    const [draggedDict] = newDicts.splice(draggedIndex, 1);
+    newDicts.splice(targetIndex, 0, draggedDict);
+
+    // 更新本地状态
+    setDicts(newDicts);
+    setDraggedItem(null);
+
+    // 保存到后端
+    setSaving(true);
+    try {
+      // 只保存导入词典的顺序（排除内置词典）
+      const importedDictNames = newDicts
+        .filter(d => d.type === 'imported')
+        .map(d => d.name);
+
+      await setDictPriority(importedDictNames);
+      showToast('排序已保存', 'success');
+    } catch (error) {
+      console.error('Failed to save priority:', error);
+      showToast('保存排序失败', 'error');
+      // 恢复原来的顺序
+      await loadDicts();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const formatSize = (bytes: number) => {
     if (bytes < 1024 * 1024) {
       return `${(bytes / 1024).toFixed(2)} KB`;
@@ -79,7 +134,9 @@ export function DictManager() {
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center mb-6">
-        <div></div>
+        <div className="text-sm text-gray-500">
+          提示：拖拽导入词典可调整查词时的顺序
+        </div>
         <button
           onClick={() => setShowImportDialog(true)}
           className="bg-gray-900 text-white px-4 py-2 rounded hover:bg-gray-800 transition-colors"
@@ -95,12 +152,23 @@ export function DictManager() {
           {dicts.map((dict) => (
             <div
               key={dict.name}
-              className="bg-white border border-gray-200 rounded-lg hover:border-gray-300 hover:shadow-md transition-all"
+              draggable={dict.type === 'imported'}
+              onDragStart={() => handleDragStart(dict.name)}
+              onDragOver={handleDragOver}
+              onDrop={() => handleDrop(dict.name)}
+              className={`bg-white border border-gray-200 rounded-lg hover:border-gray-300 hover:shadow-md transition-all ${
+                draggedItem === dict.name ? 'opacity-50 bg-gray-50' : ''
+              } ${dict.type === 'imported' ? 'cursor-move' : ''}`}
             >
               <div className="p-6">
                 <div className="flex justify-between items-start">
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
+                      {dict.type === 'imported' && (
+                        <svg className="w-5 h-5 text-gray-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" />
+                        </svg>
+                      )}
                       <h3 className="text-lg font-semibold text-gray-900">{dict.name}</h3>
                       {dict.is_builtin && (
                         <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
