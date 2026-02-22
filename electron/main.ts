@@ -83,7 +83,6 @@ async function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: false,
-      allowRunningInsecureContent: true,
     },
   });
 

@@ -18,6 +18,16 @@ if DB_PATH.parent and not DB_PATH.parent.exists():
 engine = create_engine(
     DATABASE_URL, connect_args={"check_same_thread": False}
 )
+
+# 启用 SQLite WAL 模式和 busy_timeout，提升并发读写性能
+from sqlalchemy import event
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

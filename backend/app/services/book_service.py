@@ -102,17 +102,23 @@ def verify_and_process_book_task(book_id: str):
         book.total_pages = result.get("total_pages")  # type: ignore
         book.cover_image = result.get("cover_image")  # type: ignore
 
-        # Save pages
+        # Save pages (批量插入，提升大型书籍的入库性能)
         pages_data = result.get("pages", [])
-        for p in pages_data:
-            page = Page(
-                book_id=book_id,
-                page_number=p["page_number"],
-                text_content=p["text_content"],
-                words_data=p["words_data"],  # SQLAlchemy JSON type handles dict/list
-                images=p["images"],
-            )
-            db.add(page)
+        batch_size = 500
+        for i in range(0, len(pages_data), batch_size):
+            batch = pages_data[i:i + batch_size]
+            page_objects = [
+                Page(
+                    book_id=book_id,
+                    page_number=p["page_number"],
+                    text_content=p["text_content"],
+                    words_data=p["words_data"],
+                    images=p["images"],
+                )
+                for p in batch
+            ]
+            db.bulk_save_objects(page_objects)
+            db.flush()  # 刷新到数据库但不提交，确保触发器执行
 
         book.status = "completed"  # type: ignore
         db.commit()
