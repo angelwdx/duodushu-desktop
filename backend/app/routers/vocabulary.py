@@ -839,6 +839,7 @@ def find_and_save_example_contexts_native(
         )
 
         if lib_books_count > 0:
+            extraction_logger.info(f"[例句提取] 发现 {lib_books_count} 本例句库书籍，优先搜索")
             query_str = """
                 SELECT p.id, p.book_id, p.page_number, p.text_content
                 FROM pages p
@@ -848,7 +849,7 @@ def find_and_save_example_contexts_native(
                   AND b.book_type = 'example_library'
             """
         else:
-            extraction_logger.warning(f"[例句提取] 没有例句库书籍，从所有书籍中提取例句")
+            extraction_logger.info(f"[例句提取] 未发现专门例句库，从全库 {db.execute(text('SELECT COUNT(*) FROM books')).scalar()} 本书中搜索")
             query_str = """
                 SELECT p.id, p.book_id, p.page_number, p.text_content
                 FROM pages p
