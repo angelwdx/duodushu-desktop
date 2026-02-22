@@ -32,6 +32,7 @@
   "build": {
     "appId": "com.duodushu.desktop",
     "productName": "Duodushu",
+    "publish": null,
     "directories": {
       "output": "dist_app",
       "buildResources": "resources"
