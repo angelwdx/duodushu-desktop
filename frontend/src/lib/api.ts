@@ -1,14 +1,16 @@
 // 尝试从 Electron 获取后端 URL（便携版使用）
 // 在开发环境或 Electron 未提供 URL 时，使用默认值
-let API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// 使用 127.0.0.1 而非 localhost 以避免 macOS 上的 IPv6 (::1) 解析问题
+let API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
 // 如果在 Electron 环境中（检测 window.electronAPI）
 // 注意：避免在模块顶层使用 await 以免阻塞 Next.js 渲染
 if (typeof window !== 'undefined' && (window as any).electronAPI) {
   (window as any).electronAPI.getBackendUrl().then((backendUrl: string) => {
     if (backendUrl) {
-      API_URL = backendUrl;
-      console.log('[API] Using backend URL from Electron:', backendUrl);
+      // 规范化后端 URL，确保不以斜杠结尾
+      API_URL = backendUrl.endsWith('/') ? backendUrl.slice(0, -1) : backendUrl;
+      console.log('[API] Using backend URL from Electron:', API_URL);
     }
   }).catch((e: any) => {
     console.warn('[API] Failed to get backend URL from Electron:', e);
@@ -40,7 +42,7 @@ async function fetchWithTimeout(url: string, timeout: number, options?: RequestI
   }
 }
 
- export interface Book {
+export interface Book {
   id: string;
   title: string;
   author: string;
@@ -51,7 +53,7 @@ async function fetchWithTimeout(url: string, timeout: number, options?: RequestI
   book_type?: string;
 }
 
- export async function uploadBook(
+export async function uploadBook(
   file: File,
   data: { book_type?: string },
 ): Promise<{ book_id: string; status: string }> {
@@ -599,8 +601,8 @@ export async function deleteDict(dictName: string): Promise<void> {
  * @param name - 可选的词典名称
  */
 export function importDict(
-  file: File, 
-  name?: string, 
+  file: File,
+  name?: string,
   onProgress?: (progress: number) => void
 ): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -630,10 +632,10 @@ export function importDict(
         }
       } else {
         try {
-           const errorData = JSON.parse(xhr.responseText);
-           reject(new Error(errorData.detail || 'Import failed'));
+          const errorData = JSON.parse(xhr.responseText);
+          reject(new Error(errorData.detail || 'Import failed'));
         } catch {
-           reject(new Error(`Import failed with status ${xhr.status}`));
+          reject(new Error(`Import failed with status ${xhr.status}`));
         }
       }
     };
@@ -738,10 +740,10 @@ export async function checkTranslationConfigured(): Promise<boolean> {
     const res = await fetch(`${API_URL}/api/config/suppliers-status`);
     if (!res.ok) return false;
     const data = await res.json();
-    
+
     // 必须有活跃的供应商
     if (!data.active_supplier) return false;
-    
+
     // 且该供应商必须已配置
     const active = data.suppliers.find((s: any) => s.type === data.active_supplier);
     return active && active.configured;

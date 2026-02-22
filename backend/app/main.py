@@ -60,6 +60,69 @@ scheduler.add_job(scheduled_priority_update, "cron", hour=3, minute=0, id="daily
 from contextlib import asynccontextmanager
 
 
+def _migrate_word_contexts_unique_index(db_path: str):
+    """
+    迁移：为 word_contexts 表添加唯一索引
+    
+    步骤：
+    1. 检查唯一索引是否已存在（幂等）
+    2. 清理已存在的重复数据（保留 id 最小的记录）
+    3. 创建唯一索引
+    """
+    import sqlite3
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # 检查索引是否已存在
+        existing_indexes = cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='uq_word_context'"
+        ).fetchone()
+        
+        if existing_indexes:
+            logger.info("word_contexts 唯一索引已存在，跳过迁移")
+            conn.close()
+            return
+        
+        # 统计重复数据
+        duplicates = cursor.execute("""
+            SELECT word, book_id, page_number, context_sentence, COUNT(*) as cnt
+            FROM word_contexts
+            GROUP BY word, book_id, page_number, context_sentence
+            HAVING cnt > 1
+        """).fetchall()
+        
+        if duplicates:
+            logger.info(f"发现 {len(duplicates)} 组重复的 word_contexts 记录，开始清理...")
+            
+            # 删除重复记录（保留每组中 id 最小的）
+            cursor.execute("""
+                DELETE FROM word_contexts
+                WHERE id NOT IN (
+                    SELECT MIN(id)
+                    FROM word_contexts
+                    GROUP BY word, book_id, page_number, context_sentence
+                )
+            """)
+            deleted = cursor.rowcount
+            logger.info(f"已清理 {deleted} 条重复的 word_contexts 记录")
+        
+        # 创建唯一索引
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_word_context
+            ON word_contexts(word, book_id, page_number, context_sentence)
+        """)
+        
+        conn.commit()
+        logger.info("word_contexts 唯一索引创建成功")
+        
+    except Exception as e:
+        logger.error(f"word_contexts 迁移失败: {e}")
+    finally:
+        if conn:
+            conn.close()
+
 def ensure_fts5_index(db_path: str):
     """
     确保 FTS5 全文搜索索引存在
@@ -118,8 +181,11 @@ def ensure_fts5_index(db_path: str):
         """)
         
         # 创建自动同步触发器（UPDATE）
+        # 对于 FTS5 外部内容表，更新时需先删除旧行再插入新行
+        cursor.execute("DROP TRIGGER IF EXISTS pages_au;")
         cursor.execute("""
-            CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
+            CREATE TRIGGER pages_au AFTER UPDATE ON pages BEGIN
+                INSERT INTO pages_fts(pages_fts, id) VALUES('delete', OLD.id);
                 INSERT INTO pages_fts(id, book_id, page_number, text_content)
                 VALUES (NEW.id, NEW.book_id, NEW.page_number, NEW.text_content);
             END;
@@ -180,6 +246,9 @@ async def lifespan(app: FastAPI):
         # 初始化 FTS5 全文搜索索引（用于例句提取功能）
         from app.config import DB_PATH
         ensure_fts5_index(str(DB_PATH))
+
+        # 迁移：为 word_contexts 表添加唯一索引（先清理重复数据）
+        _migrate_word_contexts_unique_index(str(DB_PATH))
 
     except Exception as e:
         logger.error(f"数据库初始化失败: {e}")

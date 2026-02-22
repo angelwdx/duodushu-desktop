@@ -84,11 +84,11 @@ def run_example_extraction_task(word: str, max_total: int = 10):
         extraction_logger.info(f"[后台任务] 单词 '{word}' 正在处理中，跳过")
         return
 
-    db = None
     retry_count = 0
     max_retries = 3
 
     while retry_count < max_retries:
+        db = None
         try:
             # 标记为正在处理
             with extraction_lock:
@@ -103,13 +103,10 @@ def run_example_extraction_task(word: str, max_total: int = 10):
             logger.info(f"[后台任务] 开始为单词 '{word}' 提取例句，上限 {max_total} 个")
 
             db = SessionLocal()
-            try:
-                find_and_save_example_contexts_native(word, db, max_total=max_total)
-                extraction_logger.info(f"[后台任务] 完成单词 '{word}' 的例句提取")
-                logger.info(f"[后台任务] 完成单词 '{word}' 的例句提取")
-                break  # 成功，退出重试
-            finally:
-                db.close()
+            find_and_save_example_contexts_native(word, db, max_total=max_total)
+            extraction_logger.info(f"[后台任务] 完成单词 '{word}' 的例句提取")
+            logger.info(f"[后台任务] 完成单词 '{word}' 的例句提取")
+            break  # 成功，退出重试
 
         except Exception as e:
             retry_count += 1
@@ -126,12 +123,14 @@ def run_example_extraction_task(word: str, max_total: int = 10):
                 time.sleep(wait_time)
 
         finally:
+            # 关闭数据库会话（只关闭一次）
+            if db:
+                db.close()
+                db = None
+
             # 从处理集合中移除
             with extraction_lock:
                 processing_words.discard(word_lower)
-
-            if db:
-                db.close()
 
 
 @router.post("/", response_model=VocabularyResponse)

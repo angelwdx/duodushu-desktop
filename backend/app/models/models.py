@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     LargeBinary,
     Float,
+    UniqueConstraint,
 )
 from sqlalchemy.sql import func
 from .database import Base
@@ -107,6 +108,9 @@ class WordContext(Base):
     """单词上下文表"""
 
     __tablename__ = "word_contexts"
+    __table_args__ = (
+        UniqueConstraint('word', 'book_id', 'page_number', 'context_sentence', name='uq_word_context'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     word = Column(String, nullable=False, index=True)
