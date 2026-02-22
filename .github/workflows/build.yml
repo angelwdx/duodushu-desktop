@@ -72,13 +72,16 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Disable electron-builder auto-publish to let workflow handle it
+          GH_TOKEN: ""
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             source backend/.venv/Scripts/activate
           else
             source backend/.venv/bin/activate
           fi
-          npm run build
+          # Use publish: never to prevent electron-builder from trying to create releases
+          npm run package -- --publish never
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
