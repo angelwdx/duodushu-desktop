@@ -49,6 +49,10 @@ async def stream_speech(req: TTSRequestStream):
 @router.get("/audio/{filename}")
 async def get_audio(filename: str):
     """Serve the generated audio file"""
+    # 检查路径遍历攻击
+    if ".." in filename or "/" in filename or "\\" in filename:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Invalid filename")
     return tts_service.get_audio_file(filename)
 
 

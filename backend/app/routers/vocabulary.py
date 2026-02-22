@@ -782,19 +782,8 @@ def get_vocabulary(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def find_examples_task(word: str, exclude_book_id: Optional[str] = None):
-    """Background task wrapper for finding examples with its own session"""
-    db = SessionLocal()
-    try:
-        logger.info(f"Starting background task to find examples for word: {word}, exclude_book_id: {exclude_book_id}")
-        find_and_save_example_contexts_native(word, db, exclude_book_id)
-        logger.info(f"Successfully completed finding examples for word: {word}")
-    except Exception as e:
-        logger.error(f"Background Task Error finding examples for word '{word}': {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        db.rollback()
-    finally:
-        db.close()
+
+
 
 
 def find_and_save_example_contexts_native(
@@ -1587,10 +1576,7 @@ def add_word_context(vocab_id: int, data: dict, db: Session = Depends(get_db)):
             }
 
     except Exception as e:
-        print(f"ERROR: Error adding word context: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.error(f"Error adding word context: {e}", exc_info=True)
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1663,8 +1649,5 @@ def check_extraction_status(vocab_id: int, db: Session = Depends(get_db)):
         }
 
     except Exception as e:
-        print(f"ERROR: Error checking extraction status: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.error(f"Error checking extraction status: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

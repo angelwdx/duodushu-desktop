@@ -53,7 +53,6 @@ let mainWindow: BrowserWindow | null = null;
 let pythonProcess: ChildProcess | null = null;
 
 // 定义常量
-// 定义常量
 // 使用 app.isPackaged 判定是否为生产环境（更可靠）
 const IS_DEV = !app.isPackaged;
 const PY_DIST_FOLDER = 'backend'; // 打包后 Python 可执行文件所在目录名称
@@ -195,9 +194,7 @@ function startPythonBackend() {
   let workingDir: string = "";
 
   if (IS_DEV) {
-    // 开发环境：使用 app.getAppPath() 而不是 process.cwd()
-    // app.getAppPath() 返回应用目录（项目根目录），更可靠
-    const appPath = app.getAppPath();
+    // 开发环境：使用 app.getAppPath() 返回应用目录（项目根目录），更可靠
     dataPath = path.join(appPath, 'backend', 'data');
     workingDir = path.join(appPath, 'backend');
     logToFile(`开发模式 - 使用应用目录: ${appPath}`);
@@ -244,7 +241,6 @@ function startPythonBackend() {
 
   if (IS_DEV) {
     // 开发模式：直接运行 Python 脚本
-    const appPath = app.getAppPath();
     const venvPythonPath = process.platform === 'win32'
       ? path.join(appPath, 'backend', '.venv', 'Scripts', 'python.exe')
       : path.join(appPath, 'backend', '.venv', 'bin', 'python3');

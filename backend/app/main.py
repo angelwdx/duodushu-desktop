@@ -34,7 +34,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 创建后台调度器
-# 创建后台调度器
 scheduler = BackgroundScheduler()
 
 

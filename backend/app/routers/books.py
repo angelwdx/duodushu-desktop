@@ -104,17 +104,25 @@ def get_book_cover(filename: str):
 @router.delete("/{book_id}")
 def delete_book(book_id: str, db: Session = Depends(get_db)):
     """Delete a book and its associated data"""
+    from sqlalchemy import text
+
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    # 1. Delete associated pages
-    db.query(Page).filter(Page.book_id == book_id).delete()
+    # 1. Delete associated pages (使用原生 SQL 逐行删除，确保触发 FTS5 的 pages_ad 触发器)
+    db.execute(text("DELETE FROM pages WHERE book_id = :book_id"), {"book_id": book_id})
 
     # 2. Delete reading progress
     db.query(ReadingProgress).filter(ReadingProgress.book_id == book_id).delete()
 
-    # 3. Delete files
+    # 3. Delete word contexts from this book (防止孤立数据)
+    db.execute(text("DELETE FROM word_contexts WHERE book_id = :book_id"), {"book_id": book_id})
+
+    # 4. Delete bookmarks from this book
+    db.execute(text("DELETE FROM bookmarks WHERE book_id = :book_id"), {"book_id": book_id})
+
+    # 5. Delete files
     try:
         # Delete book file
         book_path_str = book.file_path if isinstance(book.file_path, str) else None
@@ -133,10 +141,10 @@ def delete_book(book_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"Error deleting files: {e}")
 
-    # 4. Unlink vocabulary (Preserve words, just remove book association)
+    # 6. Unlink vocabulary (Preserve words, just remove book association)
     db.query(Vocabulary).filter(Vocabulary.book_id == book_id).update({Vocabulary.book_id: None})
 
-    # 5. Delete book record
+    # 7. Delete book record
     db.delete(book)
     db.commit()
 

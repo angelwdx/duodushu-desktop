@@ -20,9 +20,9 @@ if (typeof window !== 'undefined' && (window as any).electronAPI) {
 // 注意：不建议在没有 electronAPI 的情况下强制覆盖 API_URL，
 // 除非确定在非开发环境下需要这样做。
 // 这里保留 localhost 作为最后的退路
-if (typeof window !== 'undefined' && API_URL === "http://localhost:8000" && !(window as any).electronAPI) {
-  // 可能是网页直播预览模式，保持默认 localhost
-  console.log('[API] Using default localhost URL');
+if (typeof window !== 'undefined' && API_URL === "http://127.0.0.1:8000" && !(window as any).electronAPI) {
+  // 可能是网页直播预览模式，保持默认
+  console.log('[API] Using default API URL');
 }
 
 console.log('[API] Initial API URL configured:', API_URL);

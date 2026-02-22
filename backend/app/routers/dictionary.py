@@ -41,14 +41,16 @@ class TranslationRequest(BaseModel):
 @router.post("/translate")
 def translate_text_endpoint(req: TranslationRequest):
     from ..services import supplier_factory
+    import logging
+    _logger = logging.getLogger(__name__)
 
     try:
-        print(f"[DEBUG translate_text] Received: text='{req.text}'")
+        _logger.debug(f"Translate request: text='{req.text[:50]}...'")
         translation = supplier_factory.translate_with_active_supplier(req.text)
-        print(f"[DEBUG translate_text] Result: {repr(translation)}")
+        _logger.debug(f"Translate result: {repr(translation)[:100]}")
         if not translation:
              raise HTTPException(status_code=500, detail="Translation returned empty")
         return {"translation": translation}
     except Exception as e:
-        print(f"[DEBUG translate_text] Exception: {type(e).__name__}: {e}")
+        _logger.error(f"Translation failed: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=f"Translation failed: {str(e)}")
