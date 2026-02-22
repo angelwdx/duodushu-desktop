@@ -89,3 +89,4 @@ CLAUDE.md
 # Temporary Logs & Output
 logs/
 frontend/lint_*.txt
+diff.txt
