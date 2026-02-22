@@ -16,13 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 def get_gemini_client():
-    """获取 Gemini 客户端"""
+    """获取 Gemini 客户端 (google-genai SDK)"""
     try:
-        import google.generativeai as genai
-
+        from google import genai
         return genai
     except ImportError:
-        logger.error("google.generativeai 未安装")
+        logger.error("google-genai 未安装")
         return None
 
 
@@ -85,6 +84,12 @@ class SupplierFactory:
                                 enabled=supplier_data.get("enabled", False),
                                 is_active=supplier_data.get("is_active", False),
                             )
+                            # 从 keyring 恢复真实 API Key
+                            from app.services.keyring_service import is_masked, retrieve_api_key
+                            if is_masked(suppliers[supplier_type].api_key):
+                                real_key = retrieve_api_key(supplier_type_str)
+                                if real_key:
+                                    suppliers[supplier_type].api_key = real_key
                         except ValueError:
                             continue
 
@@ -134,23 +139,31 @@ class SupplierFactory:
         self._load_config()
 
     def _save_config(self):
-        """保存配置到文件"""
+        """保存配置到文件（API Key 安全存储到 keyring）"""
         from app.supplier_config import SupplierConfig
+        from app.services.keyring_service import store_api_key, mask_api_key, is_keyring_available
 
         config_file = DATA_DIR / "app_config.json"
+        suppliers_dict = {}
+        for supplier_type, config in self.config.suppliers.items():
+            # 尝试存储到 keyring，成功则用占位符替代明文
+            api_key_to_save = config.api_key
+            if config.api_key and is_keyring_available():
+                if store_api_key(supplier_type.value, config.api_key):
+                    api_key_to_save = mask_api_key(config.api_key)
+
+            suppliers_dict[supplier_type.value] = {
+                "name": config.name,
+                "api_key": api_key_to_save,
+                "api_endpoint": config.api_endpoint,
+                "model": config.model,
+                "custom_model": config.custom_model,
+                "enabled": config.enabled,
+                "is_active": config.is_active,
+            }
+
         config_data = {
-            "suppliers": {
-                supplier_type.value: {
-                    "name": config.name,
-                    "api_key": config.api_key,
-                    "api_endpoint": config.api_endpoint,
-                    "model": config.model,
-                    "custom_model": config.custom_model,
-                    "enabled": config.enabled,
-                    "is_active": config.is_active,
-                }
-                for supplier_type, config in self.config.suppliers.items()
-            },
+            "suppliers": suppliers_dict,
             "active_supplier": self.config.active_supplier.value if self.config.active_supplier else None,
         }
         with open(config_file, "w", encoding="utf-8") as f:
@@ -194,10 +207,10 @@ def get_active_client():
 
     try:
         if supplier_type == SupplierType.GEMINI:
-            genai = get_gemini_client()
-            if genai:
-                genai.configure(api_key=api_key)
-                return genai
+            genai_module = get_gemini_client()
+            if genai_module:
+                client = genai_module.Client(api_key=api_key)
+                return client
 
         elif supplier_type == SupplierType.OPENAI:
             OpenAI = get_openai_client()
@@ -310,10 +323,11 @@ def translate_with_active_supplier(text: str) -> Optional[str]:
                 return result
 
         elif supplier_type == SupplierType.GEMINI:
-            import google.generativeai as genai
-
-            model_instance = genai.GenerativeModel(model)
-            response = model_instance.generate_content(prompt)
+            # Gemini 新版 SDK (google-genai)
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+            )
             return response.text.strip()
 
         elif supplier_type == SupplierType.CLAUDE:
@@ -393,24 +407,19 @@ def chat_with_active_supplier(
             return response.content[0].text
 
         elif supplier_type == SupplierType.GEMINI:
-            # Gemini接口
-            import google.generativeai as genai
-
+            # Gemini 新版 SDK (google-genai)
             # 转换消息格式
-            gemini_messages = []
+            gemini_contents = []
             for msg in messages:
                 if msg["role"] == "system":
                     continue
                 role = "user" if msg["role"] == "user" else "model"
-                gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
+                gemini_contents.append({"role": role, "parts": [{"text": msg["content"]}]})
 
-            # 创建模型实例
-            model_instance = genai.GenerativeModel(model)
-
-            # 发送请求
-            response = model_instance.generate_content(
-                gemini_messages,
-                generation_config={
+            response = client.models.generate_content(
+                model=model,
+                contents=gemini_contents,
+                config={
                     "temperature": temperature,
                     "max_output_tokens": max_tokens,
                 },

@@ -32,8 +32,8 @@ ebooklib>=0.18
 # Task Scheduler
 apscheduler>=3.10.0
 
-# Google Gemini AI
-google-generativeai>=0.3.0
+# Google Gemini AI (新版 SDK)
+google-genai>=1.0.0
 
 # OpenAI SDK
 openai>=1.0.0

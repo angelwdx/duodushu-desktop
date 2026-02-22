@@ -119,6 +119,12 @@ def load_multi_supplier_config() -> MultiSupplierConfig:
                 enabled=supplier_data.get("enabled", False),
                 is_active=supplier_data.get("is_active", False),
             )
+            # 从 keyring 恢复真实 API Key
+            from app.services.keyring_service import is_masked, retrieve_api_key
+            if is_masked(suppliers[supplier_type].api_key):
+                real_key = retrieve_api_key(supplier_type_str)
+                if real_key:
+                    suppliers[supplier_type].api_key = real_key
         except ValueError:
             logger.warning(f"未知的供应商类型: {supplier_type_str}")
             continue
@@ -133,15 +139,23 @@ def load_multi_supplier_config() -> MultiSupplierConfig:
 
 
 def save_multi_supplier_config(multi_config: MultiSupplierConfig) -> None:
-    """保存多供应商配置"""
+    """保存多供应商配置（API Key 安全存储到 keyring）"""
+    from app.services.keyring_service import store_api_key, mask_api_key, is_keyring_available
+
     config = load_config()
 
     # 转换供应商配置为字典
     suppliers_dict = {}
     for supplier_type, supplier_config in multi_config.suppliers.items():
+        # 尝试存储到 keyring
+        api_key_to_save = supplier_config.api_key
+        if supplier_config.api_key and is_keyring_available():
+            if store_api_key(supplier_type.value, supplier_config.api_key):
+                api_key_to_save = mask_api_key(supplier_config.api_key)
+
         suppliers_dict[supplier_type.value] = {
             "name": supplier_config.name,
-            "api_key": supplier_config.api_key,
+            "api_key": api_key_to_save,
             "api_endpoint": supplier_config.api_endpoint,
             "model": supplier_config.model,
             "custom_model": supplier_config.custom_model,
