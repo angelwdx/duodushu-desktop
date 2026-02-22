@@ -57,9 +57,18 @@
     ],
     "win": {
       "target": [
-        "portable",
-        "nsis",
-        "zip"
+        {
+          "target": "portable",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64", "arm64"]
+        }
       ],
       "icon": "public/icon.ico"
     },
