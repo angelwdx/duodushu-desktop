@@ -28,7 +28,16 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
       - name: Update package.json version
-        run: npm version ${{ steps.get_version.outputs.VERSION }} --no-git-tag-version
+        run: |
+          VERSION="${{ steps.get_version.outputs.VERSION }}"
+          # Use sed to update version directly (avoids npm version check)
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS sed
+            sed -i '' "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json
+          else
+            # Linux/Windows sed
+            sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json
+          fi
 
       - name: Setup Python
         uses: actions/setup-python@v5
