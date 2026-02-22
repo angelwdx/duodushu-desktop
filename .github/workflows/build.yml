@@ -35,11 +35,14 @@ jobs:
 
       - name: Install Backend Dependencies
         shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           cd backend
           python -m venv .venv
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             source .venv/Scripts/activate
+            chcp 65001  # Set Windows console to UTF-8
           else
             source .venv/bin/activate
           fi
