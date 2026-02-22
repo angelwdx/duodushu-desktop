@@ -78,11 +78,12 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
+    show: false, // 初始隐藏，等后端准备好再显示
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false, // Disable web security to allow mixed content (HTTP requests to localhost)
+      webSecurity: false, 
       allowRunningInsecureContent: true,
     },
   });
@@ -90,60 +91,69 @@ async function createWindow() {
   // 创建应用菜单
   createApplicationMenu(mainWindow);
 
+  // 等待后端就绪的逻辑
+  const checkBackendReady = async (retries = 20): Promise<boolean> => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        logToFile(`Checking backend health (attempt ${i + 1}/${retries})...`);
+        const response = await net.fetch('http://127.0.0.1:8000/health');
+        if (response.ok) {
+          logToFile('Backend is ready!');
+          return true;
+        }
+      } catch (e) {
+        // 后端尚未启动
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    return false;
+  };
+
   if (IS_DEV) {
-    // 开发模式：加载 Next.js 开发服务器
     logToFile('Loading development URL: http://localhost:3000');
     mainWindow.loadURL('http://localhost:3000');
+    // 开发模式下直接显示，方便调试
+    mainWindow.once('ready-to-show', () => mainWindow?.show());
     mainWindow.webContents.openDevTools();
   } else {
-    // 生产模式：使用自定义协议加载静态文件
-    // Setup app:// protocol handler
-    protocol.handle('app', (request) => {
-        const reqUrl = request.url;
-        logToFile(`Requesting: ${reqUrl}`);
-        
-        let pathName = new URL(reqUrl).pathname;
-        if (pathName === '/') {
-            pathName = '/index.html';
-        }
+    // 生产模式：等待后端就绪后再加载和显示
+    const isReady = await checkBackendReady();
+    
+    if (isReady) {
+        protocol.handle('app', (request) => {
+            const reqUrl = request.url;
+            let pathName = new URL(reqUrl).pathname;
+            if (pathName === '/') pathName = '/index.html';
 
-        // Handle Next.js directory indices (like /vocabulary -> /vocabulary.html or /vocabulary/index.html)
-        // But since Next.js 'export' usually generates .html files for pages, we check that.
-        
-        const possiblePaths = [
-            path.join(__dirname, '../frontend/out', pathName),
-            path.join(__dirname, '../frontend/out', pathName + '.html'),
-            path.join(__dirname, '../frontend/out', pathName, 'index.html')
-        ];
+            const possiblePaths = [
+                path.join(__dirname, '../frontend/out', pathName),
+                path.join(__dirname, '../frontend/out', pathName + '.html'),
+                path.join(__dirname, '../frontend/out', pathName, 'index.html')
+            ];
 
-        let filePath = '';
-        for (const p of possiblePaths) {
-            // Decoding URI component to handle spaces/special chars if any
-            const decodedPath = decodeURIComponent(p);
-            if (fs.existsSync(decodedPath) && fs.statSync(decodedPath).isFile()) {
-                filePath = decodedPath;
-                break;
+            let filePath = '';
+            for (const p of possiblePaths) {
+                const decodedPath = decodeURIComponent(p);
+                if (fs.existsSync(decodedPath) && fs.statSync(decodedPath).isFile()) {
+                    filePath = decodedPath;
+                    break;
+                }
             }
-        }
 
-        if (!filePath) {
-             // 404 fallback
-             filePath = path.join(__dirname, '../frontend/out', '404.html');
-             if (!fs.existsSync(filePath)) {
-                 // Final fallback if 404 doesn't exist
+            if (!filePath) {
                  filePath = path.join(__dirname, '../frontend/out', 'index.html');
-             }
-        }
+            }
 
-        return net.fetch(url.pathToFileURL(filePath).toString());
-    });
+            return net.fetch(url.pathToFileURL(filePath).toString());
+        });
 
-    logToFile('Loading URL: app://./index.html');
-    await mainWindow.loadURL('app://./index.html');
-    logToFile('URL loaded successfully');
-      
-      // TEMPORARY: Open DevTools in production to debug blank screen
-      // mainWindow.webContents.openDevTools();
+        logToFile('Loading URL: app://./index.html');
+        await mainWindow.loadURL('app://./index.html');
+        mainWindow.show(); // 后端好了，前端也加载了，现在展示给用户
+    } else {
+        logErrorToFile('Backend failed to start within timeout');
+        // 可以弹出一个 dialog 告知用户
+    }
   }
 
   // 处理外部链接打开请求
