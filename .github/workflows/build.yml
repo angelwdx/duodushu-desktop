@@ -74,14 +74,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Disable electron-builder auto-publish to let workflow handle it
           GH_TOKEN: ""
+          CSC_IDENTITY_AUTO_DISCOVERY: false
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             source backend/.venv/Scripts/activate
           else
             source backend/.venv/bin/activate
           fi
-          # Use publish: never to prevent electron-builder from trying to create releases
-          npm run package -- --publish never
+          # Run full build (includes frontend, backend, electron, package)
+          # GH_TOKEN and CSC_IDENTITY_AUTO_DISCOVERY disable auto-publish
+          npm run build
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
