@@ -182,12 +182,14 @@ function startPythonBackend() {
   // 在开发模式下，我们使用项目根目录下的 data
   // 在生产模式(打包后)，如果exe旁边有data，则用那个，否则用 userData
   let dataPath: string;
+  let workingDir: string = "";
 
   if (IS_DEV) {
      // 开发环境：使用 app.getAppPath() 而不是 process.cwd()
      // app.getAppPath() 返回应用目录（项目根目录），更可靠
      const appPath = app.getAppPath();
      dataPath = path.join(appPath, 'backend', 'data');
+     workingDir = path.join(appPath, 'backend');
      logToFile(`开发模式 - 使用应用目录: ${appPath}`);
   } else {
      // 生产环境检查逻辑：便携模式优先
@@ -245,7 +247,7 @@ function startPythonBackend() {
       // 确定工作目录：backend.exe 所在的实际目录
       // PyInstaller 将可执行文件放在 _internal/ 子目录中
       // 设置工作目录为 _internal 目录，确保数据目录正确创建
-      let workingDir = path.dirname(exePath);
+      workingDir = path.dirname(exePath);
       const internalDir = path.join(backendPath, '_internal');
       if (fs.existsSync(internalDir)) {
         workingDir = internalDir;
@@ -268,7 +270,10 @@ function startPythonBackend() {
   logToFile(`Starting Python backend: ${cmd} ${args.join(' ')}`);
 
   try {
-      pythonProcess = spawn(cmd, args);
+      pythonProcess = spawn(cmd, args, {
+          cwd: workingDir,
+          env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+      });
       
       logToFile(`Python process spawned with PID: ${pythonProcess.pid}`);
 

@@ -50,3 +50,4 @@ pytest-asyncio>=0.21.0
 
 # 打包工具
 pyinstaller>=6.3.0
+mdict-utils>=1.0.0
