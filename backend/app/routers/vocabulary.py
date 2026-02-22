@@ -57,7 +57,14 @@ extraction_logger = logging.getLogger("extraction")
 extraction_logger.setLevel(logging.INFO)
 # 避免重复添加handler
 if not extraction_logger.handlers:
-    file_handler = logging.FileHandler("extraction.log", encoding="utf-8")
+    try:
+        from app.config import DATA_DIR
+        import os
+        log_path = os.path.join(str(DATA_DIR), "extraction.log")
+        file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    except Exception:
+        # 回退到当前目录（开发环境）
+        file_handler = logging.FileHandler("extraction.log", encoding="utf-8")
     file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     extraction_logger.addHandler(file_handler)
 
