@@ -25,11 +25,14 @@ jobs:
 
       - name: Extract version from tag
         id: get_version
+        shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
       - name: Update package.json version
+        shell: bash
         run: |
           VERSION="${{ steps.get_version.outputs.VERSION }}"
+          echo "Updating package.json to version: $VERSION"
           # Use sed to update version directly (avoids npm version check)
           if [[ "$OSTYPE" == "darwin"* ]]; then
             # macOS sed
