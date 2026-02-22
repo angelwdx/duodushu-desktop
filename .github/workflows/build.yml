@@ -69,5 +69,8 @@ jobs:
             dist_app/*.dmg
             dist_app/*.exe
             dist_app/*.zip
+          fail_on_unmatched_files: false
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
