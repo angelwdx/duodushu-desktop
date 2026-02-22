@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import (
     APIRouter,
     UploadFile,
@@ -34,14 +35,14 @@ class BookResponse(BaseModel):
 
     id: str
     title: str
-    author: str | None = None
+    author: Optional[str] = None
     format: str
-    file_path: str | None = None
-    cover_image: str | None = None
-    total_pages: int | None = None
+    file_path: Optional[str] = None
+    cover_image: Optional[str] = None
+    total_pages: Optional[int] = None
     status: str
-    book_type: str | None = None
-    created_at: datetime | None = None
+    book_type: Optional[str] = None
+    created_at: Optional[datetime] = None
 
 
 @router.post("/upload")

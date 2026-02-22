@@ -1,35 +1,35 @@
-# FastAPI 核心依赖
+# FastAPI Core
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 
-# 数据库
+# Database
 sqlalchemy>=2.0.0
 alembic>=1.12.0
 
-# 异步支持
+# Async Support
 httpx>=0.25.0
 aiofiles>=23.2.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
 
-# 工具库
+# Utilities
 python-dotenv>=1.0.0
 python-multipart>=0.0.6
 
-# 词典相关
+# Dictionary
 pysbd>=0.3.4
 
-# PDF 处理
+# PDF Processing
 pypdf>=3.17.0
 pymupdf>=1.23.0
 pdfplumber>=0.10.0
 
-# EPUB 处理
+# EPUB Processing
 ebooklib>=0.18
 
-# 任务调度
+# Task Scheduler
 apscheduler>=3.10.0
 
 # Google Gemini AI
@@ -41,12 +41,13 @@ openai>=1.0.0
 # TTS
 edge-tts>=6.1.0
 
-# 日志
+# Logging
 loguru>=0.7.0
 
-# 测试
+# Testing
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
 
-# 打包工具
+# Packaging
 pyinstaller>=6.3.0
+mdict-utils>=1.0.0

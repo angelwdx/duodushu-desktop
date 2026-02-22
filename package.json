@@ -9,7 +9,7 @@
     "dev:electron": "wait-on tcp:3000 && tsc -p electron && electron .",
     "build": "npm run build:frontend && npm run build:backend && npm run build:electron && npm run package",
     "build:frontend": "cd frontend && npm run build",
-    "build:backend": "cd backend && ..\\.venv\\Scripts\\pyinstaller.exe backend.spec --noconfirm --clean",
+    "build:backend": "cd backend && pyinstaller backend.spec --noconfirm --clean",
     "build:electron": "tsc -p electron",
     "package": "electron-builder"
   },
@@ -57,11 +57,28 @@
     ],
     "win": {
       "target": [
-        "portable",
-        "nsis",
-        "zip"
+        {
+          "target": "portable",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64", "arm64"]
+        }
       ],
       "icon": "public/icon.ico"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "public/icon.icns",
+      "category": "public.app-category.education"
     },
     "portable": {
       "artifactName": "DuoDuShu-Desktop-Portable.exe"

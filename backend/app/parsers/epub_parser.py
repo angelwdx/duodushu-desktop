@@ -3,7 +3,7 @@ import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Union
 from .base import BaseParser
 
 
@@ -60,7 +60,7 @@ class EPUBParser(BaseParser):
             "outline": outline,
         }
 
-    def _get_metadata(self, book: epub.EpubBook, namespace: str, name: str) -> str | None:
+    def _get_metadata(self, book: epub.EpubBook, namespace: str, name: str) -> Optional[str]:
         """提取元数据"""
         try:
             data = book.get_metadata(namespace, name)
@@ -73,7 +73,7 @@ class EPUBParser(BaseParser):
         """统计章节数"""
         return len([item for item in book.get_items() if item.get_type() == ebooklib.ITEM_DOCUMENT])
 
-    def _extract_cover(self, book: epub.EpubBook, book_id: str, file_path: str) -> str | None:
+    def _extract_cover(self, book: epub.EpubBook, book_id: str, file_path: str) -> Optional[str]:
         """提取封面图片 - 支持多种 EPUB 封面格式"""
         try:
             cover_item = None
