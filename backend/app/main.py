@@ -161,15 +161,21 @@ def ensure_fts5_index(db_path: str):
         fts_count = cursor.execute("SELECT COUNT(*) FROM pages_fts").fetchone()[0]
         pages_count = cursor.execute("SELECT COUNT(*) FROM pages WHERE text_content IS NOT NULL").fetchone()[0]
         
-        if fts_count == 0 and pages_count > 0:
-            logger.info(f"同步 {pages_count} 页到 FTS5 索引...")
-            cursor.execute("""
-                INSERT OR REPLACE INTO pages_fts(id, book_id, page_number, text_content)
-                SELECT id, book_id, page_number, text_content
-                FROM pages
-                WHERE text_content IS NOT NULL;
-            """)
-            logger.info(f"FTS5 索引同步完成")
+        if pages_count > 0:
+            if fts_count == 0:
+                logger.info(f"同步 {pages_count} 页到 FTS5 索引...")
+                cursor.execute("""
+                    INSERT OR REPLACE INTO pages_fts(id, book_id, page_number, text_content)
+                    SELECT id, book_id, page_number, text_content
+                    FROM pages
+                    WHERE text_content IS NOT NULL;
+                """)
+                logger.info(f"FTS5 索引同步完成")
+            else:
+                # 即使索引不为空，也执行一次 rebuild 确保索引与内容表完全一致（处理旧版本迁移可能导致的同步问题）
+                logger.info("执行 FTS5 索引重建(rebuild)以确保同步...")
+                cursor.execute("INSERT INTO pages_fts(pages_fts) VALUES('rebuild');")
+                logger.info("FTS5 索引重建完成")
         
         # 创建自动同步触发器（INSERT）
         cursor.execute("""

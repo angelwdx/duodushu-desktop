@@ -5,8 +5,9 @@ import asyncio
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi import HTTPException
 from typing import AsyncGenerator
+from app.config import UPLOADS_DIR
 
-AUDIO_CACHE_DIR = os.path.join("uploads", "audio_cache")
+AUDIO_CACHE_DIR = os.path.join(UPLOADS_DIR, "audio_cache")
 os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
 
 # Voices map

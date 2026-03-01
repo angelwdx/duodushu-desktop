@@ -154,23 +154,21 @@ def find_and_save_example_contexts(
         )
 
         if lib_books_count > 0:
-            extraction_logger.info(f"[例句提取] 发现 {lib_books_count} 本例句库书籍，优先搜索")
-            query_str = """
-                SELECT p.id, p.book_id, p.page_number, p.text_content
-                FROM pages p
-                INNER JOIN pages_fts fts ON p.id = fts.rowid
-                INNER JOIN books b ON p.book_id = b.id
-                WHERE fts.text_content MATCH :word
-                  AND b.book_type = 'example_library'
-            """
+            extraction_logger.info(f"[例句提取] 发现 {lib_books_count} 本例句库书籍，优先搜索，若不足从全库补齐")
         else:
             extraction_logger.info(f"[例句提取] 未发现专门例句库，从全库搜索")
-            query_str = """
-                SELECT p.id, p.book_id, p.page_number, p.text_content
-                FROM pages p
-                INNER JOIN pages_fts fts ON p.id = fts.rowid
-                WHERE fts.text_content MATCH :word
-            """
+            
+        # 统一使用带有 ORDER BY 的查询，优先在例句库书中查找
+        query_str = """
+            SELECT p.id, p.book_id, p.page_number, p.text_content, b.book_type
+            FROM pages p
+            INNER JOIN pages_fts fts ON p.id = fts.rowid
+            INNER JOIN books b ON p.book_id = b.id
+            WHERE fts.text_content MATCH :word
+            ORDER BY 
+                CASE WHEN b.book_type = 'example_library' THEN 0 ELSE 1 END,
+                p.id DESC
+        """
 
         # 使用引号包裹搜索词以进行精确匹配
         search_variants = [f'"{word}"']
@@ -221,19 +219,20 @@ def find_and_save_example_contexts(
                 ).fetchone()
 
                 if not existing:
+                    # 动态判断来源类型
+                    source_type = "example_library" if (len(page) > 4 and page[4] == "example_library") else "normal"
                     db.execute(
                         text("""
                         INSERT OR IGNORE INTO word_contexts
                             (word, book_id, page_number, context_sentence, is_primary, source_type)
-                            VALUES (:word, :book_id, :page_number, :context_sentence, 0, 'example_library')
+                            VALUES (:word, :book_id, :page_number, :context_sentence, 0, :source_type)
                     """),
                         {
                             "word": word,
                             "book_id": page[1],
                             "page_number": page[2],
                             "context_sentence": sentence,
-                            "is_primary": 0,
-                            "source_type": "example_library",
+                            "source_type": source_type,
                         },
                     )
                     contexts_found += 1
