@@ -6,7 +6,7 @@ const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000';
 // 获取后端 URL（优先使用预定义的 URL，避免 IPC 问题）
 let cachedBackendUrl = DEFAULT_BACKEND_URL;
 
-// 初始化时尝试获取一次后端 URL（如果 Electron 主进程提供了）
+// 初始化时尝试获取一次后端 URL
 ipcRenderer.invoke('get-backend-url').then((url: string) => {
   cachedBackendUrl = url;
   console.log('[Preload] Backend URL received:', url);
@@ -15,49 +15,76 @@ ipcRenderer.invoke('get-backend-url').then((url: string) => {
 });
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  // 获取后端 URL
+  // ===== 后端 URL =====
   getBackendUrl: async () => {
-    // 优先使用缓存的 URL
     if (cachedBackendUrl && cachedBackendUrl !== DEFAULT_BACKEND_URL) {
       return cachedBackendUrl;
     }
-    // 如果 Electron 主进程提供了自定义 URL，使用它
     try {
       const url = await ipcRenderer.invoke('get-backend-url');
       if (url && url !== DEFAULT_BACKEND_URL) {
         cachedBackendUrl = url;
-        console.log('[Preload] Updated backend URL:', url);
         return url;
       }
     } catch (err) {
       console.error('[Preload] Failed to get backend URL:', err);
     }
-    // 回退到默认值
     return DEFAULT_BACKEND_URL;
   },
 
-  // 示例：从渲染进程发送消息到主进程
+  // ===== 通用工具 =====
   sendMessage: (message: string) => ipcRenderer.send('message', message),
-  // 示例：打开外部链接
   openExternal: (url: string) => ipcRenderer.send('open-external', url),
 
-  // 菜单导航事件监听
+  // ===== 菜单导航/操作事件 =====
   onNavigate: (callback: (path: string) => void) => {
     ipcRenderer.on('navigate', (_event, path: string) => callback(path));
   },
-
-  // 菜单操作事件监听
   onMenuAction: (callback: (action: string) => void) => {
     ipcRenderer.on('menu-action', (_event, action: string) => callback(action));
   },
-
-  // 移除导航事件监听
+  openNewWindow: (url: string) => {
+    ipcRenderer.send('open-new-window', url);
+  },
   removeNavigateListener: () => {
     ipcRenderer.removeAllListeners('navigate');
   },
-
-  // 移除菜单操作事件监听
   removeMenuActionListener: () => {
     ipcRenderer.removeAllListeners('menu-action');
+  },
+
+  // ===== 文件关联：接收双击打开的文件路径 =====
+  /** 获取启动时待打开的文件路径（调用一次后清空） */
+  getOpenFilePath: (): Promise<string | null> =>
+    ipcRenderer.invoke('get-open-file-path'),
+
+  /** 监听运行时新文件打开事件（Windows second-instance / macOS open-file） */
+  onOpenFile: (callback: (filePath: string) => void) => {
+    ipcRenderer.on('open-file', (_event, filePath: string) => callback(filePath));
+  },
+  removeOpenFileListener: () => {
+    ipcRenderer.removeAllListeners('open-file');
+  },
+
+  // ===== 自动更新 =====
+  /** 手动触发检查更新 */
+  checkForUpdates: (): Promise<{ success: boolean; message?: string }> =>
+    ipcRenderer.invoke('check-for-updates'),
+
+  /** 立即退出并安装已下载的更新 */
+  installUpdate: (): Promise<void> =>
+    ipcRenderer.invoke('install-update'),
+
+  /** 监听更新事件 */
+  onUpdaterEvent: (callback: (event: {
+    type: 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
+    version?: string;
+    percent?: number;
+    message?: string;
+  }) => void) => {
+    ipcRenderer.on('updater-event', (_event, data) => callback(data));
+  },
+  removeUpdaterListener: () => {
+    ipcRenderer.removeAllListeners('updater-event');
   },
 });

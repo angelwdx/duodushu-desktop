@@ -13,6 +13,7 @@ import { useGlobalTextSelection } from "../../hooks/useGlobalTextSelection";
 import { trackWordQuery } from "../../lib/api";
 import { createLogger } from "../../lib/logger";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
+import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { createReaderShortcuts, SHORTCUT_TITLES } from "../../lib/shortcuts";
 
 const log = createLogger('ReaderPage');
@@ -55,6 +56,7 @@ function ReaderContent() {
   const searchText = searchParams.get("text");
   const targetWord = searchParams.get("word");
   const backUrl = searchParams.get("backUrl"); // 获取返回地址
+  const isOnline = useNetworkStatus();
 
   // 全局选择状态
   const { selection, clearSelection } = useGlobalTextSelection(true, [
@@ -1154,10 +1156,10 @@ function ReaderContent() {
           onNote={(text, source) => {
             handleHighlight(text, currentPage, source);
           }}
-          onAskAI={(text) => {
+          onAskAI={isOnline ? (text) => {
             handleAskAI(text);
             setSidebarMode('ai');
-          }}
+          } : undefined}
           onLookup={handleLookup}
           onCopy={async (text) => {
             await navigator.clipboard.writeText(text);

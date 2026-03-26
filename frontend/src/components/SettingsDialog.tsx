@@ -144,22 +144,15 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
     const state = supplierStates[selectedSupplierType];
     const supplier = suppliers.find(s => s.type === selectedSupplierType);
     
+    // 未配置且没有输入 Key 时才阻止
     if (!state.apiKey && !supplier?.configured) {
-       // If not configured and no key entered, warn
        setTestResult({ success: false, message: '请先输入 API Key' });
        return;
     }
+    // 已配置时（即使没有重新输入 Key），后端会从 keyring 取已保存的 Key
 
     setTesting(true);
     setTestResult(null);
-
-    // If apiKey is empty but it's configured, the backend might use the stored one?
-    // The previous implementation required entering the key to test.
-    // "please input API Key" check suggests we need it in state.
-    // However, for a better UX, if it's already configured, we should be able to test without re-entering.
-    // But the backend test-connection endpoint takes `api_key` param.
-    // If the backend supports testing with stored key if parameter is empty, we'd do that.
-    // Let's assume for now we send what's in the state. 
     
     try {
         const response = await fetch(`${getApiUrl()}/api/config/test-connection`, {
@@ -167,7 +160,7 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 supplier_type: selectedSupplierType,
-                api_key: state.apiKey, // If empty, backend might fail if it doesn't look up stored one.
+                api_key: state.apiKey, // 若为空，后端自动从 keyring 取
                 api_endpoint: state.apiEndpoint,
                 model: state.customModel || state.model,
             }),

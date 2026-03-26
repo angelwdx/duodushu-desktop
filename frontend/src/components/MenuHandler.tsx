@@ -2,20 +2,7 @@
 
 import { useEffect } from 'react';
 
-// 定义 electronAPI 类型
-declare global {
-  interface Window {
-    electronAPI?: {
-      getBackendUrl: () => Promise<string>;
-      sendMessage: (message: string) => void;
-      openExternal: (url: string) => void;
-      onNavigate: (callback: (path: string) => void) => void;
-      onMenuAction: (callback: (action: string) => void) => void;
-      removeNavigateListener: () => void;
-      removeMenuActionListener: () => void;
-    };
-  }
-}
+// 类型由 GlobalMenuHandler 定义（或者其他 d.ts 文件），避免重复声明引起冲突
 
 interface MenuHandlerProps {
   onImportBook?: () => void;

@@ -6,6 +6,9 @@ import "../styles/dictionary/longman.css";
 import "../styles/dictionary/oxford.css";
 import "../styles/dictionary/webster.css";
 import GlobalMenuHandler from "../components/GlobalMenuHandler";
+import UpdateNotifier from "../components/UpdateNotifier";
+import GlobalFileDropHandler from "../components/GlobalFileDropHandler";
+import OfflineNotifier from "../components/OfflineNotifier";
 
 import { SettingsProvider } from "../contexts/SettingsContext";
 import { GlobalDialogsProvider } from "../contexts/GlobalDialogsContext";
@@ -36,6 +39,9 @@ export default function RootLayout({
         <SettingsProvider>
           <GlobalDialogsProvider>
             <GlobalMenuHandler />
+            <UpdateNotifier />
+            <OfflineNotifier />
+            <GlobalFileDropHandler />
             {children}
           </GlobalDialogsProvider>
         </SettingsProvider>

@@ -255,17 +255,41 @@ export default function Home() {
                             </div>
                         )}
     
-                        {/* 右上角删除按钮（移动端始终显示，桌面端hover显示） */}
-                        <button
-                          onClick={(e) => handleDelete(e, book.id)}
-                          className="absolute top-2 right-2 p-2 bg-white/90 backdrop-blur-sm border border-gray-200 rounded-lg text-gray-500 hover:text-gray-900 hover:border-gray-400 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10 touch-icon-btn"
-                          title="删除书籍"
-                          aria-label={`删除书籍: ${book.title}`}
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
+                        {/* 右上角覆盖组（删除、新窗口打开）。修改结构将其封装同级 */}
+                        <div className="absolute top-2 right-2 flex flex-col gap-2 z-10 touch-icon-btn">
+                          {/* 在新窗口打开按钮 */}
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (typeof window !== 'undefined' && (window as any).electronAPI?.openNewWindow) {
+                                (window as any).electronAPI.openNewWindow(`/read?id=${book.id}`);
+                              } else {
+                                // Fallback (Browser environment)
+                                window.open(`/read?id=${book.id}`, '_blank', 'width=1280,height=800');
+                              }
+                            }}
+                            className="p-2 bg-white/90 backdrop-blur-sm border border-gray-200 rounded-lg text-gray-500 hover:text-blue-600 hover:border-blue-300 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                            title="在新窗口独立阅读"
+                            aria-label={`在新窗口打开: ${book.title}`}
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                          </button>
+
+                          {/* 删除按钮 */}
+                          <button
+                            onClick={(e) => handleDelete(e, book.id)}
+                            className="p-2 bg-white/90 backdrop-blur-sm border border-gray-200 rounded-lg text-gray-500 hover:text-red-600 hover:border-red-300 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                            title="删除书籍"
+                            aria-label={`删除书籍: ${book.title}`}
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
     
                         {/* 右下角心形图标 */}
                         {hoveredBookId === book.id ? (

@@ -1,4 +1,4 @@
-import { Menu, shell, app, BrowserWindow, MenuItemConstructorOptions } from 'electron';
+import { Menu, shell, app, BrowserWindow, MenuItemConstructorOptions, ipcMain } from 'electron';
 
 // 是否为开发模式
 const IS_DEV = !app.isPackaged;
@@ -45,7 +45,15 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
         { role: 'cut', label: '剪切' },
         { role: 'copy', label: '复制' },
         { role: 'paste', label: '粘贴' },
-        { role: 'selectAll', label: '全选' }
+        { role: 'selectAll', label: '全选' },
+        { type: 'separator' },
+        {
+          label: '在应用内查找',
+          accelerator: 'CmdOrCtrl+F',
+          click: () => {
+            mainWindow.webContents.send('menu-action', 'search-internal');
+          }
+        }
       ]
     },
 
@@ -126,7 +134,11 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
         },
         {
           label: '检查更新',
-          click: () => {
+          click: async () => {
+            // 触发 autoUpdater 检查（生产模式），开发模式仅通知前端
+            if (app.isPackaged) {
+              await ipcMain.emit('check-for-updates-menu');
+            }
             mainWindow.webContents.send('menu-action', 'check-update');
           }
         },

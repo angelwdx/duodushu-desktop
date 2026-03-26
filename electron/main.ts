@@ -1,9 +1,10 @@
-import { app, BrowserWindow, ipcMain, shell, protocol, net } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, protocol, net, Tray, Menu, nativeImage, globalShortcut } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
 import * as util from 'util';
 import * as url from 'url';
+import { autoUpdater } from 'electron-updater';
 import { createApplicationMenu } from './menu';
 
 // Logging setup
@@ -51,12 +52,13 @@ logToFile(`UserData Path: ${app.getPath('userData')}`);
 
 let mainWindow: BrowserWindow | null = null;
 let pythonProcess: ChildProcess | null = null;
+let tray: Tray | null = null;
+let isQuitting = false;
 
 // 定义常量
 // 使用 app.isPackaged 判定是否为生产环境（更可靠）
 const IS_DEV = !app.isPackaged;
 const PY_DIST_FOLDER = 'backend'; // 打包后 Python 可执行文件所在目录名称
-// const PY_MODULE = 'backend'; // Python 模块/可执行文件名
 
 logToFile(`IS_DEV: ${IS_DEV} (app.isPackaged: ${app.isPackaged})`);
 
@@ -70,6 +72,120 @@ if (!IS_DEV) {
   protocol.registerSchemesAsPrivileged([
     { scheme: 'app', privileges: { secure: true, standard: true, supportFetchAPI: true, corsEnabled: true } }
   ]);
+}
+
+// ===== 文件关联：记录从命令行/外部传入的待打开文件路径 =====
+let pendingOpenFilePath: string | null = null;
+
+// macOS: 双击文件时 app 尚未就绪前触发
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  logToFile(`open-file event: ${filePath}`);
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('open-file', filePath);
+  } else {
+    pendingOpenFilePath = filePath;
+  }
+});
+
+// Windows/Linux: 通过命令行参数传入文件路径（单实例锁）
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, commandLine) => {
+    logToFile(`second-instance: ${commandLine.join(' ')}`);
+    // 主窗口已存在时，聚焦并打开文件
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+      const filePath = commandLine.find(arg =>
+        arg.toLowerCase().endsWith('.epub') || arg.toLowerCase().endsWith('.pdf')
+      );
+      if (filePath) {
+        mainWindow.webContents.send('open-file', filePath);
+      }
+    }
+  });
+}
+
+// 从进程启动参数中提取文件路径（首次打开）
+function extractFileFromArgs(argv: string[]): string | null {
+  const fileArg = argv.slice(IS_DEV ? 2 : 1).find(arg =>
+    arg.toLowerCase().endsWith('.epub') || arg.toLowerCase().endsWith('.pdf')
+  );
+  return fileArg || null;
+}
+
+// ===== 自动更新配置 =====
+function setupAutoUpdater() {
+  if (IS_DEV) {
+    logToFile('AutoUpdater: 开发模式，跳过更新检查');
+    return;
+  }
+
+  autoUpdater.logger = {
+    info: (msg: any) => logToFile(`[AutoUpdater] ${msg}`),
+    warn: (msg: any) => logToFile(`[AutoUpdater WARN] ${msg}`),
+    error: (msg: any) => logErrorToFile(`[AutoUpdater ERROR] ${msg}`),
+    debug: () => {},
+  } as any;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('checking-for-update', () => {
+    logToFile('AutoUpdater: 正在检查更新...');
+    mainWindow?.webContents.send('updater-event', { type: 'checking' });
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    logToFile(`AutoUpdater: 发现新版本 ${info.version}`);
+    mainWindow?.webContents.send('updater-event', { type: 'available', version: info.version });
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    logToFile('AutoUpdater: 当前已是最新版本');
+    mainWindow?.webContents.send('updater-event', { type: 'not-available' });
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    const percent = Math.round(progress.percent);
+    mainWindow?.webContents.send('updater-event', { type: 'downloading', percent });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    logToFile(`AutoUpdater: 更新已下载完成 ${info.version}`);
+    mainWindow?.webContents.send('updater-event', { type: 'downloaded', version: info.version });
+  });
+
+  autoUpdater.on('error', (err) => {
+    logErrorToFile('AutoUpdater error', err);
+    mainWindow?.webContents.send('updater-event', { type: 'error', message: err.message });
+  });
+
+  // 注册 IPC：手动检查更新（菜单触发）
+  ipcMain.handle('check-for-updates', async () => {
+    try {
+      await autoUpdater.checkForUpdates();
+      return { success: true };
+    } catch (e: any) {
+      logErrorToFile('手动检查更新失败', e);
+      return { success: false, message: e.message };
+    }
+  });
+
+  // 注册 IPC：立即安装已下载的更新
+  ipcMain.handle('install-update', () => {
+    autoUpdater.quitAndInstall();
+  });
+
+  // 应用就绪后延迟 5 秒检查更新（避免阻塞启动）
+  setTimeout(() => {
+    autoUpdater.checkForUpdatesAndNotify().catch((e) => {
+      logErrorToFile('自动检查更新失败', e);
+    });
+  }, 5000);
 }
 
 async function createWindow() {
@@ -88,6 +204,18 @@ async function createWindow() {
 
   // 创建应用菜单
   createApplicationMenu(mainWindow);
+
+  // 拦截关闭事件，实现最小化到托盘
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow?.hide();
+      if (process.platform === 'darwin') {
+        app.dock.hide(); // mac 下隐藏 dock 图标
+      }
+      logToFile('Window hidden to tray');
+    }
+  });
 
   // 等待后端就绪的逻辑
   const checkBackendReady = async (retries = 20): Promise<boolean> => {
@@ -150,7 +278,6 @@ async function createWindow() {
       mainWindow.show(); // 后端好了，前端也加载了，现在展示给用户
     } else {
       logErrorToFile('Backend failed to start within timeout');
-      // 可以弹出一个 dialog 告知用户
     }
   }
 
@@ -167,12 +294,62 @@ async function createWindow() {
     return backendUrl;
   });
 
+  // 文件关联：前端启动后提供待打开的文件路径
+  ipcMain.handle('get-open-file-path', () => {
+    const filePath = pendingOpenFilePath;
+    pendingOpenFilePath = null;
+    return filePath;
+  });
+
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
     logErrorToFile(`Page failed to load: ${errorCode} - ${errorDescription}`);
   });
 
   mainWindow.webContents.on('dom-ready', () => {
     logToFile('DOM Ready');
+    // 如果有从命令行传入的待打开文件，通知前端
+    if (pendingOpenFilePath) {
+      mainWindow?.webContents.send('open-file', pendingOpenFilePath);
+      pendingOpenFilePath = null;
+    }
+  });
+}
+
+// 创建独立阅读窗口
+async function createSecondaryWindow(urlSuffix: string) {
+  logToFile(`createSecondaryWindow called with urlSuffix: ${urlSuffix}`);
+  const secWindow = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: false,
+    },
+  });
+
+  // 创建应用菜单
+  createApplicationMenu(secWindow);
+
+  const formattedUrlSuffix = urlSuffix.startsWith('/') ? urlSuffix : `/${urlSuffix}`;
+
+  if (IS_DEV) {
+    const fullUrl = `http://localhost:3000${formattedUrlSuffix}`;
+    logToFile(`Loading development secondary URL: ${fullUrl}`);
+    secWindow.loadURL(fullUrl);
+    secWindow.once('ready-to-show', () => secWindow.show());
+  } else {
+    // 生产环境依托事先已注册好的 protocol.handle('app') 会自动转译路径
+    const fullUrl = `app://.${formattedUrlSuffix}`;
+    logToFile(`Loading production secondary URL: ${fullUrl}`);
+    secWindow.loadURL(fullUrl);
+    secWindow.once('ready-to-show', () => secWindow.show());
+  }
+
+  secWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    logErrorToFile(`Secondary Page failed to load: ${errorCode} - ${errorDescription}`);
   });
 }
 
@@ -185,37 +362,21 @@ function startPythonBackend() {
 
   const appPath = app.getAppPath();
 
-  // 确定数据目录路径 (便携模式优先)
-  // 检查应用同级目录下是否有 data 文件夹
-  // 在开发模式下，我们使用项目根目录下的 data
-  // 在生产模式(打包后)，如果exe旁边有data，则用那个，否则用 userData
   let dataPath: string;
   let workingDir: string = "";
 
   if (IS_DEV) {
-    // 开发环境：使用 app.getAppPath() 返回应用目录（项目根目录），更可靠
     dataPath = path.join(appPath, 'backend', 'data');
     workingDir = path.join(appPath, 'backend');
     logToFile(`开发模式 - 使用应用目录: ${appPath}`);
   } else {
-    // 生产环境检查逻辑：便携模式优先
-    // 1. 检查是否为 electron-builder 的便携式应用 (Portable App)
-    // 此时 process.env.PORTABLE_EXECUTABLE_DIR 会指向真实 exe 所在目录
     const portableExeDir = process.env.PORTABLE_EXECUTABLE_DIR;
-
-    // 2. 如果不是便携版，则使用 process.execPath (解压版/安装版)
     const exeDir = portableExeDir ? portableExeDir : path.dirname(process.execPath);
-
     const portableDataPath = path.join(exeDir, 'data');
 
     logToFile(`Portable check - Executable Dir: ${exeDir} (Portable Env: ${portableExeDir || 'N/A'})`);
 
-    // 策略：
-    // A. 如果是便携版(PORTABLE_EXECUTABLE_DIR 存在)，强制使用该目录下的 data (自动创建)
-    // B. 如果是普通版，只有当 exe 同级存在 data 目录时才启用便携模式 (USB 模式)
-
     if (portableExeDir) {
-      // 便携版强制使用同级 data
       dataPath = portableDataPath;
       if (!fs.existsSync(dataPath)) {
         try {
@@ -226,11 +387,9 @@ function startPythonBackend() {
       }
       logToFile(`检测到便携版运行环境，强制使用数据目录: ${dataPath}`);
     } else if (fs.existsSync(portableDataPath)) {
-      // 解压版/安装版：如果发现同级有 data 目录，则使用它 (USB 模式)
       dataPath = portableDataPath;
       logToFile(`检测到同级 data 目录，启用便携模式: ${dataPath}`);
     } else {
-      // 默认回退到系统 userData
       dataPath = app.getPath('userData');
       logToFile(`使用标准安装模式 (userData): ${dataPath}`);
     }
@@ -239,7 +398,6 @@ function startPythonBackend() {
   logToFile(`Python Data Path: ${dataPath}`);
 
   if (IS_DEV) {
-    // 开发模式：直接运行 Python 脚本
     const venvPythonPath = process.platform === 'win32'
       ? path.join(appPath, 'backend', '.venv', 'Scripts', 'python.exe')
       : path.join(appPath, 'backend', '.venv', 'bin', 'python3');
@@ -248,7 +406,6 @@ function startPythonBackend() {
       cmd = venvPythonPath;
       logToFile(`开发模式 - 使用虚拟环境 Python: ${cmd}`);
     } else {
-      // 退回到系统 Python
       cmd = process.platform === 'win32' ? 'python' : 'python3';
       logToFile(`开发模式 - 未发现虚拟环境，回退到系统 Python: ${cmd}`);
     }
@@ -256,27 +413,20 @@ function startPythonBackend() {
     scriptPath = path.join(appPath, 'backend', 'run_backend.py');
     args = [scriptPath, '--port', '8000', '--data-dir', dataPath];
   } else {
-    // 生产模式：运行打包后的可执行文件
     const backendPath = path.join(process.resourcesPath, PY_DIST_FOLDER);
     const exeName = process.platform === 'win32' ? 'backend.exe' : 'backend';
     const exePath = path.join(backendPath, exeName);
 
-    // 确定工作目录：backend.exe 所在的实际目录
-    // PyInstaller 将可执行文件放在 _internal/ 子目录中
-    // 设置工作目录为 _internal 目录，确保数据目录正确创建
     workingDir = path.dirname(exePath);
     const internalDir = path.join(backendPath, '_internal');
     if (fs.existsSync(internalDir)) {
       workingDir = internalDir;
     }
 
-    // 传递绝对路径作为 --data-dir 参数
     scriptPath = exePath;
     cmd = scriptPath;
 
-    // 将 dataPath 转换为绝对路径（相对于 exe 所在目录）
     const absoluteDataPath = path.resolve(workingDir, dataPath);
-
     args = ['--port', '8000', '--data-dir', absoluteDataPath];
 
     logToFile(`Starting Python backend in directory: ${workingDir}`);
@@ -295,10 +445,7 @@ function startPythonBackend() {
     logToFile(`Python process spawned with PID: ${pythonProcess.pid}`);
 
     if (pythonProcess.stdout) {
-      pythonProcess.stdout.on('data', (data) => {
-        // Log only critical info or errors to avoid flooding
-        //   console.log(`[Python]: ${data}`);
-      });
+      pythonProcess.stdout.on('data', (_data) => { /* suppress verbose output */ });
     }
 
     if (pythonProcess.stderr) {
@@ -329,15 +476,103 @@ function stopPythonBackend() {
 
 app.whenReady().then(async () => {
   logToFile('App ready event received');
-  // 先启动后端，再创建窗口
-  // 实际项目中可能需要等待后端健康检查(health check)通过后再加载前端
-  // 这里暂时直接启动
+
+  // 检查命令行参数中的文件路径（Windows 首次双击打开时）
+  const fileFromArgs = extractFileFromArgs(process.argv);
+  if (fileFromArgs) {
+    pendingOpenFilePath = fileFromArgs;
+    logToFile(`检测到命令行文件参数: ${fileFromArgs}`);
+  }
+
   startPythonBackend();
   await createWindow();
 
-  app.on('activate', async function () {
-    if (BrowserWindow.getAllWindows().length === 0) await createWindow();
+  // 监听前端传来的在新窗口打开请求
+  ipcMain.on('open-new-window', (event, targetUrl) => {
+    createSecondaryWindow(targetUrl);
   });
+
+  // 初始化自动更新
+  setupAutoUpdater();
+
+  // 初始化系统托盘
+  const iconPath = path.join(__dirname, 'assets', 'icon.png');
+  // 对于 macOS，图标过大会被裁剪，创建 nativeImage 并调整大小
+  let trayIcon = nativeImage.createFromPath(iconPath);
+  if (process.platform === 'darwin') {
+    trayIcon = trayIcon.resize({ width: 16, height: 16 });
+  } else {
+    trayIcon = trayIcon.resize({ width: 24, height: 24 });
+  }
+
+  tray = new Tray(trayIcon);
+  tray.setToolTip('多读书 Duodushu');
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: '显示多读书',
+      click: () => {
+        mainWindow?.show();
+        if (process.platform === 'darwin') app.dock.show();
+      }
+    },
+    { type: 'separator' },
+    {
+      label: '退出多读书',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      }
+    }
+  ]);
+
+  tray.setContextMenu(contextMenu);
+  tray.on('click', () => {
+    if (mainWindow?.isVisible()) {
+      mainWindow.hide();
+      if (process.platform === 'darwin') app.dock.hide();
+    } else {
+      mainWindow?.show();
+      if (process.platform === 'darwin') app.dock.show();
+    }
+  });
+
+  // ===== 注册全局快捷键 =====
+  const ret = globalShortcut.register('CommandOrControl+Shift+Space', () => {
+    logToFile('Global shortcut triggered: CommandOrControl+Shift+Space');
+    // 优先唤起当前聚焦窗口，如果全在后台或无焦点则取最后存活窗口或 mainWindow
+    const targetWin = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || mainWindow;
+    if (targetWin) {
+      if (!targetWin.isVisible()) {
+        targetWin.show();
+        if (process.platform === 'darwin') app.dock.show();
+      }
+      if (targetWin.isMinimized()) {
+        targetWin.restore();
+      }
+      targetWin.focus();
+      // 向前端发送全局快捷查词事件
+      targetWin.webContents.send('menu-action', 'global-search');
+    }
+  });
+
+  if (!ret) {
+    logErrorToFile('Failed to register global shortcut CommandOrControl+Shift+Space');
+  }
+
+  app.on('activate', async function () {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      await createWindow();
+    } else {
+      mainWindow?.show();
+      if (process.platform === 'darwin') app.dock.show();
+    }
+  });
+});
+
+// 在 macOS 上，彻底退出之前也标记 isQuitting
+app.on('before-quit', () => {
+  isQuitting = true;
 });
 
 app.on('window-all-closed', () => {
@@ -349,5 +584,9 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   logToFile('will-quit event');
+  
+  // 清理所有的全局快捷键
+  globalShortcut.unregisterAll();
+  
   stopPythonBackend();
 });

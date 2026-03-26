@@ -1,10 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from ..models.database import get_db, SessionLocal
 from typing import List, Optional
 from pydantic import BaseModel
 import json
+import csv
+import io
 from datetime import datetime, timedelta
 import logging
 import traceback
@@ -815,11 +817,90 @@ def update_mastery(vocab_id: int, data: dict, db: Session = Depends(get_db)):
             if vocab_updated is None:
                 raise HTTPException(status_code=404, detail="Vocabulary not found")
 
-            return format_vocab_response_with_db(vocab_updated, db)  # type: ignore
+            # Update learning_status logic based on mastery_level and review_count
+            new_status = vocab_updated[12]
+            if vocab_updated[9] >= 5 and vocab_updated[7] >= 3:
+                new_status = "mastered"
+            elif vocab_updated[7] > 0:
+                new_status = "learning"
 
+            if new_status != vocab_updated[12]:
+                db.execute(
+                    text("UPDATE vocabulary SET learning_status = :status WHERE id = :id"),
+                    {"status": new_status, "id": vocab_id},
+                )
+                vocab_updated = db.execute(text("SELECT * FROM vocabulary WHERE id = :id"), {"id": vocab_id}).fetchone()
+
+            db.commit()
+
+            return format_vocab_response_with_db(vocab_updated, db)
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error updating vocabulary: {e}")
+        logger.error(f"Error updating mastery: {e}")
         db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/export/csv")
+def export_vocabulary_csv(db: Session = Depends(get_db)):
+    """导出所有生词为 CSV，格式适合 Anki"""
+    try:
+        # 提取所有生词，左连接首选例句
+        rows = db.execute(text("""
+            SELECT 
+                v.word, v.phonetic, v.translation, v.definition,
+                wc.context_sentence, b.title as book_title, v.created_at
+            FROM vocabulary v
+            LEFT JOIN word_contexts wc ON v.word = wc.word AND wc.is_primary = 1
+            LEFT JOIN books b ON v.book_id = b.id OR wc.book_id = b.id
+            ORDER BY v.created_at DESC
+        """)).fetchall()
+
+        output = io.StringIO()
+        # 对于 Anki，通常不需要 Headers，但为了 Excel 兼容加上，导入 Anki 时可勾选忽略第一行
+        writer = csv.writer(output)
+        writer.writerow(['Word', 'Phonetic', 'Translation', 'Definition', 'Context', 'Book Title', 'Created At'])
+
+        for row in rows:
+            word = row[0] or ""
+            phonetic = row[1] or ""
+            translation = row[2] or ""
+            
+            # 提取简化的定义
+            definition_text = ""
+            if row[3]:
+                try:
+                    df = json.loads(row[3])
+                    if isinstance(df, dict):
+                        # 尝试提取中英文释义，或者直接合并
+                        if "chinese_summary" in df:
+                            definition_text = df["chinese_summary"]
+                        elif "en_definition" in df:
+                            definition_text = df["en_definition"]
+                        else:
+                            # 随便拿个能展示的
+                            definition_text = str(df.get("translation", "")) or str(df)[:100]
+                except:
+                    pass
+
+            context = row[4] or ""
+            book_title = row[5] or ""
+            created_at = row[6][:10] if row[6] else "" # 只要日期 YYYY-MM-DD
+
+            writer.writerow([word, phonetic, translation, definition_text, context, book_title, created_at])
+
+        output.seek(0)
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename=vocabulary_{datetime.now().strftime('%Y%m%d')}.csv"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error exporting vocabulary: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
