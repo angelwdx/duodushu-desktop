@@ -15,9 +15,9 @@
 
 ### 安装模式（MacOS）
 
-1. 下载 `DuoDuShu-1.0.0.dmg`
+1. 下载 `DuoDuShu-1.3.0.dmg`
 2. 将 `Duodushu.app` 拖入 Applications 文件夹
-3. **绕过签名检查**: 由于应用暂未签名，若提示“无法打开”，请在终端运行：
+3. **解决“已损坏”提示**: 由于应用暂未签署 Apple 开发者证书，从浏览器下载的版本会被 macOS 误报为“已损坏”。请在终端运行以下指令解决：
    ```bash
    sudo xattr -rd com.apple.quarantine /Applications/Duodushu.app
    ```
