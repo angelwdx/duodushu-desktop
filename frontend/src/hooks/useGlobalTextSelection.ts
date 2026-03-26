@@ -61,7 +61,7 @@ export function useGlobalTextSelection(
       const sel = window.getSelection();
       if (sel) sel.removeAllRanges();
     }
-  }, []);
+  }, [setSelection]);
 
   const isSelectionExcluded = useCallback((node: Node | null): boolean => {
     if (!node) return false;
@@ -264,7 +264,7 @@ export function useGlobalTextSelection(
       selectionTimestampRef.current = Date.now();
       lastSelectionRangeRef.current = clonedRange || null;
     }, 300);  // 增加防抖时间到 300ms
-  }, [enabled, isSelectionExcluded, selection]);
+  }, [enabled, isSelectionExcluded, selection, setSelection]);
 
   // 监听文本选择事件
   useEffect(() => {

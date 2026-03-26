@@ -4,8 +4,9 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSettings } from '../contexts/SettingsContext';
 import { useGlobalDialogs } from '../contexts/GlobalDialogsContext';
+import { getApiUrl } from '../lib/api';
 
-// 定义 electronAPI 类型（与 MenuHandler 共享）
+// 定义 electronAPI 类型（含文件关联与自动更新）
 declare global {
   interface Window {
     electronAPI?: {
@@ -16,7 +17,55 @@ declare global {
       onMenuAction: (callback: (action: string) => void) => void;
       removeNavigateListener: () => void;
       removeMenuActionListener: () => void;
+      // 文件关联
+      getOpenFilePath: () => Promise<string | null>;
+      onOpenFile: (callback: (filePath: string) => void) => void;
+      removeOpenFileListener: () => void;
+      // 自动更新
+      checkForUpdates: () => Promise<{ success: boolean; message?: string }>;
+      installUpdate: () => Promise<void>;
+      onUpdaterEvent: (callback: (event: any) => void) => void;
+      removeUpdaterListener: () => void;
     };
+  }
+}
+
+/**
+ * 通过本地文件路径打开书籍：
+ * 读取文件内容 → 上传到后端 → 跳转阅读页
+ */
+async function openLocalFile(filePath: string, router: ReturnType<typeof useRouter>) {
+  try {
+    // 用 fetch 读取本地文件内容（Electron 的 webSecurity:false 允许 file:// 协议）
+    const fileUrl = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
+    const response = await fetch(fileUrl);
+    if (!response.ok) throw new Error(`无法读取文件: ${filePath}`);
+
+    const blob = await response.blob();
+    const fileName = filePath.split(/[\\/]/).pop() || 'book';
+    const ext = fileName.split('.').pop()?.toLowerCase() || '';
+    const mimeType = ext === 'epub' ? 'application/epub+zip' : 'application/pdf';
+    const file = new File([blob], fileName, { type: mimeType });
+
+    // 上传到后端
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const uploadRes = await fetch(`${getApiUrl()}/api/books/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!uploadRes.ok) {
+      const errData = await uploadRes.json().catch(() => ({}));
+      throw new Error(errData.detail || '上传失败');
+    }
+
+    const { book_id } = await uploadRes.json();
+    console.log('[GlobalMenuHandler] 文件已上传，book_id:', book_id);
+    router.push(`/read?id=${book_id}`);
+  } catch (err) {
+    console.error('[GlobalMenuHandler] 打开本地文件失败:', err);
   }
 }
 
@@ -29,57 +78,80 @@ export default function GlobalMenuHandler() {
   const { openSettings } = useSettings();
   const { openUpload } = useGlobalDialogs();
 
+  // ===== 文件关联：启动时检查 pending 文件路径 =====
   useEffect(() => {
-    // 检查是否在 Electron 环境中
-    if (typeof window === 'undefined' || !window.electronAPI) {
-      return;
-    }
+    if (typeof window === 'undefined' || !window.electronAPI?.getOpenFilePath) return;
 
-    // 监听导航事件
+    window.electronAPI.getOpenFilePath().then((filePath) => {
+      if (filePath) {
+        console.log('[GlobalMenuHandler] 启动时有待打开文件:', filePath);
+        openLocalFile(filePath, router);
+      }
+    });
+  }, [router]);
+
+  // ===== 文件关联：监听运行时双击打开 =====
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.electronAPI?.onOpenFile) return;
+
+    window.electronAPI.onOpenFile((filePath: string) => {
+      console.log('[GlobalMenuHandler] 收到 open-file 事件:', filePath);
+      openLocalFile(filePath, router);
+    });
+
+    return () => {
+      window.electronAPI?.removeOpenFileListener?.();
+    };
+  }, [router]);
+
+  // ===== 菜单导航事件 =====
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.electronAPI) return;
+
     window.electronAPI.onNavigate((path: string) => {
       console.log('[GlobalMenuHandler] Navigate to:', path);
       router.push(path);
     });
 
     return () => {
-        if (window.electronAPI) {
-            window.electronAPI.removeNavigateListener();
-        }
+      window.electronAPI?.removeNavigateListener?.();
     };
   }, [router]);
 
+  // ===== 菜单操作事件（设置、导入书籍等）=====
   useEffect(() => {
-    // 检查是否在 Electron 环境中
-    if (typeof window === 'undefined' || !window.electronAPI) {
-      return;
-    }
+    if (typeof window === 'undefined' || !window.electronAPI) return;
 
-    // 监听菜单操作事件（如偏好设置）
-    // 作为唯一的 Electron 事件监听者，负责将事件广播给应用的其他部分
     window.electronAPI.onMenuAction((action: string) => {
       console.log('[GlobalMenuHandler] Received IPC menu action:', action);
-      
-      // 1. 处理全局事件
+
       if (action === 'open-settings') {
         openSettings();
-        return; // Handled directly
-      }
-      
-      if (action === 'import-book') {
-        openUpload();
-        return; // Handled directly
+        return;
       }
 
-      // 2. 广播事件给其他组件 (如 MenuHandler)
-      // 使用自定义事件机制，避免多个 ipcRenderer 监听器互相覆盖(removeAllListeners)的问题
+      if (action === 'import-book') {
+        openUpload();
+        return;
+      }
+
+      if (action === 'search-internal' || action === 'global-search') {
+        // 全局搜索/原声查找直接跳转到生词本界面
+        router.push('/vocabulary');
+        // 等待页面加载完成发出聚焦事件
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('app-search-focus'));
+        }, 300);
+        return;
+      }
+
+      // 广播给其他组件（如 MenuHandler）
       const event = new CustomEvent('app-menu-action', { detail: action });
       window.dispatchEvent(event);
     });
 
     return () => {
-        if (window.electronAPI) {
-            window.electronAPI.removeMenuActionListener();
-        }
+      window.electronAPI?.removeMenuActionListener?.();
     };
   }, [openSettings, openUpload]);
 

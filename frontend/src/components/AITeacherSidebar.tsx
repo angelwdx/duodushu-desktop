@@ -11,6 +11,7 @@ const log = createLogger('AITeacherSidebar');
 // 这样可以确保便携版和开发环境都使用正确的后端地址
 
 import { getApiUrl } from '../lib/api';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
 
 const API_URL = getApiUrl();
 
@@ -67,6 +68,7 @@ function AITeacherSidebar({
   const [lastProcessedTrigger, setLastProcessedTrigger] = useState<string | undefined>(undefined);
   const [currentSources, setCurrentSources] = useState<Source[]>([]);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const isOnline = useNetworkStatus();
 
   // AbortController ref for canceling requests on unmount
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -467,15 +469,22 @@ function AITeacherSidebar({
 
   return (
     <div className={`h-full flex flex-col bg-gray-50 ${className}`}>
-      {/* Content Warning */}
-      {!hasValidPageContent && (
+      {/* Content Warning / Network Warning */}
+      {!isOnline ? (
+        <div className="p-3 bg-red-50 border-b border-red-200 text-xs text-red-700 flex items-center gap-2">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3l-6.928-12c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77-1.333.192 3 1.732 3z" />
+          </svg>
+          <span>网络已断开，AI功能暂时不可用，请检查网络连接。</span>
+        </div>
+      ) : !hasValidPageContent ? (
         <div className="p-3 bg-yellow-50 border-b border-yellow-200 text-xs text-yellow-700 flex items-center gap-2">
           <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3.464L13.464 5.464C12.998 4.998 12.5 4.75 12 4.75s-.998.248-1.464.714L7.144 9.536C6.598 9.998 6.5 10.496 6.5 11v6.998c0 .554.098 1.002.644 1.464l3.392 3.392c.466.466.964.714 1.464.714s.998-.248 1.464-.714l3.392-3.392c.546-.462.644-.96.644-1.464V11c0-.504-.098-1.002-.644-1.464L13.464 5.464z" />
           </svg>
           <span>无法获取页面内容，AI功能可能受限。请尝试刷新页面。</span>
         </div>
-      )}
+      ) : null}
 
       {/* Header */}
       <div className="p-2 border-b bg-white">
@@ -485,13 +494,13 @@ function AITeacherSidebar({
               <button
                 key={qq.id}
                 onClick={() => handleQuickQuestion(qq.text)}
-                disabled={isLoading || !hasValidPageContent}
+                disabled={isLoading || !hasValidPageContent || !isOnline}
                 className={`flex items-center gap-1.5 text-[11px] transition-colors disabled:opacity-50 ${
-                  !hasValidPageContent
+                  !hasValidPageContent || !isOnline
                     ? 'text-gray-300 cursor-not-allowed'
                     : 'text-gray-400 hover:text-gray-800'
                 }`}
-                title={!hasValidPageContent ? '页面内容不可用' : undefined}
+                title={!isOnline ? '网络已断开' : !hasValidPageContent ? '页面内容不可用' : undefined}
               >
                 <span>{qq.label}</span>
               </button>
@@ -745,13 +754,13 @@ function AITeacherSidebar({
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyPress}
-            placeholder="输入问题..."
-            className="flex-1 px-4 py-2 bg-gray-50 border border-transparent rounded-xl focus:outline-none focus:bg-white focus:border-gray-200 transition-all text-sm"
-            disabled={isLoading}
+            placeholder={isOnline ? "输入问题..." : "离线模式下无法提问"}
+            className="flex-1 px-4 py-2 bg-gray-50 border border-transparent rounded-xl focus:outline-none focus:bg-white focus:border-gray-200 transition-all text-sm disabled:cursor-not-allowed"
+            disabled={isLoading || !isOnline}
           />
           <button
             onClick={() => handleSendMessage()}
-            disabled={!inputValue.trim() || isLoading}
+            disabled={!inputValue.trim() || isLoading || !isOnline}
             className="px-5 py-2 bg-gray-900 hover:bg-black disabled:bg-gray-100 disabled:text-gray-400 text-white rounded-xl font-medium transition-all text-[13px] flex items-center gap-2 shadow-sm"
           >
             {isLoading ? (

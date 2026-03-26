@@ -243,6 +243,35 @@ export async function getVocabulary(
   return res.json();
 }
 
+export async function exportVocabulary() {
+  const res = await fetch(`${API_URL}/api/vocabulary/export/csv`, {
+    method: "GET",
+  });
+  if (!res.ok) throw new Error("Failed to export vocabulary");
+  
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  
+  // 从 response header 中提取文件名（可选），或者设置默认文件名
+  const contentDisposition = res.headers.get("Content-Disposition");
+  let filename = "vocabulary.csv";
+  if (contentDisposition) {
+    const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+    if (filenameMatch && filenameMatch.length === 2) {
+      filename = filenameMatch[1];
+    }
+  }
+  
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
 export async function getVocabularyDetail(id: number) {
   const res = await fetch(`${API_URL}/api/vocabulary/${id}?_t=${Date.now()}`);
   if (!res.ok) throw new Error("Failed to fetch vocabulary detail");

@@ -56,7 +56,7 @@ class TestConnectionRequest(BaseModel):
     """测试连接请求模型"""
 
     supplier_type: str = Field(..., description="供应商类型")
-    api_key: str = Field(..., description="API密钥")
+    api_key: Optional[str] = Field(default="", description="API密钥（留空则使用已保存的密钥）")
     api_endpoint: str = Field(default="", description="API端点（仅自定义供应商需要）")
     model: str = Field(default="", description="要测试的模型")
 
@@ -451,19 +451,28 @@ async def test_connection(request: TestConnectionRequest):
     except ValueError:
         raise HTTPException(status_code=400, detail=f"未知的供应商类型: {request.supplier_type}")
 
-    # 导入测试服务（稍后实现）
+    # 如果前端未提供 api_key，从已保存配置（含 keyring）中取
+    api_key = request.api_key or ""
+    if not api_key:
+        multi_config = load_multi_supplier_config()
+        saved = multi_config.suppliers.get(supplier_type)
+        if saved and saved.api_key:
+            api_key = saved.api_key
+            logger.info(f"test-connection: 使用已保存的 API Key for {request.supplier_type}")
+        else:
+            raise HTTPException(status_code=400, detail="请先输入 API Key 或保存配置后再测试")
+
     try:
         from app.services.supplier_test_service import test_supplier_connection
 
         result = await test_supplier_connection(
             supplier_type=supplier_type,
-            api_key=request.api_key,
+            api_key=api_key,
             api_endpoint=request.api_endpoint,
             model=request.model,
         )
         return result
     except ImportError:
-        # 如果测试服务还未实现，返回模拟响应
         return {
             "success": True,
             "message": "连接测试功能即将推出",
