@@ -3,6 +3,10 @@
 // 使用 127.0.0.1 而非 localhost 以避免 macOS 上的 IPv6 (::1) 解析问题
 let API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
+export function getApiUrl(): string {
+  return API_URL;
+}
+
 // 如果在 Electron 环境中（检测 window.electronAPI）
 // 注意：避免在模块顶层使用 await 以免阻塞 Next.js 渲染
 if (typeof window !== 'undefined' && (window as any).electronAPI) {
@@ -722,13 +726,6 @@ export async function lookupInDict(dictName: string, word: string): Promise<any>
   });
   if (!res.ok) throw new Error('Failed to lookup word in dict');
   return res.json();
-}
-
-/**
- * 获取当前 API URL
- */
-export function getApiUrl(): string {
-  return API_URL;
 }
 
 /**

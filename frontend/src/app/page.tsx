@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useEffect, useState, useRef } from 'react';
-import { getBooks, deleteBook, updateBookType, Book } from '../lib/api';
+import { getBooks, deleteBook, updateBookType, Book, getApiUrl } from '../lib/api';
 // import UploadDialog from '../components/UploadDialog'; // Removed, handled globally
 import MenuHandler from '../components/MenuHandler';
 import Link from 'next/link';
@@ -16,6 +16,7 @@ export default function Home() {
   const { openSettings } = useSettings();
   const { openUpload } = useGlobalDialogs();
   const [pollingError, setPollingError] = useState<string | null>(null);
+  const [apiUrl, setApiUrl] = useState<string>(getApiUrl());
   
   const [hoveredBookId, setHoveredBookId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -111,6 +112,27 @@ export default function Home() {
         window.removeEventListener('book-uploaded', handleBookUploaded);
     };
   }, [fetchBooks]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if ((window as any).electronAPI?.getBackendUrl) {
+      (window as any).electronAPI.getBackendUrl()
+        .then((backendUrl: string) => {
+          if (backendUrl) {
+            setApiUrl(backendUrl.endsWith('/') ? backendUrl.slice(0, -1) : backendUrl);
+          }
+        })
+        .catch(() => {
+          setApiUrl(getApiUrl());
+        });
+      return;
+    }
+
+    setApiUrl(getApiUrl());
+  }, []);
 
   // Poll for updates if any book is processing
   // 使用 useRef 跟踪是否有处理中的书籍，避免 books 变化导致的无限循环
@@ -245,7 +267,7 @@ export default function Home() {
                       <div className="relative w-full pb-[133.33%] bg-gray-100 overflow-hidden">
                         {book.cover_image ? (
                             <img
-                                src={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/books/cover/${book.cover_image}`}
+                                src={`${apiUrl}/api/books/cover/${book.cover_image}`}
                                 alt={book.title}
                                 className="absolute inset-0 w-full h-full object-cover"
                             />
