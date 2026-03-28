@@ -654,9 +654,21 @@ interface ReaderProps {
       }, 0);
     }
 
-    // 修复：当 PDF 页面加载完成时，提取文本内容并同步给 AI
-    // 优先使用实时提取的文本，如果失败则使用后端返回的textContent
+    // PDF 朗读优先使用后端解析得到的 textContent。
+    // 只有当后端该页文本为空时，才回退到 PDF.js 的实时提取结果。
     const extractPageText = async () => {
+      if (textContent && textContent.trim().length > 0) {
+        setPageTextForTTS(textContent);
+        if (onContentChange) {
+          try {
+            onContentChange(textContent);
+          } catch (err) {
+            // 静默处理
+          }
+        }
+        return;
+      }
+
       try {
         const textContentFromPDF = await page.getTextContent();
         if (textContentFromPDF && textContentFromPDF.items && textContentFromPDF.items.length > 0) {
@@ -669,19 +681,32 @@ interface ReaderProps {
               const text = String(item?.str || "").trim();
               if (!text) return false;
 
-              // 过滤页脚区域常见的孤立页码，如左下角或右下角的 "162"
               const x = Number(item?.transform?.[4] || 0);
               const y = Number(item?.transform?.[5] || 0);
+              const textLength = text.length;
+              const isNearLeftOrRightEdge =
+                pageWidth > 0 &&
+                (x <= pageWidth * 0.2 || x >= pageWidth * 0.8);
+
+              // 过滤页脚区域常见的孤立页码，如左下角或右下角的 "162"
               const isStandalonePageNumber = /^\d{1,4}$/.test(text);
               const isNearBottomFooter =
                 pageWidth > 0 &&
                 pageHeight > 0 &&
                 y <= pageHeight * 0.12;
-              const isNearLeftOrRightEdge =
-                pageWidth > 0 &&
-                (x <= pageWidth * 0.2 || x >= pageWidth * 0.8);
+              if (isStandalonePageNumber && isNearBottomFooter && isNearLeftOrRightEdge) {
+                return false;
+              }
 
-              return !(isStandalonePageNumber && isNearBottomFooter && isNearLeftOrRightEdge);
+              // 过滤边缘处较短的页眉/页脚碎片，如书名、章名、页脚标签。
+              const isShortEdgeHeaderFooter =
+                pageWidth > 0 &&
+                pageHeight > 0 &&
+                isNearLeftOrRightEdge &&
+                textLength <= 24 &&
+                (y <= pageHeight * 0.08 || y >= pageHeight * 0.9);
+
+              return !isShortEdgeHeaderFooter;
             })
             .map((item: any) => item.str || "")
             .filter((str: string) => str.trim() !== "")
@@ -696,23 +721,10 @@ interface ReaderProps {
                 // 静默处理
               }
             }
-          } else if (textContent) {
-            // 如果提取失败，降级使用后端提供的文本内容
-            console.log(`[PDFReader] Fallback to backend text for page ${pageNumber} (len: ${textContent.length})`);
-            setPageTextForTTS(textContent);
-            if (onContentChange) {
-              onContentChange(textContent);
-            }
           }
         }
       } catch (error) {
         console.error(`[PDFReader] Failed to extract text from page ${pageNumber}:`, error);
-        // 降级到后端提供的文本内容
-        if (textContent && onContentChange) {
-          console.log(`[PDFReader] Fallback to backend text for page ${pageNumber}`);
-          setPageTextForTTS(textContent);
-          onContentChange(textContent);
-        }
       }
     };
 
@@ -767,9 +779,68 @@ interface ReaderProps {
 
   /* Moved goToPage up */
 
+  const repairDropCapParagraphs = (text: string) => {
+    if (!text) return "";
+
+    const paragraphs = text
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .split(/\n\s*\n/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    const isDropCap = (part: string) => /^[A-Z]$/.test(part);
+    const startsWithLowercase = (part: string) => /^[a-z]/.test(part);
+    const isLikelyHeadingOrCaption = (part: string) => {
+      if (!part || startsWithLowercase(part)) return false;
+      const lines = part
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      if (lines.length === 0 || lines.length > 4) return false;
+      if (lines.some((line) => line.length > 48)) return false;
+      if (/[.!?]\s*$/.test(part)) return false;
+
+      return true;
+    };
+
+    const repaired: string[] = [];
+
+    for (let i = 0; i < paragraphs.length; i += 1) {
+      const current = paragraphs[i];
+      if (!isDropCap(current)) {
+        repaired.push(current);
+        continue;
+      }
+
+      const prefixBlocks: string[] = [];
+      let bodyIndex = i + 1;
+
+      while (bodyIndex < paragraphs.length && isLikelyHeadingOrCaption(paragraphs[bodyIndex])) {
+        prefixBlocks.push(paragraphs[bodyIndex]);
+        bodyIndex += 1;
+      }
+
+      if (bodyIndex < paragraphs.length && startsWithLowercase(paragraphs[bodyIndex])) {
+        repaired.push(...prefixBlocks);
+        repaired.push(`${current}${paragraphs[bodyIndex]}`);
+        i = bodyIndex;
+        continue;
+      }
+
+      repaired.push(current);
+    }
+
+    return repaired.join("\n\n");
+  };
+
   const normalizeText = (text: string) => {
     if (!text) return "";
-    let refined = text;
+    let refined = repairDropCapParagraphs(text);
+    refined = refined.replace(/(?:^|\n)\s*[-–—]?\s*Page\s+\d+\s*[-–—]?\s*(?=\n|$)/gim, "\n");
+    refined = refined.replace(/(?:^|\n)\s*第\s*\d+\s*页\s*(?=\n|$)/gim, "\n");
+    refined = refined.replace(/(?:^|\n)\s*\d{1,4}\s*(?=\n|$)/gm, "\n");
     refined = refined.replace(/([A-Z])\s*[\r\n]+\s*([a-z])/g, "$1$2");
     refined = refined.replace(/-\s*[\r\n]+\s*/g, "");
     refined = refined.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
