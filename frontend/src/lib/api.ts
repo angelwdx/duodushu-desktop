@@ -779,3 +779,31 @@ export async function checkTranslationConfigured(): Promise<boolean> {
     return false;
   }
 }
+
+const BOOK_ORDER_KEY = 'duodushu_book_order';
+
+/**
+ * 从 localStorage 加载书架自定义排序（返回书籍 ID 数组）
+ */
+export function loadBookOrder(): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const saved = localStorage.getItem(BOOK_ORDER_KEY);
+    if (saved) return JSON.parse(saved) as string[];
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+/**
+ * 将书架排序（书籍 ID 数组）持久化到 localStorage
+ */
+export function saveBookOrder(ids: string[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(BOOK_ORDER_KEY, JSON.stringify(ids));
+  } catch {
+    // ignore
+  }
+}
