@@ -15,5 +15,12 @@ export function repairBrokenEnglishWordsForTTS(text: string): string {
 
 export function preprocessTTSPlainText(text: string): string {
   if (!text) return "";
-  return repairBrokenEnglishWordsForTTS(text).trim();
+  let processed = text;
+
+  // 过滤常见的纯页码页脚，避免 PDF 朗读把页码念出来。
+  processed = processed.replace(/(?:^|\n)\s*[-–—]?\s*Page\s+\d+\s*[-–—]?\s*(?=\n|$)/gim, "\n");
+  processed = processed.replace(/(?:^|\n)\s*第\s*\d+\s*页\s*(?=\n|$)/gim, "\n");
+  processed = processed.replace(/(?:^|\n)\s*\d+\s*(?=\n|$)/gm, "\n");
+
+  return repairBrokenEnglishWordsForTTS(processed).trim();
 }

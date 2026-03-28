@@ -660,8 +660,29 @@ interface ReaderProps {
       try {
         const textContentFromPDF = await page.getTextContent();
         if (textContentFromPDF && textContentFromPDF.items && textContentFromPDF.items.length > 0) {
+          const pageWidth = page.view?.[2] || 0;
+          const pageHeight = page.view?.[3] || 0;
+
           // 过滤空字符串并连接所有文本项
           const extractedText = textContentFromPDF.items
+            .filter((item: any) => {
+              const text = String(item?.str || "").trim();
+              if (!text) return false;
+
+              // 过滤页脚区域常见的孤立页码，如左下角或右下角的 "162"
+              const x = Number(item?.transform?.[4] || 0);
+              const y = Number(item?.transform?.[5] || 0);
+              const isStandalonePageNumber = /^\d{1,4}$/.test(text);
+              const isNearBottomFooter =
+                pageWidth > 0 &&
+                pageHeight > 0 &&
+                y <= pageHeight * 0.12;
+              const isNearLeftOrRightEdge =
+                pageWidth > 0 &&
+                (x <= pageWidth * 0.2 || x >= pageWidth * 0.8);
+
+              return !(isStandalonePageNumber && isNearBottomFooter && isNearLeftOrRightEdge);
+            })
             .map((item: any) => item.str || "")
             .filter((str: string) => str.trim() !== "")
             .join(" ");
