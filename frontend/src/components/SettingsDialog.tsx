@@ -3,6 +3,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { getApiUrl } from '../lib/api';
+import TTSConfigPanel from './TTSConfigPanel';
 // type definition to match partial update
 interface Supplier {
   type: string;
@@ -411,7 +412,10 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
                    className="w-full px-4 py-3 mt-2 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 text-sm focus:ring-2 focus:ring-black focus:border-transparent outline-none transition-all animate-in slide-in-from-top-2 duration-200"
                  />
                )}
-             </div>
+            </div>
+
+            {/* ── 语音合成 (TTS) 配置 ── */}
+            <TTSSection />
 
         </div>
 
@@ -456,6 +460,38 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** 可折叠的 TTS 配置区块 */
+function TTSSection() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border border-gray-200 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-gray-700 bg-gray-50 hover:bg-gray-100 transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M15.536 8.464a5 5 0 010 7.072M12 18.364a9 9 0 000-12.728M8.464 15.536a5 5 0 000-7.072" />
+          </svg>
+          🔊 语音合成 (TTS)
+        </span>
+        <svg
+          className={`w-4 h-4 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div className="p-4 border-t border-gray-100">
+          <TTSConfigPanel />
+        </div>
+      )}
     </div>
   );
 }
