@@ -60,6 +60,16 @@ export default function TTSConfigPanel() {
   const updateQwen3 = (patch: Partial<TTSConfig['qwen3']>) =>
     setConfig(prev => prev ? { ...prev, qwen3: { ...prev.qwen3, ...patch } } : null);
 
+  const resetToDefaults = () => {
+    setConfig({
+      provider: 'edge',
+      edge: { voice: 'default', speed: 1 },
+      openai_api: { base_url: 'https://api.openai.com/v1', api_key: '', model: 'tts-1', voice: 'alloy', speed: 1 },
+      qwen3: { base_url: 'http://127.0.0.1:18790/v1', model: 'tts-1', voice: '塔塔', speed: 1 },
+    });
+    setMessage({ type: 'success', text: '已恢复默认 TTS 配置，记得点击保存配置' });
+  };
+
   const handleSave = async () => {
     if (!config) return;
     setSaving(true);
@@ -292,6 +302,14 @@ export default function TTSConfigPanel() {
           className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 hover:bg-blue-600 text-white transition-colors disabled:opacity-50"
         >
           {saving ? '保存中…' : '保存配置'}
+        </button>
+
+        <button
+          onClick={resetToDefaults}
+          disabled={saving || testing || clearingCache}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 transition-colors disabled:opacity-50"
+        >
+          恢复默认
         </button>
 
         {message && (
