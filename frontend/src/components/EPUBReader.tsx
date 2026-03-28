@@ -2,10 +2,22 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useReaderGestures } from '../hooks/useReaderGestures';
+import { useFullTextTTS } from '../hooks/useFullTextTTS';
+import TTSLoadingDots from './TTSLoadingDots';
 import { saveEpubState, getEpubState } from '../lib/epubCache';
 import { createLogger } from '../lib/logger';
+import { preprocessTTSPlainText } from '../lib/ttsText';
 
 const log = createLogger('EPUBReader');
+
+const TTS_SPEED_OPTIONS = [
+  { value: 1, label: '1.0x' },
+  { value: 1.1, label: '1.1x' },
+  { value: 1.2, label: '1.2x' },
+  { value: 1.3, label: '1.3x' },
+  { value: 1.4, label: '1.4x' },
+  { value: 1.5, label: '1.5x' },
+] as const;
 
 interface OutlineItem {
   title: string;
@@ -1627,6 +1639,37 @@ export default function EPUBReader({
     renditionRef.current?.themes.fontSize(`${newSize}%`);
   }, [fontSize]);
 
+  // ─── 全文朗读 ─────────────────────────────────────────────────────────────
+  // EPUB 按章节朗读。每次 onPageChange 调用 renditionRef.next() 跳到下一章。
+  // 当 rendition 无法再进行时（最后一章），getPageText 返回空字符串，朗读循环将自动结束。
+  const epubPageRef = useRef(1); // 用于模拟页码计数，触发 onPageChange
+
+  const getEpubPageText = useCallback((_page: number): string => {
+    try {
+      const contents = renditionRef.current?.getContents();
+      const body = contents?.[0]?.document?.body;
+      return preprocessTTSPlainText(body?.textContent?.trim() || '');
+    } catch {
+      return '';
+    }
+  }, []);
+
+  const handleEpubTTSPageChange = useCallback((page: number) => {
+    // 第 1 页是当前章节，不需要翻页；后续页都调用 next()
+    if (page > 1) {
+      renditionRef.current?.next();
+    }
+    epubPageRef.current = page;
+  }, []);
+
+  const tts = useFullTextTTS({
+    getPageText: getEpubPageText,
+    totalPages: 9999, // EPUB 章节数不确定，依赖空页检测终止
+    currentPage: 1,   // 始终从当前章节开始
+    onPageChange: handleEpubTTSPageChange,
+    pageChangeDelay: 1200, // epub.js 加载新章节需约 1s
+  });
+
   useEffect(() => {
     if (renditionReady && renditionRef.current) {
         const applyUserStyles = (contents: any) => {
@@ -1784,6 +1827,89 @@ export default function EPUBReader({
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* ── 朗读控制区 ── */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* 音色选择：始终可见 */}
+          <select
+            value={tts.voice}
+            onChange={(e) => tts.setVoice(e.target.value as any)}
+            className="text-xs bg-transparent border border-gray-200/60 rounded-full px-2 py-1 text-gray-500 hover:text-gray-700 hover:border-gray-300 cursor-pointer focus:outline-none transition-colors"
+            title="选择朗读语音"
+          >
+            {tts.voices.map(v => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+
+          <select
+            value={tts.speed}
+            onChange={(e) => tts.setSpeed(Number(e.target.value))}
+            className="text-xs bg-transparent border border-gray-200/60 rounded-full px-2 py-1 text-gray-500 hover:text-gray-700 hover:border-gray-300 cursor-pointer focus:outline-none transition-colors"
+            title="调整朗读速度"
+          >
+            {TTS_SPEED_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+
+          {!tts.isPlaying && !tts.isPaused ? (
+            <button
+              onClick={tts.play}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-gray-100/80 hover:bg-gray-200/80 text-gray-700 transition-colors border border-gray-200/50"
+              title="从当前章节开始朗读全文"
+            >
+              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+              朗读
+            </button>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              {tts.isPlaying ? (
+                <button
+                  onClick={tts.pause}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium bg-amber-50 text-amber-600 hover:bg-amber-100 transition-colors border border-amber-200/60"
+                  title="暂停朗读"
+                >
+                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                  </svg>
+                  暂停
+                </button>
+              ) : (
+                <button
+                  onClick={tts.resume}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium bg-green-50 text-green-600 hover:bg-green-100 transition-colors border border-green-200/60"
+                  title="继续朗读"
+                >
+                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                  继续
+                </button>
+              )}
+              <button
+                onClick={tts.stop}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium bg-gray-100/80 text-gray-500 hover:bg-red-50 hover:text-red-500 transition-colors border border-gray-200/50"
+                title="停止朗读"
+              >
+                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M6 6h12v12H6z" />
+                </svg>
+                停止
+              </button>
+              <span className="text-xs text-gray-400 pl-0.5 inline-flex min-w-[14em]">
+                <span>{tts.isPaused ? '已暂停' : '正在朗读...'}</span>
+                <span className="ml-1.5 text-gray-300">
+                  <TTSLoadingDots active={tts.provider === 'qwen3' && tts.isGenerating} />
+                </span>
+              </span>
+            </div>
+          )}
+        </div>
+
+        <div className="w-px h-4 bg-gray-300/50"></div>
+
         {/* Progress Info */}
         <div className="flex items-center gap-2 text-gray-500 font-medium tabular-nums text-xs min-w-[3ch] justify-center">
              <span>{progress || 0}%</span>
@@ -1914,4 +2040,3 @@ export default function EPUBReader({
     </div>
   );
 }
-

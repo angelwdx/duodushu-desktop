@@ -339,8 +339,129 @@ export async function streamSpeech(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: sanitizedText, voice }),
   });
-  if (!res.ok) throw new Error("Failed to stream speech");
+  if (!res.ok) {
+    let detail = "Failed to stream speech";
+    try {
+      const errorData = await res.json();
+      detail = errorData.detail || detail;
+    } catch {
+      detail = `Failed to stream speech (HTTP ${res.status})`;
+    }
+    throw new Error(detail);
+  }
 
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
+// ─── TTS Provider 配置 ────────────────────────────────────────────────────
+
+export interface TTSConfigEdge {
+  voice: string;
+  speed: number;
+}
+export interface TTSConfigOpenAIApi {
+  base_url: string;
+  api_key: string;
+  model: string;
+  voice: string;
+  speed: number;
+}
+export interface TTSConfigQwen3 {
+  base_url: string;
+  model: string;
+  voice: string;
+  speed: number;
+}
+export interface TTSConfig {
+  provider: 'edge' | 'openai_api' | 'qwen3';
+  edge: TTSConfigEdge;
+  openai_api: TTSConfigOpenAIApi;
+  qwen3: TTSConfigQwen3;
+}
+export interface TTSVoiceOption {
+  id: string;
+  name: string;
+  voice: string;
+}
+export interface TTSCacheInfo {
+  file_count: number;
+  total_bytes: number;
+  total_mb: number;
+  max_files: number;
+  max_mb: number;
+}
+
+const DEFAULT_TTS_CONFIG: TTSConfig = {
+  provider: 'edge',
+  edge: { voice: 'default', speed: 1 },
+  openai_api: { base_url: 'https://api.openai.com/v1', api_key: '', model: 'tts-1', voice: 'alloy', speed: 1 },
+  qwen3: { base_url: 'http://127.0.0.1:18790/v1', model: 'tts-1', voice: '塔塔', speed: 1 },
+};
+
+export async function getTTSConfig(): Promise<TTSConfig> {
+  try {
+    const res = await fetch(`${API_URL}/api/tts/config`);
+    if (!res.ok) return DEFAULT_TTS_CONFIG;
+    const data = await res.json();
+    return {
+      ...DEFAULT_TTS_CONFIG,
+      ...data,
+      edge: { ...DEFAULT_TTS_CONFIG.edge, ...data.edge },
+      openai_api: { ...DEFAULT_TTS_CONFIG.openai_api, ...data.openai_api },
+      qwen3: { ...DEFAULT_TTS_CONFIG.qwen3, ...data.qwen3 },
+    };
+  } catch {
+    return DEFAULT_TTS_CONFIG;
+  }
+}
+
+export async function saveTTSConfig(config: TTSConfig): Promise<void> {
+  const res = await fetch(`${API_URL}/api/tts/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) throw new Error('Failed to save TTS config');
+}
+
+export async function getTTSVoices(): Promise<TTSVoiceOption[]> {
+  try {
+    const res = await fetch(`${API_URL}/api/tts/voices`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.voices) ? data.voices : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getTTSCacheInfo(): Promise<TTSCacheInfo | null> {
+  try {
+    const res = await fetch(`${API_URL}/api/tts/cache/info`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function clearTTSCache(): Promise<{ deleted: number }> {
+  const res = await fetch(`${API_URL}/api/tts/cache`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to clear TTS cache');
+  return res.json();
+}
+
+/** 用当前（或临时）配置合成测试音频，返回 Blob URL */
+export async function testTTSConfig(config?: TTSConfig): Promise<string> {
+  const res = await fetch(`${API_URL}/api/tts/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: config ? JSON.stringify(config) : 'null',
+  });
+  if (!res.ok) throw new Error('TTS test failed');
   const blob = await res.blob();
   return URL.createObjectURL(blob);
 }

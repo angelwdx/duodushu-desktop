@@ -2,6 +2,9 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useReaderGestures } from "../hooks/useReaderGestures";
+import { useFullTextTTS } from "../hooks/useFullTextTTS";
+import TTSLoadingDots from "./TTSLoadingDots";
+import { preprocessTTSPlainText } from "../lib/ttsText";
 import { Document, Page as PDFPage, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -12,6 +15,15 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 // 注意：PDF 阅读需要联网加载 PDF.js worker 文件（约 700KB）
 // 首次加载后会缓存到浏览器，后续使用缓存版本
+
+const TTS_SPEED_OPTIONS = [
+  { value: 1, label: "1.0x" },
+  { value: 1.1, label: "1.1x" },
+  { value: 1.2, label: "1.2x" },
+  { value: 1.3, label: "1.3x" },
+  { value: 1.4, label: "1.4x" },
+  { value: 1.5, label: "1.5x" },
+] as const;
 
 interface WordData {
   text: string;
@@ -217,6 +229,7 @@ interface ReaderProps {
   const [showZoomMenu, setShowZoomMenu] = useState(false);
   const [isEditingZoom, setIsEditingZoom] = useState(false);
   const [zoomInputValue, setZoomInputValue] = useState("100");
+  const [pageTextForTTS, setPageTextForTTS] = useState("");
   const [containerSize, setContainerSize] = useState<{
     width: number;
     height: number;
@@ -654,6 +667,7 @@ interface ReaderProps {
             .join(" ");
 
           if (extractedText && extractedText.trim().length > 0) {
+            setPageTextForTTS(extractedText);
             if (onContentChange) {
               try {
                 onContentChange(extractedText);
@@ -664,6 +678,7 @@ interface ReaderProps {
           } else if (textContent) {
             // 如果提取失败，降级使用后端提供的文本内容
             console.log(`[PDFReader] Fallback to backend text for page ${pageNumber} (len: ${textContent.length})`);
+            setPageTextForTTS(textContent);
             if (onContentChange) {
               onContentChange(textContent);
             }
@@ -674,6 +689,7 @@ interface ReaderProps {
         // 降级到后端提供的文本内容
         if (textContent && onContentChange) {
           console.log(`[PDFReader] Fallback to backend text for page ${pageNumber}`);
+          setPageTextForTTS(textContent);
           onContentChange(textContent);
         }
       }
@@ -724,50 +740,11 @@ interface ReaderProps {
     return `${Math.round(scale * 100)}%`;
   };
 
+  useEffect(() => {
+    setPageTextForTTS(textContent || "");
+  }, [pageNumber, textContent]);
+
   /* Moved goToPage up */
-
-  const [isPlaying, setIsPlaying] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const blobUrlRef = useRef<string | null>(null);
-
-  const handlePlayPage = async () => {
-    if (isPlaying) {
-      audioRef.current?.pause();
-      setIsPlaying(false);
-      return;
-    }
-    if (!words || words.length === 0) {
-      alert("No text available on this page to read.");
-      return;
-    }
-    const text = words.map((w) => w.text).join(" ");
-    try {
-      setIsPlaying(true);
-      const { streamSpeech } = await import("../lib/api");
-      const audioBlobUrl = await streamSpeech(text);
-      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
-      blobUrlRef.current = audioBlobUrl;
-      const audio = new Audio(audioBlobUrl);
-      audioRef.current = audio;
-      audio.onended = () => {
-        setIsPlaying(false);
-        if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
-      };
-      audio.onerror = () => {
-        setIsPlaying(false);
-        alert("Failed to play audio");
-      };
-      audio.play();
-    } catch (e) {
-      console.error(e);
-      setIsPlaying(false);
-      alert("Failed to generate speech");
-    }
-  };
-
-  const renderHeight = pageDimensions
-    ? (renderWidth / pageDimensions.width) * pageDimensions.height
-    : undefined;
 
   const normalizeText = (text: string) => {
     if (!text) return "";
@@ -782,6 +759,23 @@ interface ReaderProps {
     return refined;
   };
 
+  // 全文朗读的文本来源与文本模式显示保持一致：都使用 normalizeText 处理后的文本
+  const getPageText = useCallback((_page: number): string => {
+    return preprocessTTSPlainText(normalizeText(pageTextForTTS || ""));
+  }, [pageTextForTTS]);
+
+  const tts = useFullTextTTS({
+    getPageText,
+    totalPages: numPages || totalPages || 1,
+    currentPage: pageNumber,
+    onPageChange: goToPage,
+    pageChangeDelay: 400,
+  });
+
+  const renderHeight = pageDimensions
+    ? (renderWidth / pageDimensions.width) * pageDimensions.height
+    : undefined;
+
   const renderTextMode = () => {
     if (!textContent) {
       return (
@@ -794,22 +788,45 @@ interface ReaderProps {
       );
     }
     const normalizedContent = normalizeText(textContent);
+
+    // 计算当前朗读片段在规范化内容中的字符范围
+    // chunkText 来自 normalizeText(textContent)，直接 indexOf 即可精确匹配
+    const chunkText = tts.currentChunkText;
+    let hlStart = -1;
+    let hlEnd   = -1;
+    if (chunkText) {
+      hlStart = normalizedContent.indexOf(chunkText);
+      if (hlStart >= 0) hlEnd = hlStart + chunkText.length;
+    }
+
     const tokens = normalizedContent.split(
-      /([a-zA-Z0-9À-ÿ]+(?:['’-][a-zA-Z0-9À-ÿ]+)*)/,
+      /([a-zA-Z0-9À-ÿ]+(?:[''-][a-zA-Z0-9À-ÿ]+)*)/,
     );
+
+    let charPos = 0;
     return (
       <div className="flex-1 overflow-auto bg-gray-50 flex justify-center">
         <div className="max-w-3xl w-full bg-white shadow-sm min-h-full p-4 sm:p-6 md:p-12">
           <div className="prose prose-xl max-w-none font-serif leading-loose text-gray-800">
             {tokens.map((token, i) => {
-              const isWord = /^[a-zA-Z0-9À-ÿ]+(?:['’-][a-zA-Z0-9À-ÿ]+)*$/.test(
-                token,
-              );
+              const start = charPos;
+              const end   = charPos + token.length;
+              charPos = end;
+
+              // 当前 token 是否在高亮范围内
+              const isHighlighted = hlStart >= 0 && start < hlEnd && end > hlStart;
+
+              const isWord = /^[a-zA-Z0-9À-ÿ]+(?:[''-][a-zA-Z0-9À-ÿ]+)*$/.test(token);
               if (isWord) {
                 return (
                   <span
                     key={i}
-                    className="cursor-pointer hover:bg-yellow-200 hover:text-blue-700 transition-colors rounded-sm"
+                    data-tts-hl={isHighlighted ? 'true' : undefined}
+                    className={`cursor-pointer rounded-sm transition-colors ${
+                      isHighlighted
+                        ? 'bg-yellow-200 text-gray-900'
+                        : 'hover:bg-yellow-100 hover:text-blue-700'
+                    }`}
                     onClick={(e) => {
                       e.stopPropagation();
                       onWordClick?.(token);
@@ -821,13 +838,21 @@ interface ReaderProps {
               }
               if (token.includes("\n"))
                 return (
-                  <span key={i}>
-                    {token
-                      .split("\n")
-                      .map((nl, idx) => (idx > 0 ? <br key={idx} /> : null))}
+                  <span
+                    key={i}
+                    className={isHighlighted ? 'bg-yellow-100' : ''}
+                  >
+                    {token.split("\n").map((nl, idx) => (idx > 0 ? <br key={idx} /> : null))}
                   </span>
                 );
-              return <span key={i}>{token}</span>;
+              return (
+                <span
+                  key={i}
+                  className={isHighlighted ? 'bg-yellow-100' : ''}
+                >
+                  {token}
+                </span>
+              );
             })}
           </div>
           <div className="mt-16 pt-8 border-t text-center text-gray-400 text-sm">
@@ -837,6 +862,13 @@ interface ReaderProps {
       </div>
     );
   };
+
+  // 朗读片段变化时，自动滚动到高亮块的中心位置
+  useEffect(() => {
+    if (!tts.isPlaying || !tts.currentChunkText || viewMode !== 'text') return;
+    const el = document.querySelector('[data-tts-hl="true"]');
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [tts.currentChunkText, tts.isPlaying, viewMode]);
 
   // 鼠标按下：记录起始位置，准备判断点击或拖动
   const handlePageMouseDown = (e: React.MouseEvent) => {
@@ -1160,6 +1192,101 @@ interface ReaderProps {
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* ── 朗读控制区 ── */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* 音色选择：始终可见，朗读前就可以选 */}
+          <select
+            value={tts.voice}
+            onChange={(e) => tts.setVoice(e.target.value as any)}
+            className="text-xs bg-transparent border border-gray-200/60 rounded-full px-2 py-1 text-gray-500 hover:text-gray-700 hover:border-gray-300 cursor-pointer focus:outline-none transition-colors"
+            title="选择朗读语音"
+          >
+            {tts.voices.map(v => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+
+          <select
+            value={tts.speed}
+            onChange={(e) => tts.setSpeed(Number(e.target.value))}
+            className="text-xs bg-transparent border border-gray-200/60 rounded-full px-2 py-1 text-gray-500 hover:text-gray-700 hover:border-gray-300 cursor-pointer focus:outline-none transition-colors"
+            title="调整朗读速度"
+          >
+            {TTS_SPEED_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+
+          {!tts.isPlaying && !tts.isPaused ? (
+            // 初始状态：播放按钮
+            <button
+              onClick={tts.play}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-gray-100/80 hover:bg-gray-200/80 text-gray-700 transition-colors border border-gray-200/50"
+              title="从当前页开始朗读全文"
+            >
+              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+              朗读
+            </button>
+          ) : (
+            // 朗读中 / 已暂停
+            <div className="flex items-center gap-1.5">
+              {tts.isPlaying ? (
+                <button
+                  onClick={tts.pause}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium bg-amber-50 text-amber-600 hover:bg-amber-100 transition-colors border border-amber-200/60"
+                  title="暂停朗读"
+                >
+                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                  </svg>
+                  暂停
+                </button>
+              ) : (
+                <button
+                  onClick={tts.resume}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium bg-green-50 text-green-600 hover:bg-green-100 transition-colors border border-green-200/60"
+                  title="继续朗读"
+                >
+                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                  继续
+                </button>
+              )}
+              <button
+                onClick={tts.stop}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium bg-gray-100/80 text-gray-500 hover:bg-red-50 hover:text-red-500 transition-colors border border-gray-200/50"
+                title="停止朗读"
+              >
+                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M6 6h12v12H6z" />
+                </svg>
+                停止
+              </button>
+              {/* 当前朗读页 */}
+              <span className="text-xs text-gray-400 pl-0.5 inline-flex min-w-[16em]">
+                {tts.currentReadingPage !== null ? (
+                  <>
+                    <span>{tts.isPaused ? '已暂停' : `第 ${tts.currentReadingPage} 页`}</span>
+                    <span className="ml-1.5 text-gray-300">
+                      <TTSLoadingDots active={tts.provider === 'qwen3' && tts.isGenerating} />
+                    </span>
+                  </>
+                ) : (
+                  <span className="inline-flex items-center">
+                    <span className="opacity-0">第 9999 页</span>
+                    <span className="ml-1.5 text-gray-300 opacity-0">
+                      <TTSLoadingDots active />
+                    </span>
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
+        </div>
+
         {/* View Mode Toggle */}
         <div className="flex bg-gray-100/80 p-0.5 rounded-full border border-gray-200/50">
           <button
