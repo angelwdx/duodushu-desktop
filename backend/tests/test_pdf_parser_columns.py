@@ -15,7 +15,7 @@ from app.parsers.pdf_parser import PDFParser
 
 
 def make_block(x0: float, y0: float, x1: float, y1: float, text_len: int = 50) -> dict:
-    """构造一个最小的 block_info 字典，text_len 控制显著性（>= 20 即显著）。"""
+    """构造一个最小的 block_info 字典，text_len 控制显著性（>= 6 即显著）。"""
     chars = [{"c": "a", "bbox": [x0, y0, x0 + 5, y1]}] * text_len
     span = {"chars": chars, "bbox": [x0, y0, x1, y1]}
     line = {"spans": [span]}
@@ -179,6 +179,77 @@ class TestDetectColumns:
             left_max  = max(result.index(b) for b in left_r)
             right_min = min(result.index(b) for b in right_r)
             assert left_max < right_min, "噪声块不应破坏双栏顺序"
+
+    # ── 行内字符重建 ─────────────────────────────────────────────────────
+
+    def test_extract_line_text_and_words_merges_multiple_spans_in_order(self):
+        line = {
+            "spans": [
+                {
+                    "chars": [
+                        {"c": "H", "bbox": [10, 10, 18, 22]},
+                        {"c": "e", "bbox": [18, 10, 25, 22]},
+                    ]
+                },
+                {
+                    "chars": [
+                        {"c": "l", "bbox": [25, 10, 29, 22]},
+                        {"c": "l", "bbox": [29, 10, 33, 22]},
+                        {"c": "o", "bbox": [33, 10, 41, 22]},
+                    ]
+                },
+                {
+                    "chars": [
+                        {"c": "W", "bbox": [52, 10, 63, 22]},
+                        {"c": "o", "bbox": [63, 10, 71, 22]},
+                        {"c": "r", "bbox": [71, 10, 77, 22]},
+                        {"c": "l", "bbox": [77, 10, 81, 22]},
+                        {"c": "d", "bbox": [81, 10, 89, 22]},
+                    ]
+                },
+            ]
+        }
+
+        text, words = self.parser._extract_line_text_and_words(line, block_idx=3)
+
+        assert text == "Hello World"
+        assert [word["text"] for word in words] == ["Hello", "World"]
+        assert all(word["block_id"] == 3 for word in words)
+
+    def test_extract_line_text_and_words_keeps_punctuation_without_extra_space(self):
+        line = {
+            "spans": [
+                {
+                    "chars": [
+                        {"c": "H", "bbox": [10, 10, 18, 22]},
+                        {"c": "i", "bbox": [18, 10, 21, 22]},
+                        {"c": ",", "bbox": [26, 10, 29, 22]},
+                        {"c": "!", "bbox": [34, 10, 37, 22]},
+                    ]
+                }
+            ]
+        }
+
+        text, words = self.parser._extract_line_text_and_words(line)
+
+        assert text == "Hi,!"
+        assert [word["text"] for word in words] == ["Hi,!"]
+
+    def test_short_blocks_still_detect_double_columns(self):
+        left_col = [
+            make_block(50, 100, 180, 130, text_len=8),
+            make_block(50, 200, 180, 230, text_len=8),
+        ]
+        right_col = [
+            make_block(330, 100, 470, 130, text_len=9),
+            make_block(330, 200, 470, 230, text_len=9),
+        ]
+
+        result = self.parser._detect_columns(left_col + right_col, PAGE_W)
+
+        left_results = [b for b in result if b["center_x"] < PAGE_W / 2]
+        right_results = [b for b in result if b["center_x"] >= PAGE_W / 2]
+        assert max(result.index(b) for b in left_results) < min(result.index(b) for b in right_results)
 
 
 if __name__ == "__main__":

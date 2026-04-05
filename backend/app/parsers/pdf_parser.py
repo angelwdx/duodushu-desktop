@@ -14,6 +14,9 @@ from ..services.thumbnail_service import ThumbnailService
 
 logger = logging.getLogger(__name__)
 
+INLINE_PUNCTUATION = set(",.;:!?)]}%")
+OPENING_PUNCTUATION = set("([{")
+
 
 class PDFParser(BaseParser):
     """
@@ -148,22 +151,22 @@ class PDFParser(BaseParser):
         for i, block_info in enumerate(ordered_blocks):
             block = block_info["block"]
             block_lines = []
-            for line in block.get("lines", []):
-                line_text = ""
-                for span in line.get("spans", []):
-                    # rawdict 格式：span 包含 chars 列表而不是 text 字符串
-                    chars = span.get("chars", [])
-                    span_text = "".join(char.get("c", "") for char in chars)
-                    line_text += span_text
+            ordered_lines = sorted(
+                block.get("lines", []),
+                key=lambda line: (
+                    float(line.get("bbox", [0, 0, 0, 0])[1]),
+                    float(line.get("bbox", [0, 0, 0, 0])[0]),
+                ),
+            )
+            for line in ordered_lines:
+                line_text, line_words = self._extract_line_text_and_words(line, block_idx=i)
+                if line_text:
+                    block_lines.append(line_text)
+                if line_words:
+                    words_data.extend(line_words)
 
-                    # 使用字符级坐标提取单词
-                    bbox = span.get("bbox", [0, 0, 0, 0])
-                    span_words = self._split_span_to_words(span, bbox, block_idx=i)
-                    words_data.extend(span_words)
-
-                block_lines.append(line_text.strip())
-
-            text_parts.append("\n".join(block_lines))
+            if block_lines:
+                text_parts.append("\n".join(block_lines))
 
         text_content = "\n\n".join(text_parts)
 
@@ -174,80 +177,114 @@ class PDFParser(BaseParser):
             "images": [],
         }
 
-    def _split_span_to_words(
-        self, span: Dict, bbox: Tuple[float, float, float, float], block_idx: int = 0
-    ) -> List[Dict[str, Any]]:
+    def _extract_line_text_and_words(self, line: Dict, block_idx: int = 0) -> Tuple[str, List[Dict[str, Any]]]:
         """
-        将 span 文本拆分为单词，使用字符级坐标计算每个单词的精确位置。
+        基于字符级坐标重建单行文本与单词列表。
 
-        Args:
-            span: PyMuPDF rawdict span 数据（包含 chars 列表）
-            bbox: span 的边界框 (x0, y0, x1, y1)
-            block_idx: 所属块的索引
-
-        Returns:
-            单词数据列表
+        这一步不信任 span 的顺序和空格切分，统一用字符 bbox 做排序与 gap 推断，
+        可显著降低 PDF 中因多个 span/字偶距导致的丢空格、乱序、断词问题。
         """
-        chars = span.get("chars", [])
+        chars: List[Dict[str, Any]] = []
+        for span in line.get("spans", []):
+            for char in span.get("chars", []):
+                bbox = char.get("bbox", [0, 0, 0, 0])
+                chars.append(
+                    {
+                        "c": char.get("c", ""),
+                        "bbox": [
+                            float(bbox[0]),
+                            float(bbox[1]),
+                            float(bbox[2]),
+                            float(bbox[3]),
+                        ],
+                    }
+                )
+
         if not chars:
-            return []
+            return "", []
 
-        # 从 chars 构建单词
-        result = []
-        current_word_chars = []
-        current_word_x0 = 0.0
-        current_word_y0 = 0.0
-        current_word_y1 = 0.0
+        chars.sort(key=lambda char: (char["bbox"][0], char["bbox"][1], char["bbox"][2]))
 
-        for char in chars:
-            c = char.get("c", "")
-            char_bbox = char.get("bbox", [0, 0, 0, 0])
+        line_parts: List[str] = []
+        words: List[Dict[str, Any]] = []
+        current_word_chars: List[str] = []
+        current_word_bbox: Optional[List[float]] = None
+        prev_char: Optional[Dict[str, Any]] = None
 
-            # 空格表示单词结束
-            if c.isspace():
-                if current_word_chars:
-                    word_text = "".join(current_word_chars)
-                    result.append(
-                        {
-                            "text": word_text,
-                            "x": float(current_word_x0),
-                            "y": float(current_word_y0),
-                            "width": float(char_bbox[0] - current_word_x0),
-                            "height": float(current_word_y1 - current_word_y0),
-                            "block_id": block_idx,
-                        }
-                    )
-                    current_word_chars = []
-                continue
-
-            # 非空格字符
-            if not current_word_chars:
-                current_word_x0 = float(char_bbox[0])
-                current_word_y0 = float(char_bbox[1])
-                current_word_y1 = float(char_bbox[3])
-            else:
-                current_word_y0 = min(current_word_y0, float(char_bbox[1]))
-                current_word_y1 = max(current_word_y1, float(char_bbox[3]))
-
-            current_word_chars.append(c)
-
-        # 处理最后一个单词
-        if current_word_chars:
+        def flush_word() -> None:
+            nonlocal current_word_chars, current_word_bbox
+            if not current_word_chars or current_word_bbox is None:
+                current_word_chars = []
+                current_word_bbox = None
+                return
             word_text = "".join(current_word_chars)
-            last_char = chars[-1]
-            last_bbox = last_char.get("bbox", [0, 0, 0, 0])
-            result.append(
+            words.append(
                 {
                     "text": word_text,
-                    "x": float(current_word_x0),
-                    "y": float(current_word_y0),
-                    "width": float(last_bbox[2] - current_word_x0),
-                    "height": float(current_word_y1 - current_word_y0),
+                    "x": float(current_word_bbox[0]),
+                    "y": float(current_word_bbox[1]),
+                    "width": float(current_word_bbox[2] - current_word_bbox[0]),
+                    "height": float(current_word_bbox[3] - current_word_bbox[1]),
                     "block_id": block_idx,
                 }
             )
+            current_word_chars = []
+            current_word_bbox = None
 
-        return result
+        for char in chars:
+            c = char["c"]
+            bbox = char["bbox"]
+
+            if c.isspace():
+                flush_word()
+                if line_parts and line_parts[-1] != " ":
+                    line_parts.append(" ")
+                prev_char = char
+                continue
+
+            if prev_char and self._should_insert_space_between_chars(prev_char, char):
+                flush_word()
+                if line_parts and line_parts[-1] != " ":
+                    line_parts.append(" ")
+
+            line_parts.append(c)
+
+            if current_word_bbox is None:
+                current_word_bbox = [bbox[0], bbox[1], bbox[2], bbox[3]]
+            else:
+                current_word_bbox[0] = min(current_word_bbox[0], bbox[0])
+                current_word_bbox[1] = min(current_word_bbox[1], bbox[1])
+                current_word_bbox[2] = max(current_word_bbox[2], bbox[2])
+                current_word_bbox[3] = max(current_word_bbox[3], bbox[3])
+            current_word_chars.append(c)
+            prev_char = char
+
+        flush_word()
+
+        line_text = "".join(line_parts)
+        line_text = " ".join(line_text.split())
+        return line_text.strip(), words
+
+    def _should_insert_space_between_chars(self, prev_char: Dict[str, Any], curr_char: Dict[str, Any]) -> bool:
+        prev_c = str(prev_char.get("c", ""))
+        curr_c = str(curr_char.get("c", ""))
+        if not prev_c or not curr_c:
+            return False
+        if curr_c in INLINE_PUNCTUATION or prev_c in OPENING_PUNCTUATION:
+            return False
+
+        prev_bbox = prev_char.get("bbox", [0.0, 0.0, 0.0, 0.0])
+        curr_bbox = curr_char.get("bbox", [0.0, 0.0, 0.0, 0.0])
+        prev_width = max(float(prev_bbox[2]) - float(prev_bbox[0]), 0.0)
+        curr_width = max(float(curr_bbox[2]) - float(curr_bbox[0]), 0.0)
+        gap = float(curr_bbox[0]) - float(prev_bbox[2])
+
+        if gap <= 0:
+            return False
+
+        # 对英文字体常见 kerning 做保守容忍；gap 明显大于字符宽度时才补空格。
+        threshold = max(1.2, min(max(prev_width, curr_width) * 0.35, 8.0))
+        return gap > threshold
 
     def _detect_columns(self, blocks: List[Dict], page_width: float) -> List[Dict]:
         """
@@ -256,7 +293,7 @@ class PDFParser(BaseParser):
         算法：
         1. 先分离"全宽块"（宽度 >= 65% 页面宽，如跨栏标题、图注），
            不参与 X 聚类，避免破坏分栏检测。
-        2. 仅用剩余"窄块"中的"显著块"（字符数 >= 20）做 X 坐标聚类。
+        2. 仅用剩余"窄块"中的"显著块"（字符数 >= 6）做 X 坐标聚类。
         3. 若无分割点 → 单栏：全部块按 (y0, x0) 排序后返回。
         4. 若有分割点 → 多栏：
            a. 将窄块按分割点分配到各栏，每栏内按 y0 排序。
@@ -295,7 +332,7 @@ class PDFParser(BaseParser):
                 for line in block.get("lines", [])
                 for span in line.get("spans", [])
             )
-            if text_len >= 20:
+            if text_len >= 6:
                 significant_narrow.append(b)
 
         # 显著窄块不足 → 单栏

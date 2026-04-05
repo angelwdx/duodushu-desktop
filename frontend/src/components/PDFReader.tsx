@@ -133,6 +133,76 @@ function sortPDFTextItemsByReadingOrder(items: any[], pageWidth: number): any[] 
   return result;
 }
 
+function shouldInsertSpaceBetweenPDFItems(prev: any, curr: any): boolean {
+  const prevText = String(prev?.str || "");
+  const currText = String(curr?.str || "");
+  if (!prevText || !currText) return false;
+  if (/\s$/.test(prevText) || /^\s/.test(currText)) return false;
+  if (/^[,.;:!?)]/.test(currText)) return false;
+  if (/[([]$/.test(prevText)) return false;
+
+  const prevX = Number(prev?.transform?.[4] || 0);
+  const prevWidth = Number(prev?.width || 0);
+  const currX = Number(curr?.transform?.[4] || 0);
+  const gap = currX - (prevX + prevWidth);
+
+  if (gap <= 0) return false;
+
+  const prevHeight = Number(prev?.height || 0);
+  const currHeight = Number(curr?.height || 0);
+  const threshold = Math.max(1.5, Math.min(Math.max(prevHeight, currHeight) * 0.18, 10));
+  return gap > threshold;
+}
+
+function buildStructuredTextFromPDFItems(items: any[], pageWidth: number): string {
+  if (!items || items.length === 0) return "";
+
+  const sorted = sortPDFTextItemsByReadingOrder(items, pageWidth);
+  const lines: string[] = [];
+  let currentLine = "";
+  let prevItem: any = null;
+
+  const flushLine = () => {
+    const normalized = currentLine.replace(/\s+/g, " ").trim();
+    if (normalized) lines.push(normalized);
+    currentLine = "";
+  };
+
+  for (const item of sorted) {
+    const text = String(item?.str || "");
+    if (!text.trim()) continue;
+
+    if (prevItem) {
+      const prevY = Number(prevItem?.transform?.[5] || 0);
+      const currY = Number(item?.transform?.[5] || 0);
+      const prevX = Number(prevItem?.transform?.[4] || 0);
+      const currX = Number(item?.transform?.[4] || 0);
+      const prevHeight = Number(prevItem?.height || 0);
+      const currHeight = Number(item?.height || 0);
+      const lineThreshold = Math.max(4, Math.max(prevHeight, currHeight) * 0.65);
+
+      const movedToNewLine =
+        !!prevItem?.hasEOL ||
+        Math.abs(currY - prevY) > lineThreshold;
+      const movedToNextColumn =
+        currY > prevY + lineThreshold * 2 ||
+        (pageWidth > 0 && currX + pageWidth * 0.08 < prevX);
+
+      if (movedToNewLine || movedToNextColumn) {
+        flushLine();
+      } else if (shouldInsertSpaceBetweenPDFItems(prevItem, item)) {
+        currentLine += " ";
+      }
+    }
+
+    currentLine += text.trim();
+    prevItem = item;
+  }
+
+  flushLine();
+  return lines.join("\n");
+}
+
 async function resolveOutlinePageNumbers(
   outline: any[],
   pdfDoc: any,
@@ -746,21 +816,12 @@ interface ReaderProps {
       }, 0);
     }
 
-    // PDF 朗读优先使用后端解析得到的 textContent。
-    // 只有当后端该页文本为空时，才回退到 PDF.js 的实时提取结果。
+    // 朗读/文本模式优先使用当前页实时提取结果。
+    // 这样即便数据库里是旧版本 PDF 解析结果，也能立刻改善当前阅读体验；
+    // 实时提取失败时再回退到后端落库文本。
     const extractPageText = async () => {
-      if (textContent && textContent.trim().length > 0) {
-        setPageTextForTTS(textContent);
-        if (onContentChange) {
-          try {
-            onContentChange(textContent);
-          } catch (err) {
-            // 静默处理
-          }
-        }
-        return;
-      }
-
+      const backendText = String(textContent || "").trim();
+      let extractedText = "";
       try {
         const textContentFromPDF = await page.getTextContent();
         if (textContentFromPDF && textContentFromPDF.items && textContentFromPDF.items.length > 0) {
@@ -801,28 +862,22 @@ interface ReaderProps {
             return !isShortEdgeHeaderFooter;
           });
 
-          // 按阅读顺序排序（支持双栏布局）
-          // PDF.js y 轴朝上：y 大 = 页面上方；行内按 x 从小到大
-          const sorted = sortPDFTextItemsByReadingOrder(filtered, pageWidth);
-
-          const extractedText = sorted
-            .map((item: any) => item.str || "")
-            .filter((str: string) => str.trim() !== "")
-            .join(" ");
-
-          if (extractedText && extractedText.trim().length > 0) {
-            setPageTextForTTS(extractedText);
-            if (onContentChange) {
-              try {
-                onContentChange(extractedText);
-              } catch (err) {
-                // 静默处理
-              }
-            }
-          }
+          extractedText = buildStructuredTextFromPDFItems(filtered, pageWidth).trim();
         }
       } catch (error) {
         console.error(`[PDFReader] Failed to extract text from page ${pageNumber}:`, error);
+      }
+
+      const resolvedText = extractedText || backendText;
+      if (!resolvedText) return;
+
+      setPageTextForTTS(resolvedText);
+      if (onContentChange) {
+        try {
+          onContentChange(resolvedText);
+        } catch (err) {
+          // 静默处理
+        }
       }
     };
 
@@ -872,8 +927,8 @@ interface ReaderProps {
   };
 
   useEffect(() => {
-    setPageTextForTTS(textContent || "");
-  }, [pageNumber, textContent]);
+    setPageTextForTTS("");
+  }, [pageNumber]);
 
   /* Moved goToPage up */
 
@@ -941,11 +996,18 @@ interface ReaderProps {
     refined = refined.replace(/([A-Z])\s*[\r\n]+\s*([a-z])/g, "$1$2");
     refined = refined.replace(/-\s*[\r\n]+\s*/g, "");
     refined = refined.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    refined = refined.replace(/\n\s*\n/g, "___PARAGRAPH___");
-    refined = refined.replace(/\n/g, " ");
-    refined = refined.replace(/___PARAGRAPH___/g, "\n\n");
-    refined = refined.replace(/\s+/g, " ");
-    return refined;
+    refined = refined.replace(/\n{3,}/g, "\n\n");
+    return refined
+      .split(/\n\s*\n/)
+      .map((paragraph) =>
+        paragraph
+          .split("\n")
+          .map((line) => line.replace(/[ \t]+/g, " ").trim())
+          .filter(Boolean)
+          .join(" ")
+      )
+      .filter(Boolean)
+      .join("\n\n");
   };
 
   // 全文朗读的文本来源与文本模式显示保持一致：都使用 normalizeText 处理后的文本
@@ -966,7 +1028,8 @@ interface ReaderProps {
     : undefined;
 
   const renderTextMode = () => {
-    if (!textContent) {
+    const rawTextForDisplay = pageTextForTTS || textContent || "";
+    if (!rawTextForDisplay) {
       return (
         <div className="flex-1 flex items-center justify-center text-gray-400 p-10 bg-gray-50">
           <div className="text-center">
@@ -976,7 +1039,7 @@ interface ReaderProps {
         </div>
       );
     }
-    const normalizedContent = normalizeText(textContent);
+    const normalizedContent = normalizeText(rawTextForDisplay);
 
     // 计算当前朗读片段在规范化内容中的字符范围
     // chunkText 来自 normalizeText(textContent)，直接 indexOf 即可精确匹配
