@@ -20,7 +20,7 @@ class PDFParser(BaseParser):
     PDF 文件解析器。
 
     使用 PyMuPDF 提取文字坐标和内容，支持：
-    - 智能多栏布局检测
+    - 智能多栏布局检测（全宽块优先分离，避免跨栏标题破坏排序）
     - 首字下沉等艺术排版处理
     - 动态阈值计算
     """
@@ -138,23 +138,15 @@ class PDFParser(BaseParser):
                 "images": [],
             }
 
-        # 2. 智能多栏检测并排序块
-        columns = self._detect_columns(blocks_info, page.rect.width)
+        # 2. 智能多栏检测 — 返回已按正确阅读顺序排列的扁平块列表
+        ordered_blocks = self._detect_columns(blocks_info, page.rect.width)
 
-        # 3. 按排序后的顺序提取文字和单词坐标
-        sorted_blocks = []
-        if len(columns) > 1:
-            for col in columns:
-                col.sort(key=lambda b: b["y0"])
-                sorted_blocks.extend([b["block"] for b in col])
-        else:
-            blocks_info.sort(key=lambda b: (b["y0"], b["x0"]))
-            sorted_blocks = [b["block"] for b in blocks_info]
-
+        # 3. 按顺序提取文字和单词坐标（无需再区分单栏/多栏）
         words_data = []
         text_parts = []
 
-        for i, block in enumerate(sorted_blocks):
+        for i, block_info in enumerate(ordered_blocks):
+            block = block_info["block"]
             block_lines = []
             for line in block.get("lines", []):
                 line_text = ""
@@ -191,6 +183,7 @@ class PDFParser(BaseParser):
         Args:
             span: PyMuPDF rawdict span 数据（包含 chars 列表）
             bbox: span 的边界框 (x0, y0, x1, y1)
+            block_idx: 所属块的索引
 
         Returns:
             单词数据列表
@@ -213,14 +206,13 @@ class PDFParser(BaseParser):
             # 空格表示单词结束
             if c.isspace():
                 if current_word_chars:
-                    # 完成当前单词
                     word_text = "".join(current_word_chars)
                     result.append(
                         {
                             "text": word_text,
                             "x": float(current_word_x0),
                             "y": float(current_word_y0),
-                            "width": float(char_bbox[0] - current_word_x0),  # 使用空格前字符的边界
+                            "width": float(char_bbox[0] - current_word_x0),
                             "height": float(current_word_y1 - current_word_y0),
                             "block_id": block_idx,
                         }
@@ -230,18 +222,16 @@ class PDFParser(BaseParser):
 
             # 非空格字符
             if not current_word_chars:
-                # 单词开始
                 current_word_x0 = float(char_bbox[0])
                 current_word_y0 = float(char_bbox[1])
                 current_word_y1 = float(char_bbox[3])
             else:
-                # 更新单词的 y 边界
                 current_word_y0 = min(current_word_y0, float(char_bbox[1]))
                 current_word_y1 = max(current_word_y1, float(char_bbox[3]))
 
             current_word_chars.append(c)
 
-        # 处理最后一个单词（如果存在）
+        # 处理最后一个单词
         if current_word_chars:
             word_text = "".join(current_word_chars)
             last_char = chars[-1]
@@ -259,54 +249,130 @@ class PDFParser(BaseParser):
 
         return result
 
-    def _detect_columns(self, blocks: List[Dict], page_width: float) -> List[List[Dict]]:
+    def _detect_columns(self, blocks: List[Dict], page_width: float) -> List[Dict]:
         """
-        检测页面是否为多栏布局，并返回按栏分组的块。
+        检测页面是否为多栏布局，返回已按正确阅读顺序排列的扁平块列表。
 
-        使用 X 坐标聚类来识别独立的列。
+        算法：
+        1. 先分离"全宽块"（宽度 >= 65% 页面宽，如跨栏标题、图注），
+           不参与 X 聚类，避免破坏分栏检测。
+        2. 仅用剩余"窄块"中的"显著块"（字符数 >= 20）做 X 坐标聚类。
+        3. 若无分割点 → 单栏：全部块按 (y0, x0) 排序后返回。
+        4. 若有分割点 → 多栏：
+           a. 将窄块按分割点分配到各栏，每栏内按 y0 排序。
+           b. 各栏按左→右顺序展开为扁平列表。
+           c. 如有全宽块，用归并算法按 y0 将其插回正确位置。
 
         Args:
-            blocks: 文本块列表
+            blocks: 文本块列表（含 x0/y0/x1/y1/center_x/block 字段）
             page_width: 页面宽度
 
         Returns:
-            按栏分组的文本块列表
+            List[Dict] — 按正确阅读顺序排列的扁平块列表，调用方直接迭代即可。
         """
+        if not blocks:
+            return []
         if len(blocks) < 2:
-            return [blocks] if blocks else []
+            return sorted(blocks, key=lambda b: (b["y0"], b["x0"]))
 
-        # 收集所有块的中心 X 坐标
-        center_xs = [b["center_x"] for b in blocks]
+        # ── 步骤 1：分离全宽块与窄块 ──────────────────────────────────
+        FULL_WIDTH_RATIO = 0.65
+        full_width_blocks: List[Dict] = []
+        narrow_blocks: List[Dict] = []
+        for b in blocks:
+            block_width = b["x1"] - b["x0"]
+            if page_width > 0 and block_width >= page_width * FULL_WIDTH_RATIO:
+                full_width_blocks.append(b)
+            else:
+                narrow_blocks.append(b)
 
-        # 计算动态阈值：基于页面宽度
-        # 如果页面是双栏，中心点之间的间距约为页面宽度的 1/3
-        column_gap_threshold = page_width * 0.15  # 15% 页面宽度作为栏间距阈值
+        # ── 步骤 2：用显著窄块做多栏检测 ──────────────────────────────
+        significant_narrow: List[Dict] = []
+        for b in narrow_blocks:
+            block = b["block"]
+            text_len = sum(
+                len(span.get("chars", []))
+                for line in block.get("lines", [])
+                for span in line.get("spans", [])
+            )
+            if text_len >= 20:
+                significant_narrow.append(b)
 
-        # 简单聚类：按 X 坐标分组
+        # 显著窄块不足 → 单栏
+        if len(significant_narrow) < 2:
+            return sorted(blocks, key=lambda b: (b["y0"], b["x0"]))
+
+        # ── 步骤 3：X 聚类找分割点 ────────────────────────────────────
+        center_xs = [b["center_x"] for b in significant_narrow]
+        gap_threshold = page_width * 0.15
+
         center_xs_sorted = sorted(set(center_xs))
-
-        # 找到间距大于阈值的分割点
-        split_points = []
+        split_points: List[float] = []
         for i in range(len(center_xs_sorted) - 1):
             gap = center_xs_sorted[i + 1] - center_xs_sorted[i]
-            if gap > column_gap_threshold:
-                # 分割点在两个 X 坐标的中间
+            if gap > gap_threshold:
                 split_points.append((center_xs_sorted[i] + center_xs_sorted[i + 1]) / 2)
 
+        # 无分割点 → 单栏
         if not split_points:
-            return [blocks]
+            return sorted(blocks, key=lambda b: (b["y0"], b["x0"]))
 
-        # 按分割点将块分到不同的栏
-        columns = [[] for _ in range(len(split_points) + 1)]
-        for block in blocks:
+        # ── 步骤 4：窄块分配到各栏，每栏内按 y0 排序 ─────────────────
+        columns: List[List[Dict]] = [[] for _ in range(len(split_points) + 1)]
+        for b in narrow_blocks:
             col_idx = 0
             for i, split_x in enumerate(split_points):
-                if block["center_x"] > split_x:
+                if b["center_x"] > split_x:
                     col_idx = i + 1
-            columns[col_idx].append(block)
+            columns[col_idx].append(b)
 
-        # 移除空栏
-        return [col for col in columns if col]
+        columns = [col for col in columns if col]
+        for col in columns:
+            col.sort(key=lambda b: b["y0"])
+
+        # ── 步骤 5：无全宽块 → 各栏顺序展开（左→右）────────────────
+        if not full_width_blocks:
+            flat: List[Dict] = []
+            for col in columns:
+                flat.extend(col)
+            return flat
+
+        # ── 步骤 6：有全宽块 → 归并插回 ──────────────────────────────
+        full_width_sorted = sorted(full_width_blocks, key=lambda b: b["y0"])
+        final_order: List[Dict] = []
+        col_indices = [0] * len(columns)
+        fw_idx = 0
+
+        while True:
+            next_col_items = [
+                (columns[ci][col_indices[ci]]["y0"], ci)
+                for ci in range(len(columns))
+                if col_indices[ci] < len(columns[ci])
+            ]
+            next_fw_y = (
+                full_width_sorted[fw_idx]["y0"]
+                if fw_idx < len(full_width_sorted)
+                else float("inf")
+            )
+
+            if not next_col_items and fw_idx >= len(full_width_sorted):
+                break
+
+            if not next_col_items:
+                final_order.append(full_width_sorted[fw_idx])
+                fw_idx += 1
+                continue
+
+            min_col_y, min_ci = min(next_col_items)
+
+            if next_fw_y <= min_col_y:
+                final_order.append(full_width_sorted[fw_idx])
+                fw_idx += 1
+            else:
+                final_order.append(columns[min_ci][col_indices[min_ci]])
+                col_indices[min_ci] += 1
+
+        return final_order
 
     def _generate_thumbnails(self, file_path: str, book_id: str) -> None:
         """

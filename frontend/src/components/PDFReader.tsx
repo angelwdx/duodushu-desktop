@@ -41,6 +41,98 @@ interface OutlineItem {
   pageNumber?: number;
 }
 
+/**
+ * 将 PDF.js getTextContent 返回的 items 按阅读顺序排序。
+ *
+ * PDF.js 的 y 轴朝上（y=0 在页面底部），因此：
+ * - 行序：y 越大表示越靠近页面顶部，应先读（降序）
+ * - 同行内：x 越小表示越靠左，应先读（升序）
+ *
+ * 采用动态聚类算法支持多栏（跨双栏、三栏等）：
+ * 1. 过滤出较长文本作为“显著项”，计算中心 X 坐标
+ * 2. 找出间距 > 页面宽 12% 的 X 坐标区间作为栏间距（splitPoints）
+ * 3. 将所有文本项按 X 坐标被分配到各栏中，每栏内部按 y 降序、x 升序排列
+ * 4. 按从左到右顺序拼接各栏内容
+ */
+function sortPDFTextItemsByReadingOrder(items: any[], pageWidth: number): any[] {
+  if (!items || items.length === 0) return items;
+
+  const sortByYDesc = (a: any, b: any) => {
+    const ay = Number(a?.transform?.[5] || 0);
+    const by = Number(b?.transform?.[5] || 0);
+    if (Math.abs(ay - by) > 4) return by - ay; // y desc（高处先读）
+    return Number(a?.transform?.[4] || 0) - Number(b?.transform?.[4] || 0); // x asc
+  };
+
+  // 无页面宽度信息时降级为简单排序
+  if (!pageWidth || pageWidth <= 0) {
+    return [...items].sort(sortByYDesc);
+  }
+
+  // 1. 获取显著项的中心 X（避免孤立小数字如页码产生虚假栏）
+  const significantItems = items.filter(item => (item.str || "").trim().length >= 10);
+  
+  if (significantItems.length < 3) {
+    return [...items].sort(sortByYDesc);
+  }
+
+  const centerXs = significantItems.map(item => {
+    const x = Number(item?.transform?.[4] || 0);
+    const width = Number(item?.width || 0);
+    return x + width / 2;
+  });
+
+  const xsSorted = [...new Set(centerXs)].sort((a, b) => a - b);
+  const gapThreshold = pageWidth * 0.12; // 栏间距阈值 12%
+  const splitPoints: number[] = [];
+
+  for (let i = 0; i < xsSorted.length - 1; i++) {
+    const gap = xsSorted[i + 1] - xsSorted[i];
+    if (gap > gapThreshold) {
+      splitPoints.push((xsSorted[i] + xsSorted[i + 1]) / 2);
+    }
+  }
+
+  // 若无明显分栏，则直接单栏排序
+  if (splitPoints.length === 0) {
+    return [...items].sort(sortByYDesc);
+  }
+
+  // 2. 将所有 items 按照分割点分配到各子栏中
+  const columns: any[][] = Array.from({ length: splitPoints.length + 1 }, () => []);
+
+  for (const item of items) {
+    const x = Number(item?.transform?.[4] || 0);
+    const width = Number(item?.width || 0);
+    const centerX = x + width / 2;
+    
+    // 全宽元素（如跨栏标题），PDF.js 里很少直接返回这种大块，但如果有，做个简单宽容度处理
+    if (width > pageWidth * 0.7) {
+      // 作为一个妥协，全宽元素放到第一栏，依赖后续可能有更高级的归并处理
+      columns[0].push(item);
+      continue;
+    }
+
+    let colIdx = 0;
+    for (let i = 0; i < splitPoints.length; i++) {
+      if (centerX > splitPoints[i]) {
+        colIdx = i + 1;
+      }
+    }
+    columns[colIdx].push(item);
+  }
+
+  // 3. 展开各栏
+  const result: any[] = [];
+  for (const col of columns) {
+    if (col.length > 0) {
+      result.push(...col.sort(sortByYDesc));
+    }
+  }
+
+  return result;
+}
+
 async function resolveOutlinePageNumbers(
   outline: any[],
   pdfDoc: any,
@@ -675,39 +767,45 @@ interface ReaderProps {
           const pageWidth = page.view?.[2] || 0;
           const pageHeight = page.view?.[3] || 0;
 
-          // 过滤空字符串并连接所有文本项
-          const extractedText = textContentFromPDF.items
-            .filter((item: any) => {
-              const text = String(item?.str || "").trim();
-              if (!text) return false;
+          // 过滤页眉/页脚/孤立页码噪声
+          const filtered = textContentFromPDF.items.filter((item: any) => {
+            const text = String(item?.str || "").trim();
+            if (!text) return false;
 
-              const x = Number(item?.transform?.[4] || 0);
-              const y = Number(item?.transform?.[5] || 0);
-              const textLength = text.length;
-              const isNearLeftOrRightEdge =
-                pageWidth > 0 &&
-                (x <= pageWidth * 0.2 || x >= pageWidth * 0.8);
+            const x = Number(item?.transform?.[4] || 0);
+            const y = Number(item?.transform?.[5] || 0);
+            const textLength = text.length;
+            // PDF.js y 轴朝上，y=0 是页面底部
+            const isNearLeftOrRightEdge =
+              pageWidth > 0 &&
+              (x <= pageWidth * 0.2 || x >= pageWidth * 0.8);
 
-              // 过滤页脚区域常见的孤立页码，如左下角或右下角的 "162"
-              const isStandalonePageNumber = /^\d{1,4}$/.test(text);
-              const isNearBottomFooter =
-                pageWidth > 0 &&
-                pageHeight > 0 &&
-                y <= pageHeight * 0.12;
-              if (isStandalonePageNumber && isNearBottomFooter && isNearLeftOrRightEdge) {
-                return false;
-              }
+            // 过滤页脚区域常见的孤立页码，如左下角或右下角的 "162"
+            const isStandalonePageNumber = /^\d{1,4}$/.test(text);
+            const isNearBottomFooter =
+              pageWidth > 0 &&
+              pageHeight > 0 &&
+              y <= pageHeight * 0.12;
+            if (isStandalonePageNumber && isNearBottomFooter && isNearLeftOrRightEdge) {
+              return false;
+            }
 
-              // 过滤边缘处较短的页眉/页脚碎片，如书名、章名、页脚标签。
-              const isShortEdgeHeaderFooter =
-                pageWidth > 0 &&
-                pageHeight > 0 &&
-                isNearLeftOrRightEdge &&
-                textLength <= 24 &&
-                (y <= pageHeight * 0.08 || y >= pageHeight * 0.9);
+            // 过滤边缘处较短的页眉/页脚碎片
+            const isShortEdgeHeaderFooter =
+              pageWidth > 0 &&
+              pageHeight > 0 &&
+              isNearLeftOrRightEdge &&
+              textLength <= 24 &&
+              (y <= pageHeight * 0.08 || y >= pageHeight * 0.9);
 
-              return !isShortEdgeHeaderFooter;
-            })
+            return !isShortEdgeHeaderFooter;
+          });
+
+          // 按阅读顺序排序（支持双栏布局）
+          // PDF.js y 轴朝上：y 大 = 页面上方；行内按 x 从小到大
+          const sorted = sortPDFTextItemsByReadingOrder(filtered, pageWidth);
+
+          const extractedText = sorted
             .map((item: any) => item.str || "")
             .filter((str: string) => str.trim() !== "")
             .join(" ");
@@ -838,9 +936,8 @@ interface ReaderProps {
   const normalizeText = (text: string) => {
     if (!text) return "";
     let refined = repairDropCapParagraphs(text);
-    refined = refined.replace(/(?:^|\n)\s*[-–—]?\s*Page\s+\d+\s*[-–—]?\s*(?=\n|$)/gim, "\n");
-    refined = refined.replace(/(?:^|\n)\s*第\s*\d+\s*页\s*(?=\n|$)/gim, "\n");
-    refined = refined.replace(/(?:^|\n)\s*\d{1,4}\s*(?=\n|$)/gm, "\n");
+    // 注意：页码过滤（Page N / 第N页 / 孤立数字行）统一由 preprocessTTSPlainText 负责，
+    // 此处不重复处理，避免双重匹配误伤正文中的数字段落。
     refined = refined.replace(/([A-Z])\s*[\r\n]+\s*([a-z])/g, "$1$2");
     refined = refined.replace(/-\s*[\r\n]+\s*/g, "");
     refined = refined.replace(/\r\n/g, "\n").replace(/\r/g, "\n");

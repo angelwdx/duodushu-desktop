@@ -1648,7 +1648,9 @@ export default function EPUBReader({
     try {
       const contents = renditionRef.current?.getContents();
       const body = contents?.[0]?.document?.body;
-      return preprocessTTSPlainText(body?.textContent?.trim() || '');
+      // 优先使用 innerText（按块状元素加换行），避免 textContent 把相邻 p 标签内容粘连成一个词
+      const rawText = body?.innerText || body?.textContent || '';
+      return preprocessTTSPlainText(rawText.trim());
     } catch {
       return '';
     }
