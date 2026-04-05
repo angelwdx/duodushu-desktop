@@ -392,6 +392,7 @@ interface ReaderProps {
   const [isEditingZoom, setIsEditingZoom] = useState(false);
   const [zoomInputValue, setZoomInputValue] = useState("100");
   const [pageTextForTTS, setPageTextForTTS] = useState("");
+  const [pageTextForTTSPage, setPageTextForTTSPage] = useState<number | null>(null);
   const [containerSize, setContainerSize] = useState<{
     width: number;
     height: number;
@@ -816,11 +817,27 @@ interface ReaderProps {
       }, 0);
     }
 
-    // 朗读/文本模式优先使用当前页实时提取结果。
-    // 这样即便数据库里是旧版本 PDF 解析结果，也能立刻改善当前阅读体验；
-    // 实时提取失败时再回退到后端落库文本。
+    // 文本模式和朗读统一优先使用后端落库文本，保证翻页路径一致。
+    // 只有后端该页文本为空时，才回退到 PDF.js 实时提取结果。
     const extractPageText = async () => {
-      const backendText = String(textContent || "").trim();
+      if (typeof textContent !== "string") {
+        return;
+      }
+
+      const backendText = textContent.trim();
+      if (backendText) {
+        setPageTextForTTS(backendText);
+        setPageTextForTTSPage(pageNumber);
+        if (onContentChange) {
+          try {
+            onContentChange(backendText);
+          } catch (err) {
+            // 静默处理
+          }
+        }
+        return;
+      }
+
       let extractedText = "";
       try {
         const textContentFromPDF = await page.getTextContent();
@@ -868,10 +885,11 @@ interface ReaderProps {
         console.error(`[PDFReader] Failed to extract text from page ${pageNumber}:`, error);
       }
 
-      const resolvedText = extractedText || backendText;
+      const resolvedText = backendText || extractedText;
       if (!resolvedText) return;
 
       setPageTextForTTS(resolvedText);
+      setPageTextForTTSPage(pageNumber);
       if (onContentChange) {
         try {
           onContentChange(resolvedText);
@@ -927,10 +945,18 @@ interface ReaderProps {
   };
 
   useEffect(() => {
-    setPageTextForTTS("");
+    setPageTextForTTS(textContent || "");
+    setPageTextForTTSPage(textContent ? pageNumber : null);
+  }, [pageNumber, textContent]);
+
+  useEffect(() => {
+    setPageTextForTTSPage((prev) => (prev === pageNumber ? prev : null));
   }, [pageNumber]);
 
   /* Moved goToPage up */
+
+  const resolvedPageText =
+    (pageTextForTTSPage === pageNumber ? pageTextForTTS : "") || textContent || "";
 
   const repairDropCapParagraphs = (text: string) => {
     if (!text) return "";
@@ -962,6 +988,27 @@ interface ReaderProps {
 
     for (let i = 0; i < paragraphs.length; i += 1) {
       const current = paragraphs[i];
+      const currentLines = current
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const trailingDropCap = currentLines.length >= 2 ? currentLines[currentLines.length - 1] : "";
+      const headingPrefix = currentLines.slice(0, -1).join("\n").trim();
+
+      if (
+        trailingDropCap &&
+        isDropCap(trailingDropCap) &&
+        headingPrefix &&
+        isLikelyHeadingOrCaption(headingPrefix) &&
+        i + 1 < paragraphs.length &&
+        startsWithLowercase(paragraphs[i + 1])
+      ) {
+        repaired.push(headingPrefix);
+        repaired.push(`${trailingDropCap}${paragraphs[i + 1]}`);
+        i += 1;
+        continue;
+      }
+
       if (!isDropCap(current)) {
         repaired.push(current);
         continue;
@@ -1012,8 +1059,8 @@ interface ReaderProps {
 
   // 全文朗读的文本来源与文本模式显示保持一致：都使用 normalizeText 处理后的文本
   const getPageText = useCallback((_page: number): string => {
-    return preprocessTTSPlainText(normalizeText(pageTextForTTS || ""));
-  }, [pageTextForTTS]);
+    return preprocessTTSPlainText(normalizeText(resolvedPageText));
+  }, [resolvedPageText]);
 
   const tts = useFullTextTTS({
     getPageText,
@@ -1028,7 +1075,7 @@ interface ReaderProps {
     : undefined;
 
   const renderTextMode = () => {
-    const rawTextForDisplay = pageTextForTTS || textContent || "";
+    const rawTextForDisplay = resolvedPageText;
     if (!rawTextForDisplay) {
       return (
         <div className="flex-1 flex items-center justify-center text-gray-400 p-10 bg-gray-50">

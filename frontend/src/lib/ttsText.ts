@@ -142,6 +142,61 @@ function insertHeadingPauses(text: string): string {
   return withPauses.join("\n\n");
 }
 
+function removeStandalonePageNumberParagraphs(text: string): string {
+  const paragraphs = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split(/\n\s*\n/);
+
+  const filtered = paragraphs.filter((paragraph) => {
+    const trimmed = paragraph.trim();
+    if (!trimmed) return false;
+
+    // 过滤常见孤立页码，例如 "44"、"- 44 -"、"Page 44"
+    if (/^[-–—]?\s*\d{1,4}\s*[-–—]?$/.test(trimmed)) return false;
+    if (/^[-–—]?\s*Page\s+\d{1,4}\s*[-–—]?$/i.test(trimmed)) return false;
+    if (/^第\s*\d{1,4}\s*页$/.test(trimmed)) return false;
+
+    return true;
+  });
+
+  return filtered.join("\n\n");
+}
+
+function removeDecorativeSymbolsForTTS(text: string): string {
+  let cleaned = text;
+
+  // 常见 EPUB 装饰字符、dingbats、几何图形、私有区字符，容易被 TTS 念成怪声或笑声。
+  cleaned = cleaned.replace(/[\uE000-\uF8FF]/g, " ");
+  cleaned = cleaned.replace(/[\u2190-\u21FF\u2300-\u23FF\u2460-\u27BF]/g, " ");
+  cleaned = cleaned.replace(/[\u25A0-\u25FF\u2600-\u26FF]/g, " ");
+  cleaned = cleaned.replace(/[\u2B00-\u2BFF\uFE0E\uFE0F]/g, " ");
+  cleaned = cleaned.replace(/[\u{1F300}-\u{1FAFF}]/gu, " ");
+
+  // 仅由装饰分隔符组成的短行直接移除。
+  cleaned = cleaned.replace(/(?:^|\n)\s*[~=_*#·•◆◇■□▪▫►▶▸▹★☆✦✧✪✩✶✷❖❥❦❧☙❀❁❂❃❈❉❊✿❋✽]+(?:\s+[~=_*#·•◆◇■□▪▫►▶▸▹★☆✦✧✪✩✶✷❖❥❦❧☙❀❁❂❃❈❉❊✿❋✽]+)*\s*(?=\n|$)/g, "\n");
+
+  // 压缩因符号清理产生的多余空白。
+  cleaned = cleaned.replace(/[ \t]{2,}/g, " ");
+  cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
+
+  return cleaned;
+}
+
+function normalizeQuotesForTTS(text: string): string {
+  let normalized = text;
+
+  // 保留单词内部的撇号，如 don't / it's / Wei Wuxian's
+  normalized = normalized.replace(/([A-Za-z])[\u2018\u2019]([A-Za-z])/g, "$1'$2");
+
+  // 其余装饰性引号统一移除，避免被 TTS 念成怪声。
+  normalized = normalized.replace(/["“”„‟«»‹›「」『』《》〈〉]/g, "");
+  normalized = normalized.replace(/[\u2018\u2019](?![A-Za-z])/g, "");
+  normalized = normalized.replace(/(?<![A-Za-z])[\u2018\u2019]/g, "");
+
+  return normalized;
+}
+
 export function preprocessTTSPlainText(text: string): string {
   if (!text) return "";
   let processed = text;
@@ -150,8 +205,11 @@ export function preprocessTTSPlainText(text: string): string {
   processed = processed.replace(/(?:^|\n)\s*[-–—]?\s*Page\s+\d+\s*[-–—]?\s*(?=\n|$)/gim, "\n");
   processed = processed.replace(/(?:^|\n)\s*第\s*\d+\s*页\s*(?=\n|$)/gim, "\n");
   processed = processed.replace(/(?:^|\n)\s*\d+\s*(?=\n|$)/gm, "\n");
+  processed = normalizeQuotesForTTS(processed);
+  processed = removeDecorativeSymbolsForTTS(processed);
   processed = repairBrokenEnglishWordsForTTS(processed);
   processed = insertHeadingPauses(processed);
+  processed = removeStandalonePageNumberParagraphs(processed);
 
   return processed.trim();
 }

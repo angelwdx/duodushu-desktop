@@ -148,7 +148,9 @@ function ReaderContent() {
     // Clear immediately to prevent stale data usage during race condition
     setPageData(null);
     log.debug('Fetching page data', { page: currentPage });
-    fetch(`${API_URL}/api/books/${id}/pages/${currentPage}`)
+    const controller = new AbortController();
+
+    fetch(`${API_URL}/api/books/${id}/pages/${currentPage}`, { signal: controller.signal })
       .then((res) => res.json())
       .then((data) => {
         log.debug('Page data received', {
@@ -157,8 +159,13 @@ function ReaderContent() {
         setPageData(data);
       })
       .catch((err) => {
+        if (err?.name === 'AbortError') {
+          return;
+        }
         log.error('Failed to fetch page data', err);
       });
+
+    return () => controller.abort();
   }, [id, currentPage]);
 
   // Save reading progress (debounced)
