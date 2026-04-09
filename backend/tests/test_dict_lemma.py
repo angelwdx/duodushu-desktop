@@ -1,9 +1,17 @@
 from pathlib import Path
 import sys
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services import dict_service
+
+
+@pytest.fixture(autouse=True)
+def clear_lemma_caches():
+    dict_service._get_ecdict_entry_info.cache_clear()
+    yield
+    dict_service._get_ecdict_entry_info.cache_clear()
 
 
 def test_get_lemma_candidates_handles_double_consonant_and_plural():
@@ -15,6 +23,35 @@ def test_get_lemma_candidates_handles_double_consonant_and_plural():
 
     candidates = dict_service._get_lemma_candidates("strewn", validate_candidates=False)
     assert "strew" in [candidate.lower() for candidate in candidates]
+
+    candidates = dict_service._get_lemma_candidates("scatter", validate_candidates=False)
+    assert "scat" not in [candidate.lower() for candidate in candidates]
+
+    candidates = dict_service._get_lemma_candidates("peer", validate_candidates=False)
+    assert "pe" not in [candidate.lower() for candidate in candidates]
+
+
+def test_get_lemma_candidates_handles_regular_and_irregular_inflections():
+    assert "large" in [candidate.lower() for candidate in dict_service._get_lemma_candidates("larger")]
+    assert "big" in [candidate.lower() for candidate in dict_service._get_lemma_candidates("biggest")]
+    assert "late" in [candidate.lower() for candidate in dict_service._get_lemma_candidates("later")]
+    assert "happy" in [candidate.lower() for candidate in dict_service._get_lemma_candidates("happier")]
+    assert "early" in [candidate.lower() for candidate in dict_service._get_lemma_candidates("earlier")]
+    assert "movie" in [candidate.lower() for candidate in dict_service._get_lemma_candidates("movies")]
+    assert "die" in [candidate.lower() for candidate in dict_service._get_lemma_candidates("died")]
+    assert "have" in [candidate.lower() for candidate in dict_service._get_lemma_candidates("has")]
+    assert "be" in [candidate.lower() for candidate in dict_service._get_lemma_candidates("is")]
+    assert "good" in [candidate.lower() for candidate in dict_service._get_lemma_candidates("best")]
+
+
+def test_get_lemma_candidates_avoids_common_false_positives():
+    assert "care" not in [candidate.lower() for candidate in dict_service._get_lemma_candidates("career")]
+    assert "carry" not in [candidate.lower() for candidate in dict_service._get_lemma_candidates("carrier")]
+    assert "fore" not in [candidate.lower() for candidate in dict_service._get_lemma_candidates("forest")]
+    assert "thi" not in [candidate.lower() for candidate in dict_service._get_lemma_candidates("this")]
+    assert "hi" not in [candidate.lower() for candidate in dict_service._get_lemma_candidates("his")]
+    assert "her" not in [candidate.lower() for candidate in dict_service._get_lemma_candidates("hers")]
+    assert "ye" not in [candidate.lower() for candidate in dict_service._get_lemma_candidates("yes")]
 
 
 def test_lookup_word_all_sources_falls_back_to_lemma_ecdict(monkeypatch):

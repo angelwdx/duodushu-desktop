@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Set, Tuple
+from functools import lru_cache
 from ..models.models import CacheDictionary
 from ..services import (
     cache_service,
@@ -196,6 +197,16 @@ _EXCEPTION_WORDS = {
         "leather",
         "gather",
         "together",
+        "scatter",
+        "chapter",
+        "character",
+        "monster",
+        "shelter",
+        "winter",
+        "summer",
+        "finger",
+        "shoulder",
+        "peer",
     },
     "est": {
         # 以 -est 结尾但不是最高级的词
@@ -212,6 +223,9 @@ _EXCEPTION_WORDS = {
 }
 
 _IRREGULAR_LEMMAS = {
+    "am": "be",
+    "are": "be",
+    "is": "be",
     "strewn": "strew",
     "strove": "strive",
     "driven": "drive",
@@ -225,6 +239,8 @@ _IRREGULAR_LEMMAS = {
     "went": "go",
     "seen": "see",
     "saw": "see",
+    "has": "have",
+    "had": "have",
     "done": "do",
     "did": "do",
     "been": "be",
@@ -232,7 +248,69 @@ _IRREGULAR_LEMMAS = {
     "were": "be",
     "given": "give",
     "gave": "give",
+    "better": "good",
+    "best": "good",
+    "worse": "bad",
+    "worst": "bad",
+    "farther": "far",
+    "further": "far",
+    "farthest": "far",
+    "furthest": "far",
 }
+
+_NOUN_VERB_POS = {"n", "v"}
+_VERB_LIKE_POS = {"n", "v", "j"}
+_COMPARATIVE_POS = {"j", "r"}
+
+
+@lru_cache(maxsize=4096)
+def _get_ecdict_entry_info(word: str) -> Tuple[bool, Tuple[str, ...]]:
+    details = ecdict_service.get_word_details(word)
+    if not details:
+        return False, ()
+
+    pos_value = details.get("pos") or ""
+    tags: List[str] = []
+    for part in pos_value.split("/"):
+        tag = part.split(":", 1)[0].strip().lower().rstrip(".")
+        normalized_tag = {
+            "noun": "n",
+            "n": "n",
+            "verb": "v",
+            "v": "v",
+            "adj": "j",
+            "adjective": "j",
+            "j": "j",
+            "adv": "r",
+            "adverb": "r",
+            "r": "r",
+            "det": "d",
+            "determiner": "d",
+            "d": "d",
+            "pron": "p",
+            "pronoun": "p",
+            "p": "p",
+        }.get(tag, tag)
+        if normalized_tag:
+            tags.append(normalized_tag)
+
+    return True, tuple(tags)
+
+
+def _supports_inflection(word: str, allowed: Set[str]) -> bool:
+    exists, tags = _get_ecdict_entry_info(word)
+    if not exists or not tags:
+        return True
+    return bool(set(tags) & allowed)
+
+
+def _candidate_exists(candidate: str) -> bool:
+    exists, _ = _get_ecdict_entry_info(candidate)
+    if exists:
+        return True
+
+    dict_manager = get_dict_manager()
+    return bool(dict_manager and dict_manager.word_exists(candidate))
 
 
 def _get_lemma_candidates(word: str, validate_candidates: bool = True) -> List[str]:
@@ -248,19 +326,21 @@ def _get_lemma_candidates(word: str, validate_candidates: bool = True) -> List[s
     Returns:
         可能的原型词列表（按优先级排序）
     """
-    candidates = []
+    candidates: List[Tuple[str, str]] = []
     word_lower = word.lower()
 
-    def add_candidate(candidate: str) -> None:
+    def add_candidate(candidate: str, kind: str) -> None:
         if not candidate:
             return
         if candidate.lower() == word_lower:
             return
-        candidates.append(candidate)
+        candidates.append((candidate, kind))
 
     irregular = _IRREGULAR_LEMMAS.get(word_lower)
     if irregular:
-        add_candidate(irregular)
+        if validate_candidates:
+            return _validate_lemma_candidates(word_lower, [(irregular, "irregular")])
+        return [irregular]
 
     # 1. 检查例外列表：如果原词在例外列表中，直接返回空列表
     for suffix, words in _EXCEPTION_WORDS.items():
@@ -269,90 +349,106 @@ def _get_lemma_candidates(word: str, validate_candidates: bool = True) -> List[s
 
     # 2. 复数形式还原
     if word_lower.endswith("ies"):
-        # cities -> city
-        add_candidate(word[:-3] + "y")
-    if word_lower.endswith(("ses", "xes", "zes", "ches", "shes", "oes")):
+        if _supports_inflection(word_lower, _NOUN_VERB_POS):
+            # cities -> city, movies -> movie
+            add_candidate(word[:-3] + "y", "plural")
+            add_candidate(word[:-1], "plural")
+    elif word_lower.endswith(("ses", "xes", "zes", "ches", "shes", "oes")):
         # boxes -> box, watches -> watch, heroes -> hero
-        add_candidate(word[:-2])
+        if _supports_inflection(word_lower, _NOUN_VERB_POS):
+            add_candidate(word[:-2], "plural")
     elif word_lower.endswith("es") and len(word) > 3:
-        add_candidate(word[:-1])
-        add_candidate(word[:-2])
-    if word_lower.endswith("s") and not word_lower.endswith("ss"):
+        if _supports_inflection(word_lower, _NOUN_VERB_POS):
+            add_candidate(word[:-1], "plural")
+            add_candidate(word[:-2], "plural")
+    elif word_lower.endswith("s") and not word_lower.endswith("ss"):
         # deserts -> desert, books -> book
-        add_candidate(word[:-1])
+        if _supports_inflection(word_lower, _NOUN_VERB_POS):
+            add_candidate(word[:-1], "plural")
 
     # 3. 过去式/过去分词还原
     if word_lower.endswith("ied"):
-        # studied -> study
-        add_candidate(word[:-3] + "y")
-    if word_lower.endswith("ed"):
+        if _supports_inflection(word_lower, _VERB_LIKE_POS):
+            # studied -> study, died -> die
+            add_candidate(word[:-3] + "y", "verb")
+            add_candidate(word[:-1], "verb")
+    elif word_lower.endswith("ed"):
         # spotted -> spot, stopped -> stop
-        if len(word) > 4 and word[-3].lower() == word[-4].lower():
-            add_candidate(word[:-3])
-        # walked -> walk
-        add_candidate(word[:-2])
-        # loved -> love
-        add_candidate(word[:-1])
+        if _supports_inflection(word_lower, _VERB_LIKE_POS):
+            if len(word) > 4 and word[-3].lower() == word[-4].lower():
+                add_candidate(word[:-3], "verb")
+            # walked -> walk
+            add_candidate(word[:-2], "verb")
+            # loved -> love
+            add_candidate(word[:-1], "verb")
 
     # 4. 进行时还原
     if word_lower.endswith("ing"):
-        # running -> run (双写辅音)
-        if len(word) > 5 and word[-4].lower() == word[-5].lower():
-            add_candidate(word[:-4])
-        # loving -> love
-        add_candidate(word[:-3] + "e")
-        # running -> run, walking -> walk
-        add_candidate(word[:-3])
-        # panicking -> panic
-        if word_lower.endswith("cking"):
-            add_candidate(word[:-3])
-            add_candidate(word[:-4])
+        if _supports_inflection(word_lower, _VERB_LIKE_POS):
+            # running -> run (双写辅音)
+            if len(word) > 5 and word[-4].lower() == word[-5].lower():
+                add_candidate(word[:-4], "verb")
+            # loving -> love
+            add_candidate(word[:-3] + "e", "verb")
+            # running -> run, walking -> walk
+            add_candidate(word[:-3], "verb")
+            # panicking -> panic
+            if word_lower.endswith("cking"):
+                add_candidate(word[:-3], "verb")
+                add_candidate(word[:-4], "verb")
 
     # 5. 比较级/最高级还原
-    if word_lower.endswith("er"):
-        # bigger -> big (双写辅音)
-        if len(word) > 4 and word[-3].lower() == word[-4].lower():
-            add_candidate(word[:-3])
-        # larger -> large
-        add_candidate(word[:-2])
-    if word_lower.endswith("est"):
-        add_candidate(word[:-3])
-        add_candidate(word[:-2])  # largest -> large
-    if word_lower.endswith("ier"):
-        add_candidate(word[:-3] + "y")  # happier -> happy
     if word_lower.endswith("iest"):
-        add_candidate(word[:-4] + "y")  # happiest -> happy
+        if _supports_inflection(word_lower, _COMPARATIVE_POS):
+            add_candidate(word[:-4] + "y", "superlative")  # happiest -> happy
+    elif word_lower.endswith("ier"):
+        if _supports_inflection(word_lower, _COMPARATIVE_POS):
+            add_candidate(word[:-3] + "y", "comparative")  # happier -> happy
+    elif word_lower.endswith("est"):
+        if _supports_inflection(word_lower, _COMPARATIVE_POS):
+            if len(word) > 5 and word[-4].lower() == word[-5].lower():
+                add_candidate(word[:-4], "superlative")  # biggest -> big
+            add_candidate(word[:-2], "superlative")  # largest -> large
+            add_candidate(word[:-3], "superlative")  # fastest -> fast
+    elif word_lower.endswith("er"):
+        if _supports_inflection(word_lower, _COMPARATIVE_POS):
+            if len(word) > 4 and word[-3].lower() == word[-4].lower():
+                add_candidate(word[:-3], "comparative")  # bigger -> big
+            add_candidate(word[:-1], "comparative")  # larger -> large
+            add_candidate(word[:-2], "comparative")  # faster -> fast
 
     # 6. 去重并保序
-    deduped_candidates: List[str] = []
+    deduped_candidates: List[Tuple[str, str]] = []
     seen = set()
-    for candidate in candidates:
+    for candidate, kind in candidates:
         lower_candidate = candidate.lower()
         if lower_candidate in seen:
             continue
         seen.add(lower_candidate)
-        deduped_candidates.append(candidate)
+        deduped_candidates.append((candidate, kind))
 
     # 7. 可选：验证候选词是否在词典中存在
     if validate_candidates:
-        return _validate_lemma_candidates(deduped_candidates)
+        return _validate_lemma_candidates(word_lower, deduped_candidates)
 
-    return deduped_candidates
+    return [candidate for candidate, _ in deduped_candidates]
 
 
-def _validate_lemma_candidates(candidates: List[str]) -> List[str]:
+def _validate_lemma_candidates(original_word: str, candidates: List[Tuple[str, str]]) -> List[str]:
     """
     验证候选词是否在词典中存在。
 
     Args:
+        original_word: 原始查询词
         candidates: 原始候选词列表
 
     Returns:
         验证后的候选词列表（只包含在词典中存在的词）
     """
-    valid_candidates = []
+    valid_candidates: List[str] = []
+    original_supports_comparison = _supports_inflection(original_word, _COMPARATIVE_POS)
 
-    for lemma in candidates:
+    for lemma, kind in candidates:
         # 过滤过短的词
         if len(lemma) < 2:
             continue
@@ -361,10 +457,34 @@ def _validate_lemma_candidates(candidates: List[str]) -> List[str]:
         if len(lemma) <= 2 and not lemma.isalpha():
             continue
 
-        dict_manager = get_dict_manager()
+        exists_in_ecdict, pos_tags = _get_ecdict_entry_info(lemma)
+        pos_set = set(pos_tags)
 
-        # 查询词典或 ECDICT 验证存在性
-        if (dict_manager and dict_manager.word_exists(lemma)) or ecdict_service.get_word_details(lemma):
+        if kind in {"comparative", "superlative"}:
+            if not original_supports_comparison:
+                continue
+            if pos_set:
+                if pos_set & _COMPARATIVE_POS:
+                    valid_candidates.append(lemma)
+            continue
+
+        if kind == "plural":
+            if pos_set:
+                if pos_set & _NOUN_VERB_POS:
+                    valid_candidates.append(lemma)
+            elif not exists_in_ecdict and _candidate_exists(lemma):
+                valid_candidates.append(lemma)
+            continue
+
+        if kind == "verb":
+            if pos_set:
+                if pos_set & _VERB_LIKE_POS:
+                    valid_candidates.append(lemma)
+            elif not exists_in_ecdict and _candidate_exists(lemma):
+                valid_candidates.append(lemma)
+            continue
+
+        if _candidate_exists(lemma):
             valid_candidates.append(lemma)
 
     return valid_candidates
@@ -499,7 +619,7 @@ def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
                     result_word = result.get("word")
                     if result_word and result_word.lower() != original_word.lower():
                         matched_word = result_word
-                        if result_word.lower() in [candidate.lower() for candidate in _get_lemma_candidates(original_word, validate_candidates=False)]:
+                        if result_word.lower() in [candidate.lower() for candidate in _get_lemma_candidates(original_word, validate_candidates=True)]:
                             matched_lemma = result_word
 
                     supplement = ecdict_service.get_word_details(matched_word) or ecdict_service.get_word_details(original_word)
