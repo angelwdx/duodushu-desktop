@@ -126,6 +126,24 @@ function setupAutoUpdater() {
     return;
   }
 
+  const getUpdaterErrorMessage = (err: any) => {
+    if (!err) return '';
+    if (typeof err === 'string') return err;
+    if (typeof err.message === 'string') return err.message;
+    return util.inspect(err);
+  };
+
+  const isMissingReleaseMetadataError = (err: any) => {
+    const message = getUpdaterErrorMessage(err).toLowerCase();
+    return (
+      message.includes('cannot find latest-mac.yml') ||
+      message.includes('cannot find latest.yml') ||
+      message.includes('no published versions on github') ||
+      (message.includes('latest-mac.yml') && message.includes('404')) ||
+      (message.includes('latest.yml') && message.includes('404'))
+    );
+  };
+
   autoUpdater.logger = {
     info: (msg: any) => logToFile(`[AutoUpdater] ${msg}`),
     warn: (msg: any) => logToFile(`[AutoUpdater WARN] ${msg}`),
@@ -162,6 +180,11 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('error', (err) => {
+    if (isMissingReleaseMetadataError(err)) {
+      logToFile(`AutoUpdater: 跳过缺失的发布元数据错误: ${getUpdaterErrorMessage(err)}`);
+      mainWindow?.webContents.send('updater-event', { type: 'not-available' });
+      return;
+    }
     logErrorToFile('AutoUpdater error', err);
     mainWindow?.webContents.send('updater-event', { type: 'error', message: err.message });
   });
@@ -172,6 +195,11 @@ function setupAutoUpdater() {
       await autoUpdater.checkForUpdates();
       return { success: true };
     } catch (e: any) {
+      if (isMissingReleaseMetadataError(e)) {
+        logToFile(`AutoUpdater: 手动检查更新时未找到发布元数据，忽略错误: ${getUpdaterErrorMessage(e)}`);
+        mainWindow?.webContents.send('updater-event', { type: 'not-available' });
+        return { success: true };
+      }
       logErrorToFile('手动检查更新失败', e);
       return { success: false, message: e.message };
     }
@@ -185,6 +213,11 @@ function setupAutoUpdater() {
   // 应用就绪后延迟 5 秒检查更新（避免阻塞启动）
   setTimeout(() => {
     autoUpdater.checkForUpdatesAndNotify().catch((e) => {
+      if (isMissingReleaseMetadataError(e)) {
+        logToFile(`AutoUpdater: 自动检查更新时未找到发布元数据，忽略错误: ${getUpdaterErrorMessage(e)}`);
+        mainWindow?.webContents.send('updater-event', { type: 'not-available' });
+        return;
+      }
       logErrorToFile('自动检查更新失败', e);
     });
   }, 5000);
