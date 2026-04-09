@@ -45,7 +45,8 @@ def test_lookup_word_all_sources_falls_back_to_lemma_ecdict(monkeypatch):
     result = dict_service.lookup_word_all_sources(db=None, word="spotted")
 
     assert result is not None
-    assert result["word"] == "spotted"
+    assert result["word"] == "spot"
+    assert result["lookup_term"] == "spotted"
     assert result["lemma_from"] == "spot"
     assert result["source"] == "ECDICT"
 
@@ -93,12 +94,12 @@ def test_lookup_word_all_sources_tries_lemma_per_dictionary(monkeypatch):
     result = dict_service.lookup_word_all_sources(db=None, word="flecks")
 
     assert result is not None
-    assert result["word"] == "flecks"
+    assert result["word"] == "fleck"
     assert result["lookup_term"] == "flecks"
     assert result["multiple_sources"] is True
     assert len(result["results"]) == 2
     lemma_result = next(item for item in result["results"] if item["source"] == "LemmaDict")
-    assert lemma_result["word"] == "flecks"
+    assert lemma_result["word"] == "fleck"
     assert lemma_result["lookup_term"] == "flecks"
     assert lemma_result["lemma_from"] == "fleck"
 
@@ -134,6 +135,54 @@ def test_lookup_word_keeps_original_lookup_term_when_dictionary_redirects(monkey
     result = dict_service.lookup_word(db=None, word="strewn", source="LemmaDict")
 
     assert result is not None
-    assert result["word"] == "strewn"
+    assert result["word"] == "strew"
     assert result["lookup_term"] == "strewn"
     assert result["lemma_from"] == "strew"
+
+
+def test_lookup_word_prefers_lemma_before_original(monkeypatch):
+    class StubDictManager:
+        def lookup_word(self, word, source=None):
+            if source == "LemmaDict" and word == "spot":
+                return {
+                    "word": "spot",
+                    "meanings": [{"partOfSpeech": "v.", "definitions": [{"definition": "notice"}]}],
+                }
+            if source == "LemmaDict" and word == "spotted":
+                return {
+                    "word": "spotted",
+                    "meanings": [{"partOfSpeech": "adj.", "definitions": [{"definition": "marked with spots"}]}],
+                }
+            return None
+
+        def word_exists(self, word):
+            return word == "spot"
+
+    def fake_get_word_details(word):
+        if word == "spot":
+            return {
+                "word": "spot",
+                "phonetic": "/spɒt/",
+                "translation": "发现",
+                "definition": "notice",
+                "pos": "v.",
+            }
+        if word == "spotted":
+            return {
+                "word": "spotted",
+                "phonetic": "/ˈspɒtɪd/",
+                "translation": "有斑点的",
+                "definition": "marked with spots",
+                "pos": "adj.",
+            }
+        return None
+
+    monkeypatch.setattr(dict_service, "get_dict_manager", lambda: StubDictManager())
+    monkeypatch.setattr(dict_service.ecdict_service, "get_word_details", fake_get_word_details)
+
+    result = dict_service.lookup_word(db=None, word="spotted", source="LemmaDict")
+
+    assert result is not None
+    assert result["word"] == "spot"
+    assert result["lookup_term"] == "spotted"
+    assert result["lemma_from"] == "spot"

@@ -62,7 +62,11 @@ function DictionarySidebar({
   const inputRef = useRef<HTMLInputElement>(null);
   const translateAbortControllerRef = useRef<AbortController | null>(null);
   const translateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const queryWord = wordData?.lookup_term || wordData?.word || "";
+  const queryWord = wordData?.word || wordData?.lookup_term || "";
+  const clickedWord =
+    wordData?.lookup_term && wordData.lookup_term !== wordData.word
+      ? wordData.lookup_term
+      : "";
 
   // 播放单词发音（使用Edge TTS）
   const playWordAudio = async () => {
@@ -386,6 +390,11 @@ function DictionarySidebar({
                   <h2 className="text-2xl font-bold text-gray-900 leading-tight">
                     {wordData.word}
                   </h2>
+                  {clickedWord && (
+                    <div className="text-xs text-gray-400 mt-1">
+                      clicked: {clickedWord}
+                    </div>
+                  )}
                   {wordData.phonetic && (
                     <div
                       className="ipa-phonetic text-slate-500 font-medium tracking-wide text-sm mt-1"

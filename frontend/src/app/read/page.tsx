@@ -574,7 +574,8 @@ function ReaderContent() {
 
       // Check if sourceOrContext is a dictionary source ID
       // 改进判断逻辑:如果是同一个词的查询,且参数较短(不像句子),则认为是切换词典源
-      const isSwitchingSource = activeWord?.word === word && sourceOrContext && sourceOrContext.length < 50 && !sourceOrContext.includes(' ');
+      const activeLookupTerm = activeWord?.lookup_term || activeWord?.word;
+      const isSwitchingSource = activeLookupTerm === word && sourceOrContext && sourceOrContext.length < 50 && !sourceOrContext.includes(' ');
       const isSource = isSwitchingSource;
 
       // Priority for context sentence:
@@ -616,7 +617,7 @@ function ReaderContent() {
       // Optimistic set with context
       // CRITICAL FIX: If querying the same word (e.g. switching tabs), 
       // preserve existing data (chinese_translation, phonetic, etc.) to prevent UI flashing
-      if (activeWord?.word === word) {
+      if (activeLookupTerm === word) {
         setActiveWord((prev: any) => ({
           ...prev,
           context_sentence: contextSentence,
@@ -660,7 +661,7 @@ function ReaderContent() {
         try {
           if (id) {
             await trackWordQuery({
-              word: word,
+              word: data?.word || word,
               bookId: id,
               pageNumber: currentPage,
             });
