@@ -139,8 +139,6 @@ function inferOcrJoinedSegments(text: string): LookupSegment[] {
 
     if (OCR_JOIN_STOPWORDS.has(right) && left.length >= 4) {
       score = left.length * 2 - right.length;
-    } else if (OCR_JOIN_STOPWORDS.has(left) && right.length >= 4) {
-      score = right.length * 2 - left.length - 1;
     } else if (right.length <= 3 && OCR_JOIN_STOPWORDS.has(right.slice(-2))) {
       score = left.length - 6;
     }

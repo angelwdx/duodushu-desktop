@@ -16,6 +16,8 @@ interface Meaning {
 
 interface DictionaryData {
   word: string;
+  lookup_term?: string;
+  lemma_from?: string;
   phonetic?: string;
   audio_url?: string;
   meanings?: Meaning[];
@@ -60,6 +62,7 @@ function DictionarySidebar({
   const inputRef = useRef<HTMLInputElement>(null);
   const translateAbortControllerRef = useRef<AbortController | null>(null);
   const translateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const queryWord = wordData?.lookup_term || wordData?.word || "";
 
   // 播放单词发音（使用Edge TTS）
   const playWordAudio = async () => {
@@ -307,10 +310,10 @@ function DictionarySidebar({
 
   // 同步 Search Term
   useEffect(() => {
-    if (wordData?.word) {
-      setSearchTerm(wordData.word);
+    if (queryWord) {
+      setSearchTerm(queryWord);
     }
-  }, [wordData]);
+  }, [queryWord]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -562,8 +565,8 @@ function DictionarySidebar({
                     onClick={() => {
                       if (activeTab === source.id) return;
                       setActiveTab(source.id);
-                      if (wordData?.word) {
-                        onSearch(wordData.word, source.id);
+                      if (queryWord) {
+                        onSearch(queryWord, source.id);
                       }
                     }}
                     disabled={loading}

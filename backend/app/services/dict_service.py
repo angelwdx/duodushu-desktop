@@ -211,6 +211,29 @@ _EXCEPTION_WORDS = {
     },
 }
 
+_IRREGULAR_LEMMAS = {
+    "strewn": "strew",
+    "strove": "strive",
+    "driven": "drive",
+    "written": "write",
+    "wrote": "write",
+    "spoken": "speak",
+    "spoke": "speak",
+    "taken": "take",
+    "took": "take",
+    "gone": "go",
+    "went": "go",
+    "seen": "see",
+    "saw": "see",
+    "done": "do",
+    "did": "do",
+    "been": "be",
+    "was": "be",
+    "were": "be",
+    "given": "give",
+    "gave": "give",
+}
+
 
 def _get_lemma_candidates(word: str, validate_candidates: bool = True) -> List[str]:
     """
@@ -234,6 +257,10 @@ def _get_lemma_candidates(word: str, validate_candidates: bool = True) -> List[s
         if candidate.lower() == word_lower:
             return
         candidates.append(candidate)
+
+    irregular = _IRREGULAR_LEMMAS.get(word_lower)
+    if irregular:
+        add_candidate(irregular)
 
     # 1. 检查例外列表：如果原词在例外列表中，直接返回空列表
     for suffix, words in _EXCEPTION_WORDS.items():
@@ -378,6 +405,27 @@ def _should_try_lemma(original_word: str, mdx_res: Dict) -> bool:
     return True
 
 
+def _annotate_lookup_result(
+    result: Optional[Dict],
+    original_word: str,
+    matched_word: Optional[str] = None,
+    lemma_from: Optional[str] = None,
+) -> Optional[Dict]:
+    if not result:
+        return None
+
+    matched = matched_word or result.get("word")
+    result["lookup_term"] = original_word
+    result["word"] = original_word
+
+    if lemma_from:
+        result["lemma_from"] = lemma_from
+    elif matched and matched.lower() != original_word.lower():
+        result["matched_word"] = matched
+
+    return result
+
+
 def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
     """Look up word in ALL active dictionaries and return aggregated results.
 
@@ -406,64 +454,55 @@ def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
             # 没有启用的导入词典，直接跳过，后续会回退到 ECDICT
             pass
 
-        # 查询所有启用的词典
+        # 查询所有启用的词典。对每本词典分别做词形还原，避免聚合查询和单词典查询口径不一致。
         results = []
+        lemma_candidates = _get_lemma_candidates(original_word, validate_candidates=False)
         for dict_name in active_imported_dicts:
             try:
+                matched_word = original_word
+                matched_lemma = None
                 result = dict_manager.lookup_word(word, source=dict_name)
+
+                if not result:
+                    for lemma in lemma_candidates:
+                        try:
+                            lemma_result = dict_manager.lookup_word(lemma, source=dict_name)
+                        except Exception as e:
+                            logger.warning(f"Failed lemma lookup in {dict_name} for {lemma}: {e}")
+                            continue
+
+                        if lemma_result:
+                            result = lemma_result
+                            matched_word = lemma
+                            matched_lemma = lemma
+                            break
+
                 if result:
-                    # 添加 ECDICT 翻译和音标
-                    ecdict_data = ecdict_service.get_word_details(word)
-                    if ecdict_data:
-                        if ecdict_data.get("translation"):
-                            result["chinese_translation"] = ecdict_data["translation"]
-                        if ecdict_data.get("phonetic"):
-                            result["phonetic"] = ecdict_data["phonetic"]
+                    supplement = ecdict_service.get_word_details(matched_word) or ecdict_service.get_word_details(original_word)
+                    if supplement:
+                        if supplement.get("translation"):
+                            result["chinese_translation"] = supplement["translation"]
+                        if supplement.get("phonetic"):
+                            result["phonetic"] = supplement["phonetic"]
+
+                    result = _annotate_lookup_result(
+                        result,
+                        original_word=original_word,
+                        matched_word=matched_word,
+                        lemma_from=matched_lemma,
+                    )
                     results.append({"source_label": dict_name, "source": dict_name, **result})
             except Exception as e:
                 logger.warning(f"Failed to lookup in {dict_name}: {e}")
                 continue
 
         if not results:
-            lemma_candidates = _get_lemma_candidates(original_word, validate_candidates=False)
-            for lemma in lemma_candidates:
-                lemma_results = []
-                for dict_name in active_imported_dicts:
-                    try:
-                        result = dict_manager.lookup_word(lemma, source=dict_name)
-                        if result:
-                            lemma_ecdict = ecdict_service.get_word_details(lemma)
-                            if lemma_ecdict:
-                                if lemma_ecdict.get("translation"):
-                                    result["chinese_translation"] = lemma_ecdict["translation"]
-                                if lemma_ecdict.get("phonetic"):
-                                    result["phonetic"] = lemma_ecdict["phonetic"]
-                            result["word"] = original_word
-                            result["lemma_from"] = lemma
-                            lemma_results.append({"source_label": dict_name, "source": dict_name, **result})
-                    except Exception as e:
-                        logger.warning(f"Failed lemma lookup in {dict_name} for {lemma}: {e}")
-                        continue
-
-                if lemma_results:
-                    if len(lemma_results) == 1:
-                        return lemma_results[0]
-
-                    lemma_ecdict = ecdict_service.get_word_details(lemma)
-                    return {
-                        "word": original_word,
-                        "lemma_from": lemma,
-                        "multiple_sources": True,
-                        "results": lemma_results,
-                        "phonetic": lemma_ecdict.get("phonetic") if lemma_ecdict else None,
-                        "chinese_translation": lemma_ecdict.get("translation") if lemma_ecdict else None,
-                    }
-
             # 所有导入词典都没找到，返回 ECDICT 结果
             ecdict_data = ecdict_service.get_word_details(word)
             if ecdict_data:
                 return {
-                    "word": ecdict_data.get("word"),
+                    "word": original_word,
+                    "lookup_term": original_word,
                     "phonetic": ecdict_data.get("phonetic"),
                     "chinese_translation": ecdict_data.get("translation"),
                     "source": "ECDICT",
@@ -487,6 +526,7 @@ def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
                 if lemma_ecdict:
                     return {
                         "word": original_word,
+                        "lookup_term": original_word,
                         "lemma_from": lemma,
                         "phonetic": lemma_ecdict.get("phonetic"),
                         "chinese_translation": lemma_ecdict.get("translation"),
@@ -560,7 +600,8 @@ Return ONLY the JSON, no other text."""
 
                     # 构造返回结果
                     result = {
-                        "word": ai_data.get("word", word),
+                        "word": original_word,
+                        "lookup_term": original_word,
                         "source": "AI",
                         "is_ai": True,
                         "phonetic": ai_data.get("phonetic", ""),
@@ -613,6 +654,7 @@ Return ONLY the JSON, no other text."""
 
         return {
             "word": original_word,
+            "lookup_term": original_word,
             "multiple_sources": True,
             "results": results,
             "phonetic": phonetic,
@@ -683,6 +725,21 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
             # 始终使用 ECDICT 的音标，覆盖导入词典的音标
             if ecdict_phonetic:
                 imported_res["phonetic"] = ecdict_phonetic
+            matched_word = imported_res.get("word")
+            imported_res = _annotate_lookup_result(
+                imported_res,
+                original_word=original_word,
+                matched_word=matched_word,
+            )
+            if matched_word and matched_word.lower() != original_word.lower():
+                matched_ecdict = ecdict_service.get_word_details(matched_word)
+                if matched_ecdict:
+                    if not imported_res.get("chinese_translation") and matched_ecdict.get("translation"):
+                        imported_res["chinese_translation"] = matched_ecdict["translation"]
+                    if not imported_res.get("phonetic") and matched_ecdict.get("phonetic"):
+                        imported_res["phonetic"] = matched_ecdict["phonetic"]
+                    if matched_word.lower() in [candidate.lower() for candidate in _get_lemma_candidates(original_word, validate_candidates=False)]:
+                        imported_res["lemma_from"] = matched_word
             return imported_res
 
     # 1.5. 尝试词形还原后重新查询 MDX（仅在 MDX 查询失败时）
@@ -696,8 +753,12 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
                     if lemma_result:
                         logger.info(f"Found via lemma reduction: '{original_word}' → '{lemma}'")
                         # 用原词作为显示词，但使用 lemma 的释义
-                        lemma_result["word"] = original_word
-                        lemma_result["lemma_from"] = lemma
+                        lemma_result = _annotate_lookup_result(
+                            lemma_result,
+                            original_word=original_word,
+                            matched_word=lemma,
+                            lemma_from=lemma,
+                        )
                         # 补充 ECDICT 翻译和音标
                         lemma_cn_translation = ecdict_service.get_translation(lemma)
                         if lemma_cn_translation:
@@ -720,7 +781,8 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
         if db_res:
             data = db_res.data
             result = {
-                "word": db_res.word,
+                "word": original_word,
+                "lookup_term": original_word,
                 "meanings": data.get("meanings", []),
                 "chinese_summary": data.get("chinese_summary"),
                 "chinese_translation": data.get("chinese_translation"),
@@ -735,7 +797,8 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
     if ecdict_data:
         # Map ECDICT fields to frontend expected structure
         result = {
-            "word": ecdict_data.get("word"),
+            "word": original_word,
+            "lookup_term": original_word,
             "phonetic": ecdict_data.get("phonetic"),
             "chinese_translation": cn_translation,
             "source": "ECDICT",
@@ -797,6 +860,8 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
                         ai_result = json.loads(response_text)
                         ai_result["source"] = "AI"
                         ai_result["cached"] = False
+                        ai_result["lookup_term"] = original_word
+                        ai_result["word"] = original_word
 
                         # 如果 ECDICT 有翻译，优先使用 ECDICT 的翻译
                         if cn_translation:
@@ -825,7 +890,8 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
 
                 # Extract relevant data
                 result = {
-                    "word": entry.get("word"),
+                    "word": original_word,
+                    "lookup_term": original_word,
                     "phonetic": entry.get("phonetic"),
                     "audio_url": next(
                         (p["audio"] for p in entry.get("phonetics", []) if p.get("audio")),
@@ -852,7 +918,8 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
 
     # 如果没有指定 source，返回默认的错误页面
     return {
-        "word": word,
+        "word": original_word,
+        "lookup_term": original_word,
         "phonetic": "/.../",
         "meanings": [],
         "html_content": f"<div class='error'>No definition found for '{word}'</div>",

@@ -46,5 +46,18 @@
     "text": "streaksof",
     "expected": ["streaks", "of"],
     "note": "OCR 粘连词应能产出可点击子词段"
+  },
+  {
+    "kind": "click_ratio",
+    "text": "themselves",
+    "ratio": 0.2,
+    "expected": "themselves",
+    "note": "正常单词不应因为前缀是 stopword 而被误拆"
+  },
+  {
+    "kind": "segments",
+    "text": "themselves",
+    "expected": ["themselves"],
+    "note": "正常单词应保持单段"
   }
 ]
