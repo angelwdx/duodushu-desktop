@@ -7,11 +7,12 @@
     "dev": "npm-run-all --parallel dev:frontend dev:electron",
     "dev:frontend": "cd frontend && npm run dev",
     "dev:electron": "wait-on tcp:3000 && tsc -p electron && electron .",
-    "build": "npm run build:frontend && npm run build:backend && npm run build:electron && npm run package",
+    "build": "npm run build:frontend && npm run build:backend && npm run build:electron && npm run package:dist",
     "build:frontend": "cd frontend && npm run build",
-    "build:backend": "cd backend && pyinstaller backend.spec --noconfirm --clean",
+    "build:backend": "cd backend && .venv/bin/pyinstaller backend.spec --noconfirm --clean",
     "build:electron": "tsc -p electron",
-    "package": "electron-builder"
+    "package": "npm run build:frontend && npm run build:backend && npm run build:electron && npm run package:dist",
+    "package:dist": "electron-builder"
   },
   "keywords": [
     "electron",
