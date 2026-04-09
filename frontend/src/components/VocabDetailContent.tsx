@@ -6,6 +6,7 @@ import {
   updateVocabularyMastery,
   translateText,
   lookupWord,
+  checkExtractionStatus,
   extractExamplesManual,
   checkTranslationConfigured,
 } from "../lib/api";
@@ -435,18 +436,44 @@ export default function VocabDetailContent({
     setRightSidebarExpanded(true); // 自动展开侧边栏
   }, []);
 
+  const waitForExtractionProgress = useCallback(async (targetVocabId: number, initialCount: number) => {
+    const maxAttempts = 10;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 1200 : 1000));
+
+      try {
+        const status = await checkExtractionStatus(targetVocabId);
+        const nextCount = status.auto_extracted_count ?? status.example_library_count ?? 0;
+
+        if (nextCount > initialCount || status.status !== "pending") {
+          return status;
+        }
+      } catch (e) {
+        console.error("轮询例句提取状态失败:", e);
+        break;
+      }
+    }
+
+    return null;
+  }, []);
+
   const handleExtractExamples = useCallback(async () => {
     if (!vocab) return;
     setExtracting(true);
     try {
       const result = await extractExamplesManual(vocab.id);
+      const initialCount = result.current_count ?? vocab.example_contexts?.length ?? 0;
 
       if (result.status === "skipped") {
         alert(result.message || "已达到例句上限");
       } else {
-        // 等待至少1秒，让后台任务有时间开始
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        const status = await waitForExtractionProgress(vocab.id, initialCount);
         loadVocab();
+
+        if (status?.status === "failed") {
+          alert(status.message || "例句提取失败");
+        }
       }
     } catch (e) {
       console.error(e);
@@ -454,7 +481,7 @@ export default function VocabDetailContent({
     } finally {
       setExtracting(false);
     }
-  }, [vocab, loadVocab]);
+  }, [vocab, loadVocab, waitForExtractionProgress]);
 
   if (loading) {
     return (

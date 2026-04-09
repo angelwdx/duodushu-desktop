@@ -12,11 +12,21 @@ import logging
 import traceback
 
 # 从拆分后的模块导入例句提取服务
-from ..services.extraction_service import run_example_extraction_task
+from ..services.extraction_service import (
+    AUTO_EXTRACTED_SOURCE_TYPE,
+    get_auto_extracted_context_count,
+    is_example_extraction_in_progress,
+    normalized_context_source_sql,
+    run_example_extraction_task,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/vocabulary", tags=["vocabulary"])
+
+
+def _normalized_context_source_sql(alias: str) -> str:
+    return normalized_context_source_sql(alias)
 
 
 class VocabularyResponse(BaseModel):
@@ -145,23 +155,13 @@ def add_vocabulary(
 
                 # 使用后台任务异步提取例句（不阻塞API响应）
                 # 检查该单词是否已有足够的 example_library 例句
-                existing_library_count = (
-                    db.execute(
-                        text("""
-                        SELECT COUNT(*) FROM word_contexts 
-                        WHERE lower(word) = lower(:word) 
-                          AND source_type = 'example_library'
-                    """),
-                        {"word": target_word},
-                    ).scalar()
-                    or 0
-                )
+                existing_library_count = get_auto_extracted_context_count(db, target_word)
 
                 if existing_library_count < 5:
                     logger.info(
                         f"[例句提取] 已存在单词 '{target_word}' 只有 {existing_library_count} 个例句库例句，添加后台任务提取更多"
                     )
-                    background_tasks.add_task(run_example_extraction_task, target_word)
+                    background_tasks.add_task(run_example_extraction_task, target_word, exclude_book_id=data.book_id)
                 else:
                     logger.info(
                         f"[例句提取] 已存在单词 '{target_word}' 已有 {existing_library_count} 个例句库例句，跳过提取"
@@ -274,7 +274,7 @@ def add_vocabulary(
 
         # 使用后台任务异步提取例句（不阻塞API响应）
         logger.info(f"[例句提取] 为新单词 '{data.word}' 添加后台任务, exclude_book_id='{data.book_id}'")
-        background_tasks.add_task(run_example_extraction_task, data.word)
+        background_tasks.add_task(run_example_extraction_task, data.word, exclude_book_id=data.book_id)
 
         # Fetch the new row
         new_vocab = db.execute(text("SELECT * FROM vocabulary WHERE id = :id"), {"id": vocab_id}).fetchone()
@@ -392,6 +392,7 @@ def test_word_examples(word: str, db: Session = Depends(get_db)):
 def get_vocabulary_detail(vocab_id: int, db: Session = Depends(get_db)):
     """获取单个生词详情"""
     try:
+        normalized_source_expr = _normalized_context_source_sql("wc")
         # 1. Get Vocabulary Basic Info
         vocab_row = db.execute(
             text("""
@@ -415,10 +416,10 @@ def get_vocabulary_detail(vocab_id: int, db: Session = Depends(get_db)):
 
         # 2. Get Contexts
         context_rows = db.execute(
-            text("""
+            text(f"""
                 SELECT wc.id, wc.word, wc.book_id, wc.page_number, wc.context_sentence,
                        b.title as book_title, b.book_type as book_type, wc.is_primary,
-                       COALESCE(wc.source_type, 'user_collected') as source_type,
+                       {normalized_source_expr} as source_type,
                        b.author as book_author
                 FROM word_contexts wc
                 JOIN books b ON wc.book_id = b.id
@@ -426,7 +427,7 @@ def get_vocabulary_detail(vocab_id: int, db: Session = Depends(get_db)):
                 ORDER BY
                     CASE
                         WHEN wc.is_primary = 1 THEN 0
-                        WHEN COALESCE(wc.source_type, 'user_collected') = 'user_collected' THEN 1
+                        WHEN {normalized_source_expr} = 'user_collected' THEN 1
                         ELSE 2
                     END,
                     wc.id DESC
@@ -519,6 +520,7 @@ def get_vocabulary(
 ):
     """获取生词列表，包含主要上下文和额外例句"""
     try:
+        normalized_source_expr = _normalized_context_source_sql("wc")
         # Explicit column selection to avoid index errors
         query = """
             SELECT
@@ -591,7 +593,7 @@ def get_vocabulary(
                 context_sql = f"""
                     SELECT wc.id, wc.word, wc.book_id, wc.page_number, wc.context_sentence,
                            b.title as book_title, b.book_type as book_type, wc.is_primary,
-                           COALESCE(wc.source_type, 'user_collected') as source_type,
+                           {normalized_source_expr} as source_type,
                            b.author as book_author
                     FROM word_contexts wc
                     JOIN books b ON wc.book_id = b.id
@@ -599,7 +601,7 @@ def get_vocabulary(
                     ORDER BY
                         CASE
                             WHEN wc.is_primary = 1 THEN 0
-                            WHEN COALESCE(wc.source_type, 'user_collected') = 'user_collected' THEN 1
+                            WHEN {normalized_source_expr} = 'user_collected' THEN 1
                             ELSE 2
                         END,
                         wc.id DESC
@@ -1040,18 +1042,8 @@ def extract_examples_manual(vocab_id: int, background_tasks: BackgroundTasks, db
 
         word = vocab[0]
 
-        # 检查当前例句数量（只统计 example_library 类型的例句）
-        current_count = (
-            db.execute(
-                text("""
-                SELECT COUNT(*) FROM word_contexts
-                WHERE lower(word) = lower(:word)
-                  AND source_type = 'example_library'
-            """),
-                {"word": word},
-            ).scalar()
-            or 0
-        )
+        # 检查当前自动提取例句数量（兼容历史 `normal` 数据）
+        current_count = get_auto_extracted_context_count(db, word)
 
         # 最多20个例句，已达到上限则不提取
         if current_count >= 20:
@@ -1194,17 +1186,18 @@ def check_extraction_status(vocab_id: int, db: Session = Depends(get_db)):
             raise HTTPException(status_code=404, detail="Vocabulary not found")
 
         word = vocab[0]
+        normalized_source_expr = _normalized_context_source_sql("word_contexts")
 
         # 统计例句数量
         stats = db.execute(
-            text("""
+            text(f"""
                 SELECT
                     COUNT(*) as total,
-                    SUM(CASE WHEN source_type = 'example_library' THEN 1 ELSE 0 END) as lib_count
+                    SUM(CASE WHEN {normalized_source_expr} = :source_type THEN 1 ELSE 0 END) as lib_count
                 FROM word_contexts
                 WHERE lower(word) = lower(:word)
             """),
-            {"word": word},
+            {"word": word, "source_type": AUTO_EXTRACTED_SOURCE_TYPE},
         ).fetchone()
 
         if stats is None:
@@ -1215,18 +1208,22 @@ def check_extraction_status(vocab_id: int, db: Session = Depends(get_db)):
             lib_count = stats[1] or 0  # type: ignore
 
         # 检查是否有例句库书籍
-        lib_books = db.execute(text("SELECT COUNT(*) FROM books WHERE book_type = 'example_library'")).scalar()
+        lib_books = db.execute(text("SELECT COUNT(*) FROM books WHERE book_type = 'example_library'")).scalar() or 0
+        extraction_in_progress = is_example_extraction_in_progress(word)
 
         # 判断状态
-        if lib_books == 0:
-            status = "failed"
-            message = "未上传例句库书籍"
-        elif lib_count >= 5:
+        if lib_count >= 5:
             status = "completed"
             message = f"已完成提取（{lib_count}个例句）"
-        elif total_examples == 0:
+        elif lib_books == 0:
+            status = "failed"
+            message = "未上传例句库书籍"
+        elif extraction_in_progress:
             status = "pending"
             message = "正在提取例句..."
+        elif total_examples == 0:
+            status = "failed"
+            message = "例句库中未找到可提取的例句"
         else:
             status = "pending"
             message = f"提取中（{lib_count}/5）"
@@ -1236,6 +1233,7 @@ def check_extraction_status(vocab_id: int, db: Session = Depends(get_db)):
             "vocab_id": vocab_id,
             "total_examples": total_examples,
             "example_library_count": lib_count,
+            "auto_extracted_count": lib_count,
             "status": status,
             "message": message,
         }

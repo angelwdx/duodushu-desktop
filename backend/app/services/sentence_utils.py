@@ -9,6 +9,68 @@ import logging
 
 extraction_logger = logging.getLogger("extraction")
 
+NARRATIVE_VERBS = {
+    "said", "asked", "looked", "walked", "turned", "smiled", "laughed", "cried",
+    "thought", "felt", "watched", "heard", "saw", "told", "whispered", "shouted",
+    "nodded", "sighed", "ran", "stood", "sat", "opened", "closed", "came", "went",
+    "held", "pulled", "pushed", "stared", "glanced", "waited", "followed", "remembered",
+}
+
+NON_NARRATIVE_PATTERNS = [
+    r"^\s*(chapter|part|book|section|appendix|contents?)\b",
+    r"^\s*(note|notes|footnote|annotation|annotations?)\b",
+    r"^\s*(figure|table|fig\.|vol\.|no\.)\b",
+    r"^\s*\d+(\.\d+)*\s+[A-Z]",
+    r"^\s*[ivxlcdm]+\.\s+[A-Z]",
+    r"\b(table of contents|index|bibliography|references|appendix)\b",
+    r"\bcopyright\b",
+    r"\ball rights reserved\b",
+    r"\btranslated by\b",
+    r"\bedited by\b",
+    r"\bpublished by\b",
+    r"\bpage \d+\b",
+    r"\bchapter \d+\b",
+]
+
+PAGE_SKIP_PATTERNS = [
+    r"\btable of contents\b",
+    r"\bcontents\b",
+    r"\bindex\b",
+    r"\bbibliography\b",
+    r"\breferences\b",
+    r"\bappendix\b",
+    r"\bfootnotes?\b",
+    r"\bendnotes?\b",
+]
+
+PAGE_HEADER_SKIP_PATTERNS = [
+    r"^\s*table of contents\b",
+    r"^\s*contents\b",
+    r"^\s*index\b",
+    r"^\s*bibliography\b",
+    r"^\s*references\b",
+    r"^\s*appendix\b",
+    r"^\s*appendices\b",
+    r"^\s*notes\b",
+    r"^\s*footnotes?\b",
+    r"^\s*endnotes?\b",
+    r"^\s*glossary\b",
+]
+
+PAGE_HEADER_DEMOTION_PATTERNS = [
+    r"^\s*introduction\b",
+    r"^\s*preface\b",
+    r"^\s*foreword\b",
+    r"^\s*afterword\b",
+    r"^\s*summary\b",
+    r"^\s*exercise(s)?\b",
+    r"^\s*review questions\b",
+]
+
+
+def _page_header_lines(text: str, limit: int = 5) -> list[str]:
+    return [line.strip().lower() for line in text.splitlines() if line.strip()][:limit]
+
 
 def split_sentences(text: str) -> list:
     """
@@ -100,7 +162,156 @@ def is_valid_sentence(sentence: str, word: str) -> bool:
     if s.count(":") > 2:
         return False
 
+    # 5. Filter table-of-contents, notes, and metadata-like lines
+    lower_s = s.lower()
+    for pattern in NON_NARRATIVE_PATTERNS:
+        if re.search(pattern, lower_s, re.IGNORECASE):
+            return False
+
+    # 6. Filter citation-heavy and note-heavy text
+    bracket_pairs = s.count("(") + s.count("[")
+    if bracket_pairs >= 3:
+        return False
+    if re.search(r"\[\d+\]|\(\d+\)", s):
+        return False
+
+    # 7. Reject lines that look like headings or fragments rather than story sentences
+    word_count = len(re.findall(r"\b[\w'-]+\b", s))
+    if word_count < 5:
+        return False
+    if not re.search(r"[.!?\"']$", s):
+        return False
+    if "," not in s and word_count < 5:
+        return False
+
     return True
+
+
+def sentence_quality_score(sentence: str) -> int:
+    """
+    Prefer body-text sentences with narrative cues over notes, headings, and exposition.
+    """
+    score = 0
+    lower_s = sentence.lower()
+    tokens = re.findall(r"\b[\w'-]+\b", lower_s)
+
+    if 8 <= len(tokens) <= 35:
+        score += 3
+    elif len(tokens) <= 45:
+        score += 1
+    else:
+        score -= 2
+
+    if any(verb in tokens for verb in NARRATIVE_VERBS):
+        score += 4
+
+    if '"' in sentence or "'" in sentence:
+        score += 2
+
+    pronoun_hits = sum(1 for token in tokens if token in {"he", "she", "they", "we", "i", "you"})
+    if pronoun_hits:
+        score += min(pronoun_hits, 3)
+
+    if re.search(r"\bthen\b|\bsuddenly\b|\bwhen\b|\bbefore\b|\bafter\b|\bwhile\b", lower_s):
+        score += 2
+
+    if ":" in sentence:
+        score -= 3
+    if ";" in sentence:
+        score -= 1
+    if re.search(r"\b(example|definition|exercise|answer|summary|introduction|preface)\b", lower_s):
+        score -= 4
+
+    return score
+
+
+def should_skip_page_text(text: str) -> bool:
+    """
+    Skip pages that are overwhelmingly non-body text, such as TOC, notes, or references.
+    """
+    if not text:
+        return True
+
+    normalized = " ".join(text.lower().split())
+    for pattern in PAGE_SKIP_PATTERNS:
+        if re.search(pattern, normalized):
+            return True
+
+    header_lines = _page_header_lines(text)
+    for line in header_lines:
+        for pattern in PAGE_HEADER_SKIP_PATTERNS:
+            if re.search(pattern, line):
+                return True
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return True
+
+    heading_like = 0
+    annotation_like = 0
+    short_lines = 0
+    punctuated_lines = 0
+
+    for line in lines[:40]:
+        if len(line.split()) <= 6:
+            short_lines += 1
+        if re.search(r"[.!?\"']$", line):
+            punctuated_lines += 1
+        if re.match(r"^(\d+(\.\d+)*|[IVXLCDM]+\.?)\s+[A-Z]", line):
+            heading_like += 1
+        if re.search(r"^\s*(note|footnote|annotation|fig\.|table)\b", line, re.IGNORECASE):
+            annotation_like += 1
+        if re.search(r"\[\d+\]|\(\d+\)$", line):
+            annotation_like += 1
+
+    total = min(len(lines), 40)
+    if total == 0:
+        return True
+
+    if heading_like / total >= 0.35:
+        return True
+    if annotation_like / total >= 0.25:
+        return True
+    if short_lines / total >= 0.75 and punctuated_lines / total <= 0.25:
+        return True
+
+    return False
+
+
+def page_body_text_score(text: str) -> int:
+    """
+    Score pages so narrative body pages are processed before marginal/non-body pages.
+    """
+    if should_skip_page_text(text):
+        return -100
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    normalized = " ".join(text.lower().split())
+    header_lines = _page_header_lines(text)
+    score = 0
+
+    punctuated_lines = sum(1 for line in lines[:40] if re.search(r"[.!?\"']$", line))
+    long_lines = sum(1 for line in lines[:40] if len(re.findall(r"\b[\w'-]+\b", line)) >= 8)
+    dialogue_lines = sum(1 for line in lines[:40] if '"' in line or "\u201c" in line or "\u201d" in line)
+
+    score += punctuated_lines * 2
+    score += long_lines * 2
+    score += dialogue_lines * 3
+
+    if re.search(r"\b(he|she|they|we|i|you)\b", normalized):
+        score += 4
+    if re.search(r"\b(said|asked|looked|walked|thought|felt|came|went|turned|watched)\b", normalized):
+        score += 6
+    if re.search(r"\bchapter\b|\bsection\b|\bappendix\b|\bexercise\b|\bsummary\b", normalized):
+        score -= 8
+    for line in header_lines:
+        for pattern in PAGE_HEADER_DEMOTION_PATTERNS:
+            if re.search(pattern, line):
+                score -= 10
+        if re.search(r"^\s*chapter\s+\d+\b", line):
+            score += 2
+
+    return score
 
 
 def extract_sentences_with_word(text: str, word: str) -> list:
@@ -145,33 +356,35 @@ def extract_sentences_with_word(text: str, word: str) -> list:
 
         # 优先级1: 完全匹配原始单词
         if re.search(exact_pattern, sentence, re.IGNORECASE):
-            matching_sentences.append(cleaned)
+            matching_sentences.append((cleaned, sentence_quality_score(cleaned), 0))
             continue
 
         # 优先级2: 匹配任意变体
         variants_pattern = r"\b(" + "|".join(map(re.escape, word_variants)) + r")\b"
         if re.search(variants_pattern, sentence, re.IGNORECASE):
-            matching_sentences.append(cleaned)
+            matching_sentences.append((cleaned, sentence_quality_score(cleaned), 1))
             continue
 
         # 优先级3: 前缀匹配
         if len(matching_sentences) < 5:
             prefix_pattern = r"\b" + re.escape(word) + r"[a-z]*"
             if re.search(prefix_pattern, sentence, re.IGNORECASE):
-                matching_sentences.append(cleaned)
+                matching_sentences.append((cleaned, sentence_quality_score(cleaned), 2))
                 continue
 
         # 优先级4：放宽匹配
         if len(matching_sentences) < 3 and word_lower in cleaned.lower():
-            matching_sentences.append(cleaned)
+            matching_sentences.append((cleaned, sentence_quality_score(cleaned), 3))
+
+    matching_sentences.sort(key=lambda item: (item[2], -item[1], len(item[0])))
 
     # 去重
     seen = set()
     result = []
-    for s in matching_sentences:
-        if s.lower() not in seen:
-            result.append(s)
-            seen.add(s.lower())
+    for sentence_text, _score, _priority in matching_sentences:
+        if sentence_text.lower() not in seen:
+            result.append(sentence_text)
+            seen.add(sentence_text.lower())
             if len(result) >= 10:
                 break
 

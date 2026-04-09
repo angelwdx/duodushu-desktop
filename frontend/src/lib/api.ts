@@ -714,6 +714,7 @@ export type ExtractionStatus = {
   vocab_id: number;
   total_examples: number;
   example_library_count: number;
+  auto_extracted_count?: number;
   status: "completed" | "pending" | "failed";
   message: string;
 };
