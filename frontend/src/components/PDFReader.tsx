@@ -5,6 +5,7 @@ import { useReaderGestures } from "../hooks/useReaderGestures";
 import { useFullTextTTS } from "../hooks/useFullTextTTS";
 import TTSLoadingDots from "./TTSLoadingDots";
 import { preprocessTTSPlainText } from "../lib/ttsText";
+import { getLookupWordFromText, splitTextForWordLookup, splitWordDataForLookup } from "../lib/wordLookup";
 import { Document, Page as PDFPage, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -589,7 +590,7 @@ interface ReaderProps {
       }
     }
 
-    return merged;
+    return merged.flatMap((word) => splitWordDataForLookup(word));
   }, [words]);
 
   useEffect(() => {
@@ -1098,9 +1099,7 @@ interface ReaderProps {
       if (hlStart >= 0) hlEnd = hlStart + chunkText.length;
     }
 
-    const tokens = normalizedContent.split(
-      /([a-zA-Z0-9À-ÿ]+(?:[''-][a-zA-Z0-9À-ÿ]+)*)/,
-    );
+    const tokens = splitTextForWordLookup(normalizedContent);
 
     let charPos = 0;
     return (
@@ -1115,8 +1114,8 @@ interface ReaderProps {
               // 当前 token 是否在高亮范围内
               const isHighlighted = hlStart >= 0 && start < hlEnd && end > hlStart;
 
-              const isWord = /^[a-zA-Z0-9À-ÿ]+(?:[''-][a-zA-Z0-9À-ÿ]+)*$/.test(token);
-              if (isWord) {
+              const lookupWord = getLookupWordFromText(token);
+              if (lookupWord) {
                 return (
                   <span
                     key={i}
@@ -1128,7 +1127,7 @@ interface ReaderProps {
                     }`}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onWordClick?.(token);
+                      onWordClick?.(lookupWord);
                     }}
                   >
                     {token}
@@ -1255,6 +1254,9 @@ interface ReaderProps {
 
     if (hitIndex !== -1) {
         const hit = processedWords[hitIndex];
+        const relativeX = hit.width > 0 ? (pdfX - hit.x) / hit.width : 0.5;
+        const lookupWord = getLookupWordFromText(hit.text, relativeX);
+        if (!lookupWord) return;
         
         // 简单的上下文获取逻辑（原逻辑的简化版，避免过长代码）
         // 实际上可以直接复用原有的 getContextFromWords 如果它是解耦的
@@ -1290,7 +1292,7 @@ interface ReaderProps {
             return allWords.slice(start, end + 1).map(w => w.text).join(" ").trim();
         }
 
-        onWordClick?.(hit.text, getContextFromWords(processedWords, hitIndex));
+        onWordClick?.(lookupWord, getContextFromWords(processedWords, hitIndex));
     }
   };
 

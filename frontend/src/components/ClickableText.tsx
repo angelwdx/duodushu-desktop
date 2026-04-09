@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { getLookupWordFromText, splitTextForWordLookup } from "../lib/wordLookup";
 
 interface ClickableTextProps {
   text: string;
@@ -18,20 +19,15 @@ export default function ClickableText({
   className = "",
 }: ClickableTextProps) {
   // 将文本拆分成单词和非单词部分
-  const parts = text.split(/(\s+|[,.!?;:'"()[\]{}—–-]+)/);
+  const parts = splitTextForWordLookup(text);
 
   return (
     <span className={className}>
       {parts.map((part, index) => {
-        // 如果是空白或标点，直接渲染
-        if (/^[\s,.!?;:'"()[\]{}—–-]+$/.test(part) || part.trim() === "") {
-          return <span key={index}>{part}</span>;
-        }
+        const cleanWord = getLookupWordFromText(part);
 
-        // 提取纯单词（去除可能附带的标点）
-        const cleanWord = part.replace(/[^a-zA-Z'-]/g, "").toLowerCase();
-
-        if (!cleanWord) {
+        // 如果是空白或非可查词片段，直接渲染
+        if (!cleanWord || part.trim() === "") {
           return <span key={index}>{part}</span>;
         }
 

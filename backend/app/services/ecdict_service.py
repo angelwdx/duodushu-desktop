@@ -93,27 +93,48 @@ def get_word_details(word: str) -> Optional[Dict]:
 
         # 2. Basic Lemmatization (for inflections)
         candidates = []
+        seen = set()
+
+        def add_candidate(candidate: str):
+            if not candidate:
+                return
+            lower_candidate = candidate.lower()
+            if lower_candidate == word.lower() or lower_candidate in seen:
+                return
+            seen.add(lower_candidate)
+            candidates.append(candidate)
+
         if word.endswith("ed"):
+            # spotted -> spot, stopped -> stop
+            if len(word) > 4 and word[-3].lower() == word[-4].lower():
+                add_candidate(word[:-3])
             # cringed -> cringe, baked -> bake, played -> play
-            candidates.extend([word[:-1], word[:-2]])
+            add_candidate(word[:-1])
+            add_candidate(word[:-2])
             # Double consonant: clapped -> clap, robbed -> rob
             if len(word) > 5 and word[-3] == word[-4]:
-                candidates.append(word[:-3])
+                add_candidate(word[:-3])
         if word.endswith("ing"):
             if len(word) > 5:
                 # playing -> play
-                candidates.append(word[:-3])
+                add_candidate(word[:-3])
                 # baking -> bake
-                candidates.append(word[:-3] + "e")
+                add_candidate(word[:-3] + "e")
                 # Double consonant: clapping -> clap, robbing -> rob
                 if len(word) > 6 and word[-4] == word[-5]:
-                    candidates.append(word[:-4])
+                    add_candidate(word[:-4])
+                # panicking -> panic
+                if word.endswith("cking"):
+                    add_candidate(word[:-4])
         if word.endswith("ies"):
-            candidates.append(word[:-3] + "y")  # studies -> study
-        if word.endswith("es"):
-            candidates.append(word[:-2])  # boxes -> box
+            add_candidate(word[:-3] + "y")  # studies -> study
+        if word.endswith(("ses", "xes", "zes", "ches", "shes", "oes")):
+            add_candidate(word[:-2])  # boxes -> box
+        elif word.endswith("es") and len(word) > 3:
+            add_candidate(word[:-1])
+            add_candidate(word[:-2])
         if word.endswith("s") and not word.endswith("ss"):
-            candidates.append(word[:-1])  # cats -> cat
+            add_candidate(word[:-1])  # cats -> cat
 
         for cand in candidates:
             if not cand: continue

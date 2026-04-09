@@ -8,6 +8,7 @@ from ..services import (
     ecdict_service,
     open_dict_service,
 )
+from ..utils.lookup_normalizer import normalize_lookup_word
 from app import config
 import requests
 import json
@@ -227,6 +228,13 @@ def _get_lemma_candidates(word: str, validate_candidates: bool = True) -> List[s
     candidates = []
     word_lower = word.lower()
 
+    def add_candidate(candidate: str) -> None:
+        if not candidate:
+            return
+        if candidate.lower() == word_lower:
+            return
+        candidates.append(candidate)
+
     # 1. 检查例外列表：如果原词在例外列表中，直接返回空列表
     for suffix, words in _EXCEPTION_WORDS.items():
         if word_lower in words:
@@ -235,54 +243,74 @@ def _get_lemma_candidates(word: str, validate_candidates: bool = True) -> List[s
     # 2. 复数形式还原
     if word_lower.endswith("ies"):
         # cities -> city
-        candidates.append(word[:-3] + "y")
-    if word_lower.endswith("es"):
-        # boxes -> box, watches -> watch
-        candidates.append(word[:-2])
+        add_candidate(word[:-3] + "y")
+    if word_lower.endswith(("ses", "xes", "zes", "ches", "shes", "oes")):
+        # boxes -> box, watches -> watch, heroes -> hero
+        add_candidate(word[:-2])
+    elif word_lower.endswith("es") and len(word) > 3:
+        add_candidate(word[:-1])
+        add_candidate(word[:-2])
     if word_lower.endswith("s") and not word_lower.endswith("ss"):
         # deserts -> desert, books -> book
-        candidates.append(word[:-1])
+        add_candidate(word[:-1])
 
     # 3. 过去式/过去分词还原
     if word_lower.endswith("ied"):
         # studied -> study
-        candidates.append(word[:-3] + "y")
+        add_candidate(word[:-3] + "y")
     if word_lower.endswith("ed"):
+        # spotted -> spot, stopped -> stop
+        if len(word) > 4 and word[-3].lower() == word[-4].lower():
+            add_candidate(word[:-3])
         # walked -> walk
-        candidates.append(word[:-2])
+        add_candidate(word[:-2])
         # loved -> love
-        candidates.append(word[:-1])
+        add_candidate(word[:-1])
 
     # 4. 进行时还原
     if word_lower.endswith("ing"):
         # running -> run (双写辅音)
-        if len(word) > 4 and word[-4] == word[-5]:
-            candidates.append(word[:-4])
+        if len(word) > 5 and word[-4].lower() == word[-5].lower():
+            add_candidate(word[:-4])
         # loving -> love
-        candidates.append(word[:-3] + "e")
+        add_candidate(word[:-3] + "e")
         # running -> run, walking -> walk
-        candidates.append(word[:-3])
+        add_candidate(word[:-3])
+        # panicking -> panic
+        if word_lower.endswith("cking"):
+            add_candidate(word[:-3])
+            add_candidate(word[:-4])
 
     # 5. 比较级/最高级还原
     if word_lower.endswith("er"):
         # bigger -> big (双写辅音)
-        if len(word) > 4 and word[-3] == word[-4]:
-            candidates.append(word[:-3])
+        if len(word) > 4 and word[-3].lower() == word[-4].lower():
+            add_candidate(word[:-3])
         # larger -> large
-        candidates.append(word[:-2])
+        add_candidate(word[:-2])
     if word_lower.endswith("est"):
-        candidates.append(word[:-3])
-        candidates.append(word[:-2])  # largest -> large
+        add_candidate(word[:-3])
+        add_candidate(word[:-2])  # largest -> large
     if word_lower.endswith("ier"):
-        candidates.append(word[:-3] + "y")  # happier -> happy
+        add_candidate(word[:-3] + "y")  # happier -> happy
     if word_lower.endswith("iest"):
-        candidates.append(word[:-4] + "y")  # happiest -> happy
+        add_candidate(word[:-4] + "y")  # happiest -> happy
 
-    # 6. 可选：验证候选词是否在词典中存在
+    # 6. 去重并保序
+    deduped_candidates: List[str] = []
+    seen = set()
+    for candidate in candidates:
+        lower_candidate = candidate.lower()
+        if lower_candidate in seen:
+            continue
+        seen.add(lower_candidate)
+        deduped_candidates.append(candidate)
+
+    # 7. 可选：验证候选词是否在词典中存在
     if validate_candidates:
-        return _validate_lemma_candidates(candidates)
+        return _validate_lemma_candidates(deduped_candidates)
 
-    return candidates
+    return deduped_candidates
 
 
 def _validate_lemma_candidates(candidates: List[str]) -> List[str]:
@@ -306,8 +334,10 @@ def _validate_lemma_candidates(candidates: List[str]) -> List[str]:
         if len(lemma) <= 2 and not lemma.isalpha():
             continue
 
-        # 查询词典验证存在性
-        if get_dict_manager().word_exists(lemma):
+        dict_manager = get_dict_manager()
+
+        # 查询词典或 ECDICT 验证存在性
+        if (dict_manager and dict_manager.word_exists(lemma)) or ecdict_service.get_word_details(lemma):
             valid_candidates.append(lemma)
 
     return valid_candidates
@@ -358,35 +388,7 @@ def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
     Returns:
         Dict with multiple_sources=True and results array
     """
-    # 清理词语（与 lookup_word 相同的逻辑）
-    word = word.strip()
-    word = word.replace("\u2019", "'").replace("\u2018", "'")
-    while word and word[-1] in ".,!?;:":
-        word = word[:-1]
-    while word and word[0] in ".,!?;:\"'(":
-        word = word[1:]
-
-    contraction_suffixes = ("n't", "'m", "'re", "'ve", "'ll", "'d")
-    is_contraction = any(word.lower().endswith(suffix) for suffix in contraction_suffixes)
-    contraction_words = {
-        "it's",
-        "that's",
-        "what's",
-        "who's",
-        "there's",
-        "here's",
-        "let's",
-        "he's",
-        "she's",
-        "how's",
-        "where's",
-        "when's",
-        "why's",
-    }
-    is_contraction = is_contraction or word.lower() in contraction_words
-
-    if word.endswith("'s") and not is_contraction:
-        word = word[:-2]
+    word = normalize_lookup_word(word)
 
     if not word:
         return None
@@ -423,6 +425,40 @@ def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
                 continue
 
         if not results:
+            lemma_candidates = _get_lemma_candidates(original_word, validate_candidates=False)
+            for lemma in lemma_candidates:
+                lemma_results = []
+                for dict_name in active_imported_dicts:
+                    try:
+                        result = dict_manager.lookup_word(lemma, source=dict_name)
+                        if result:
+                            lemma_ecdict = ecdict_service.get_word_details(lemma)
+                            if lemma_ecdict:
+                                if lemma_ecdict.get("translation"):
+                                    result["chinese_translation"] = lemma_ecdict["translation"]
+                                if lemma_ecdict.get("phonetic"):
+                                    result["phonetic"] = lemma_ecdict["phonetic"]
+                            result["word"] = original_word
+                            result["lemma_from"] = lemma
+                            lemma_results.append({"source_label": dict_name, "source": dict_name, **result})
+                    except Exception as e:
+                        logger.warning(f"Failed lemma lookup in {dict_name} for {lemma}: {e}")
+                        continue
+
+                if lemma_results:
+                    if len(lemma_results) == 1:
+                        return lemma_results[0]
+
+                    lemma_ecdict = ecdict_service.get_word_details(lemma)
+                    return {
+                        "word": original_word,
+                        "lemma_from": lemma,
+                        "multiple_sources": True,
+                        "results": lemma_results,
+                        "phonetic": lemma_ecdict.get("phonetic") if lemma_ecdict else None,
+                        "chinese_translation": lemma_ecdict.get("translation") if lemma_ecdict else None,
+                    }
+
             # 所有导入词典都没找到，返回 ECDICT 结果
             ecdict_data = ecdict_service.get_word_details(word)
             if ecdict_data:
@@ -445,6 +481,30 @@ def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
                         }
                     ],
                 }
+
+            for lemma in lemma_candidates:
+                lemma_ecdict = ecdict_service.get_word_details(lemma)
+                if lemma_ecdict:
+                    return {
+                        "word": original_word,
+                        "lemma_from": lemma,
+                        "phonetic": lemma_ecdict.get("phonetic"),
+                        "chinese_translation": lemma_ecdict.get("translation"),
+                        "source": "ECDICT",
+                        "is_ecdict": True,
+                        "raw_data": lemma_ecdict,
+                        "meanings": [
+                            {
+                                "partOfSpeech": lemma_ecdict.get("pos"),
+                                "definitions": [
+                                    {
+                                        "definition": lemma_ecdict.get("definition", lemma_ecdict.get("translation", "")),
+                                        "translation": lemma_ecdict.get("translation"),
+                                    }
+                                ],
+                            }
+                        ],
+                    }
 
             # ECDICT 也没找到，尝试 AI 兜底查询
             logger.info(f"[lookup_word_all_sources] Not found in any imported dict or ECDICT, trying AI fallback for word: {word}")
@@ -582,48 +642,7 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
     if source is None:
         return lookup_word_all_sources(db, word)
 
-    # 清理词语
-    word = word.strip()
-
-    # 标准化引号：将 Unicode 智能引号转换为普通单引号
-    # U+2018 ' LEFT SINGLE QUOTATION MARK
-    # U+2019 ' RIGHT SINGLE QUOTATION MARK
-    # U+0027 ' APOSTROPHE (普通单引号)
-    word = word.replace("\u2019", "'").replace("\u2018", "'")
-
-    # 剥离句末常见标点
-    while word and word[-1] in ".,!?;:":
-        word = word[:-1]
-    # 剥离句首常见标点
-    while word and word[0] in ".,!?;:\"'(":
-        word = word[1:]
-
-    # 处理所有格 's：剥离 's 查询原型，但保留缩写形式
-    # 常见缩写后缀：n't, 'm, 're, 've, 'll, 'd, 's (it's, that's, what's 等)
-    contraction_suffixes = ("n't", "'m", "'re", "'ve", "'ll", "'d")
-    is_contraction = any(word.lower().endswith(suffix) for suffix in contraction_suffixes)
-
-    # 特殊缩写词：it's, that's, what's, who's, there's, here's, let's 等
-    contraction_words = {
-        "it's",
-        "that's",
-        "what's",
-        "who's",
-        "there's",
-        "here's",
-        "let's",
-        "he's",
-        "she's",
-        "how's",
-        "where's",
-        "when's",
-        "why's",
-    }
-    is_contraction = is_contraction or word.lower() in contraction_words
-
-    # 如果是 's 结尾且不是缩写，则剥离 's 查询原型
-    if word.endswith("'s") and not is_contraction:
-        word = word[:-2]  # 去掉 's
+    word = normalize_lookup_word(word)
 
     if not word:
         return None

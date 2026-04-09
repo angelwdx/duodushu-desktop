@@ -1,0 +1,50 @@
+[
+  {
+    "kind": "click_ratio",
+    "text": "sand—hits",
+    "ratio": 0.2,
+    "expected": "sand",
+    "note": "破折号左侧单词应可单独查词"
+  },
+  {
+    "kind": "click_ratio",
+    "text": "sand—hits",
+    "ratio": 0.8,
+    "expected": "hits",
+    "note": "破折号右侧单词应可单独查词"
+  },
+  {
+    "kind": "click_ratio",
+    "text": "dust—usually",
+    "ratio": 0.2,
+    "expected": "dust",
+    "note": "长破折号前半词应命中"
+  },
+  {
+    "kind": "click_ratio",
+    "text": "dust—usually",
+    "ratio": 0.8,
+    "expected": "usually",
+    "note": "长破折号后半词应命中"
+  },
+  {
+    "kind": "click_ratio",
+    "text": "streaksof",
+    "ratio": 0.2,
+    "expected": "streaks",
+    "note": "OCR 粘连词左侧应拆出主词"
+  },
+  {
+    "kind": "click_ratio",
+    "text": "streaksof",
+    "ratio": 0.8,
+    "expected": "of",
+    "note": "OCR 粘连词右侧应拆出 stopword"
+  },
+  {
+    "kind": "segments",
+    "text": "streaksof",
+    "expected": ["streaks", "of"],
+    "note": "OCR 粘连词应能产出可点击子词段"
+  }
+]

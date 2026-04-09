@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from ..models.database import get_db
 from ..services import dict_service, open_dict_service
+from ..utils.lookup_normalizer import normalize_lookup_word
 
 router = APIRouter(prefix="/api/dict", tags=["dictionary"])
 
@@ -12,13 +13,18 @@ router = APIRouter(prefix="/api/dict", tags=["dictionary"])
 @router.get("/{word}/sources")
 def check_sources(word: str):
     """Check availability of word in different dictionaries"""
-    # Debug log
+    word = normalize_lookup_word(word)
+    if not word:
+        raise HTTPException(status_code=400, detail="Invalid word")
     sources = dict_service.get_word_sources(word)
     return sources
 
 
 @router.get("/{word}")
 def get_definition(word: str, source: Optional[str] = None, db: Session = Depends(get_db)):
+    word = normalize_lookup_word(word)
+    if not word:
+        raise HTTPException(status_code=400, detail="Invalid word")
     # 注意: source 为 None 时触发多词典模式, 空字符串则不会
     # 所以这里不能用 source or "", 必须保持 None
     result = dict_service.lookup_word(db, word, source)
@@ -30,6 +36,9 @@ def get_definition(word: str, source: Optional[str] = None, db: Session = Depend
 @router.get("/{word}/examples")
 def get_word_examples(word: str):
     """Get example sentences from open source database (Tatoeba)"""
+    word = normalize_lookup_word(word)
+    if not word:
+        raise HTTPException(status_code=400, detail="Invalid word")
     examples = open_dict_service.get_examples_open(word)
     return {"word": word, "examples": examples}
 
