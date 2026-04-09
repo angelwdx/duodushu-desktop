@@ -54,11 +54,13 @@ let mainWindow: BrowserWindow | null = null;
 let pythonProcess: ChildProcess | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+let appProtocolRegistered = false;
 
 // 定义常量
 // 使用 app.isPackaged 判定是否为生产环境（更可靠）
 const IS_DEV = !app.isPackaged;
 const PY_DIST_FOLDER = 'backend'; // 打包后 Python 可执行文件所在目录名称
+const STARTUP_TIMEOUT_SECONDS = 60;
 
 logToFile(`IS_DEV: ${IS_DEV} (app.isPackaged: ${app.isPackaged})`);
 
@@ -188,18 +190,170 @@ function setupAutoUpdater() {
   }, 5000);
 }
 
+function getFrontendOutPath(...segments: string[]) {
+  return path.join(__dirname, '../frontend/out', ...segments);
+}
+
+function registerAppProtocol() {
+  if (IS_DEV || appProtocolRegistered) {
+    return;
+  }
+
+  protocol.handle('app', (request) => {
+    const reqUrl = request.url;
+    let pathName = new URL(reqUrl).pathname;
+    if (pathName === '/') pathName = '/index.html';
+
+    const normalizedPath = pathName.replace(/^\/+/, '');
+    const possiblePaths = [
+      getFrontendOutPath(normalizedPath),
+      getFrontendOutPath(`${normalizedPath}.html`),
+      getFrontendOutPath(normalizedPath, 'index.html'),
+    ];
+
+    let filePath = '';
+    for (const candidate of possiblePaths) {
+      const decodedPath = decodeURIComponent(candidate);
+      if (fs.existsSync(decodedPath) && fs.statSync(decodedPath).isFile()) {
+        filePath = decodedPath;
+        break;
+      }
+    }
+
+    if (!filePath) {
+      const fallback404 = getFrontendOutPath('404.html');
+      filePath = fs.existsSync(fallback404) ? fallback404 : getFrontendOutPath('index.html');
+    }
+
+    logToFile(`app:// resolved ${reqUrl} -> ${filePath}`);
+    return net.fetch(url.pathToFileURL(filePath).toString());
+  });
+
+  appProtocolRegistered = true;
+}
+
+function resolveTrayIconPath() {
+  const candidates = [
+    path.join(__dirname, 'assets', 'icon.png'),
+    getFrontendOutPath('icon.png'),
+    path.join(process.resourcesPath, 'icon.png'),
+    path.join(process.resourcesPath, 'resources', 'icon.png'),
+    path.join(app.getAppPath(), 'resources', 'icon.png'),
+  ];
+
+  return candidates.find((candidate) => fs.existsSync(candidate)) || '';
+}
+
+function buildStartupPageHtml(options: {
+  title: string;
+  message: string;
+  detail?: string;
+  showRetry?: boolean;
+}) {
+  const retryButton = options.showRetry
+    ? `<button onclick="location.reload()" style="margin-top:16px;padding:10px 16px;border-radius:10px;border:1px solid #d1d5db;background:#111827;color:#fff;font:inherit;cursor:pointer;">Retry</button>`
+    : '';
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${options.title}</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top, #f3f7ff, #eef2ff 45%, #ffffff 100%);
+        color: #111827;
+      }
+      main {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .card {
+        width: min(560px, 100%);
+        background: rgba(255,255,255,0.9);
+        border: 1px solid #e5e7eb;
+        border-radius: 20px;
+        padding: 32px;
+        box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
+      }
+      .spinner {
+        width: 28px;
+        height: 28px;
+        border: 3px solid #dbeafe;
+        border-top-color: #2563eb;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-bottom: 20px;
+      }
+      h1 { margin: 0 0 12px; font-size: 24px; }
+      p { margin: 0; color: #4b5563; line-height: 1.6; white-space: pre-wrap; }
+      .detail {
+        margin-top: 14px;
+        padding: 12px 14px;
+        background: #f9fafb;
+        border-radius: 12px;
+        font-size: 13px;
+        color: #6b7280;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="card">
+        <div class="spinner"></div>
+        <h1>${options.title}</h1>
+        <p>${options.message}</p>
+        ${options.detail ? `<div class="detail">${options.detail}</div>` : ''}
+        ${retryButton}
+      </section>
+    </main>
+  </body>
+</html>`;
+}
+
+async function loadStartupPage(options: {
+  title: string;
+  message: string;
+  detail?: string;
+  showRetry?: boolean;
+}) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  const html = buildStartupPageHtml(options);
+  const dataUrl = `data:text/html;charset=UTF-8,${encodeURIComponent(html)}`;
+  await mainWindow.loadURL(dataUrl);
+}
+
 async function createWindow() {
   logToFile('createWindow called');
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
-    show: false, // 初始隐藏，等后端准备好再显示
+    show: false,
+    backgroundColor: '#ffffff',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: false,
     },
+  });
+
+  mainWindow.once('ready-to-show', () => {
+    if (!mainWindow) return;
+    mainWindow.show();
+    if (process.platform === 'darwin') {
+      app.dock.show();
+    }
   });
 
   // 创建应用菜单
@@ -238,46 +392,28 @@ async function createWindow() {
   if (IS_DEV) {
     logToFile('Loading development URL: http://localhost:3000');
     mainWindow.loadURL('http://localhost:3000');
-    // 开发模式下直接显示，方便调试
-    mainWindow.once('ready-to-show', () => mainWindow?.show());
     mainWindow.webContents.openDevTools();
   } else {
-    // 生产模式：等待后端就绪后再加载和显示
-    const isReady = await checkBackendReady();
+    registerAppProtocol();
+    await loadStartupPage({
+      title: 'Starting Duodushu',
+      message: 'The desktop app is launching the local backend. This window should switch to the library automatically in a moment.',
+      detail: `Waiting for http://127.0.0.1:8000/health\nLogs: ${logFile}`,
+    });
+
+    const isReady = await checkBackendReady(STARTUP_TIMEOUT_SECONDS);
 
     if (isReady) {
-      protocol.handle('app', (request) => {
-        const reqUrl = request.url;
-        let pathName = new URL(reqUrl).pathname;
-        if (pathName === '/') pathName = '/index.html';
-
-        const possiblePaths = [
-          path.join(__dirname, '../frontend/out', pathName),
-          path.join(__dirname, '../frontend/out', pathName + '.html'),
-          path.join(__dirname, '../frontend/out', pathName, 'index.html')
-        ];
-
-        let filePath = '';
-        for (const p of possiblePaths) {
-          const decodedPath = decodeURIComponent(p);
-          if (fs.existsSync(decodedPath) && fs.statSync(decodedPath).isFile()) {
-            filePath = decodedPath;
-            break;
-          }
-        }
-
-        if (!filePath) {
-          filePath = path.join(__dirname, '../frontend/out', 'index.html');
-        }
-
-        return net.fetch(url.pathToFileURL(filePath).toString());
-      });
-
       logToFile('Loading URL: app://./index.html');
       await mainWindow.loadURL('app://./index.html');
-      mainWindow.show(); // 后端好了，前端也加载了，现在展示给用户
     } else {
       logErrorToFile('Backend failed to start within timeout');
+      await loadStartupPage({
+        title: 'Duodushu Could Not Finish Starting',
+        message: 'The app window is open, but the local backend did not become ready in time. This usually means the packaged backend process failed to start or was blocked by the system.',
+        detail: `Please check:\n1. ${errorLogFile}\n2. ${logFile}\n3. macOS Security & Privacy quarantine prompts\n\nBackend health URL: http://127.0.0.1:8000/health`,
+        showRetry: true,
+      });
     }
   }
 
@@ -303,6 +439,16 @@ async function createWindow() {
 
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
     logErrorToFile(`Page failed to load: ${errorCode} - ${errorDescription}`);
+    if (!IS_DEV) {
+      loadStartupPage({
+        title: 'Duodushu Failed To Load The Desktop UI',
+        message: 'The packaged frontend could not be opened. This usually means a static asset path is missing or the packaged files are incomplete.',
+        detail: `Load error: ${errorCode} - ${errorDescription}\nLogs: ${errorLogFile}`,
+        showRetry: true,
+      }).catch((error) => {
+        logErrorToFile('Failed to display load failure page', error);
+      });
+    }
   });
 
   mainWindow.webContents.on('dom-ready', () => {
@@ -496,46 +642,57 @@ app.whenReady().then(async () => {
   setupAutoUpdater();
 
   // 初始化系统托盘
-  const iconPath = path.join(__dirname, 'assets', 'icon.png');
-  // 对于 macOS，图标过大会被裁剪，创建 nativeImage 并调整大小
-  let trayIcon = nativeImage.createFromPath(iconPath);
-  if (process.platform === 'darwin') {
-    trayIcon = trayIcon.resize({ width: 16, height: 16 });
+  const iconPath = resolveTrayIconPath();
+  if (!iconPath) {
+    logErrorToFile('Tray icon not found, skipping tray initialization');
   } else {
-    trayIcon = trayIcon.resize({ width: 24, height: 24 });
+    try {
+      let trayIcon = nativeImage.createFromPath(iconPath);
+      if (trayIcon.isEmpty()) {
+        throw new Error(`Tray icon is empty: ${iconPath}`);
+      }
+
+      if (process.platform === 'darwin') {
+        trayIcon = trayIcon.resize({ width: 16, height: 16 });
+      } else {
+        trayIcon = trayIcon.resize({ width: 24, height: 24 });
+      }
+
+      tray = new Tray(trayIcon);
+      tray.setToolTip('多读书 Duodushu');
+
+      const contextMenu = Menu.buildFromTemplate([
+        {
+          label: '显示多读书',
+          click: () => {
+            mainWindow?.show();
+            if (process.platform === 'darwin') app.dock.show();
+          }
+        },
+        { type: 'separator' },
+        {
+          label: '退出多读书',
+          click: () => {
+            isQuitting = true;
+            app.quit();
+          }
+        }
+      ]);
+
+      tray.setContextMenu(contextMenu);
+      tray.on('click', () => {
+        if (mainWindow?.isVisible()) {
+          mainWindow.hide();
+          if (process.platform === 'darwin') app.dock.hide();
+        } else {
+          mainWindow?.show();
+          if (process.platform === 'darwin') app.dock.show();
+        }
+      });
+    } catch (error) {
+      logErrorToFile('Tray initialization failed', error);
+    }
   }
-
-  tray = new Tray(trayIcon);
-  tray.setToolTip('多读书 Duodushu');
-
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: '显示多读书',
-      click: () => {
-        mainWindow?.show();
-        if (process.platform === 'darwin') app.dock.show();
-      }
-    },
-    { type: 'separator' },
-    {
-      label: '退出多读书',
-      click: () => {
-        isQuitting = true;
-        app.quit();
-      }
-    }
-  ]);
-
-  tray.setContextMenu(contextMenu);
-  tray.on('click', () => {
-    if (mainWindow?.isVisible()) {
-      mainWindow.hide();
-      if (process.platform === 'darwin') app.dock.hide();
-    } else {
-      mainWindow?.show();
-      if (process.platform === 'darwin') app.dock.show();
-    }
-  });
 
   // ===== 注册全局快捷键 =====
   const ret = globalShortcut.register('CommandOrControl+Shift+Space', () => {
