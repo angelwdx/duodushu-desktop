@@ -1,7 +1,7 @@
 # 多读书 (Duodushu) 桌面客户端
 
-**版本**: 1.3.4
-**最后更新**: 2026-04-05
+**版本**: 1.0.2
+**最后更新**: 2026-04-12
 
 一款**本地优先（Local-First）且支持绿色便携（Portable）**的沉浸式英语学习工作站。现已全面支持 Windows 和 MacOS。
 
@@ -15,13 +15,20 @@
 
 ### 安装模式（MacOS）
 
-1. 下载 `Duodushu-1.3.3-arm64.dmg`
+1. 下载 `Duodushu-1.0.2-arm64.dmg`
 2. 将 `Duodushu.app` 拖入 Applications 文件夹
 3. **解决“已损坏”提示**: 由于应用暂未签署 Apple 开发者证书，从浏览器下载的版本会被 macOS 误报为“已损坏”。请在终端运行以下指令解决：
    ```bash
    sudo xattr -rd com.apple.quarantine /Applications/Duodushu.app
    ```
 4. 首次运行时，所有用户数据将存储在 `~/Library/Application Support/duodushu-desktop`
+
+## ✨ 1.0.2 更新
+
+- ✅ **PDF 文本修复增强** - 修复复杂 PDF 中段首下沉首字母被拆开的情况，例如 `On` / `Did` / `The` / `Let’s`
+- ✅ **阅读链路统一规范化** - 文本模式、全文朗读、点词上下文共用同一套 PDF 文本修复规则
+- ✅ **Edge TTS 音色扩展** - 新增更多英语区域音色，默认音色调整为 `Aria`
+- ✅ **macOS 开发数据对齐** - 开发环境可复用安装版 `userData` 目录，便于复现真实阅读数据
 
 ### 开发模式
 
@@ -87,7 +94,7 @@ duodushu-desktop/
 
 - 桌面端自动更新基于 `electron-updater`，发布源为 GitHub Releases
 - 当前自动更新仓库为 `angelwdx/duodushu-desktop`
-- 推送形如 `v1.3.3` 的 tag 后，会自动触发 [`.github/workflows/build.yml`](./.github/workflows/build.yml)
+- 推送形如 `v1.0.2` 的 tag 后，会自动触发 [`.github/workflows/build.yml`](./.github/workflows/build.yml)
 - 工作流会分别构建 macOS 和 Windows 安装包，并自动创建 GitHub Release
 - 本地手动打包后的 macOS 更新元数据位于 `dist_app/latest-mac.yml`
 
@@ -119,8 +126,8 @@ npm run build
 
 ```bash
 git push origin main
-git tag v1.3.3
-git push origin v1.3.3
+git tag v1.0.2
+git push origin v1.0.2
 ```
 
 推送 tag 后，GitHub Actions 会自动打包并发布新版。
@@ -135,17 +142,17 @@ git push origin v1.3.3
 
 ## 🎯 路线图 (Roadmap)
 
-### v1.3.x (当前稳定版)
+### v1.0.x (当前稳定版)
 - ✅ **全局快捷键与原生菜单逻辑重构 (Cmd+F / Cmd+Shift+Space)**
 - ✅ **离线模式与网络状态智能检测 (智能禁用 AI 降级)**
 - ✅ **多窗口支持 (Multi-Window Reading)**
 - ✅ **系统托盘 (System Tray) 与双击文件关联支持**
 - ✅ **全自动更新流程与生产构建流水线优化 (GitHub Actions)**
 - ✅ **本地 Qwen3 TTS 集成与阅读器朗读控制增强**
-- ✅ **PDF 朗读文本提取与断词修复**
+- ✅ **PDF 下沉首字母修复与朗读/查词文本统一**
 
 > [!TIP]
-> 推荐使用 `v1.3.4` 版本以获取当前最完整的桌面端沉浸阅读体验。
+> 推荐使用 `v1.0.2` 版本以获取当前最完整的桌面端沉浸阅读体验。
 
 ## 📝 许可证
 
