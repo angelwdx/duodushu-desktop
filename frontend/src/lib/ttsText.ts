@@ -1,4 +1,4 @@
-export function repairBrokenEnglishWordsForTTS(text: string): string {
+export function repairBrokenEnglishWords(text: string): string {
   if (!text) return "";
 
   let repaired = text;
@@ -68,6 +68,162 @@ export function repairBrokenEnglishWordsForTTS(text: string): string {
   repaired = repaired.replace(/([a-z'])((?:At|In|On|Of|To|By|Do|Go)\s+(?:the|a|an)\b)/g, "$1 $2");
 
   return repaired;
+}
+
+export const repairBrokenEnglishWordsForTTS = repairBrokenEnglishWords;
+
+function isLikelyStandalonePageNumber(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+
+  if (/^[-–—]?\s*\d{1,4}\s*[-–—]?$/.test(trimmed)) return true;
+  if (/^[-–—]?\s*Page\s+\d{1,4}\s*[-–—]?$/i.test(trimmed)) return true;
+  if (/^第\s*\d{1,4}\s*页$/.test(trimmed)) return true;
+
+  return false;
+}
+
+export function repairDropCapParagraphs(text: string): string {
+  if (!text) return "";
+
+  const paragraphs = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split(/\n\s*\n/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const isDropCap = (part: string) => /^[A-Z]$/.test(part);
+  const startsWithLowercase = (part: string) => /^[a-z]/.test(part);
+  const isLikelyHeadingOrCaption = (part: string) => {
+    if (!part || startsWithLowercase(part)) return false;
+    const lines = part
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (lines.length === 0 || lines.length > 4) return false;
+    if (lines.some((line) => line.length > 48)) return false;
+    if (/[.!?]\s*$/.test(part)) return false;
+
+    return true;
+  };
+  const isLikelyShortDisplayBlock = (part: string) => {
+    const compact = part.replace(/\s+/g, " ").trim();
+    if (!compact || startsWithLowercase(compact)) return false;
+    if (isLikelyStandalonePageNumber(compact)) return true;
+
+    const lines = part
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    // 图片说明/强调框常常会被切成 5-6 行短句，不能只按 4 行限制。
+    // 这里继续用总长度兜底，避免把真正的正文段误判成展示块。
+    if (lines.length === 0 || lines.length > 6) return false;
+    if (compact.length > 160) return false;
+
+    return true;
+  };
+
+  const repaired: string[] = [];
+
+  for (let i = 0; i < paragraphs.length; i += 1) {
+    const current = paragraphs[i];
+    const currentLines = current
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const bodyStartIndex = currentLines.findIndex((line) => startsWithLowercase(line));
+    if (bodyStartIndex >= 2) {
+      const dropCapLine = currentLines[bodyStartIndex - 1];
+      const headingPrefixLines = currentLines.slice(0, bodyStartIndex - 1);
+      const headingPrefix = headingPrefixLines.join("\n").trim();
+
+      if (
+        dropCapLine &&
+        isDropCap(dropCapLine) &&
+        headingPrefix &&
+        isLikelyHeadingOrCaption(headingPrefix)
+      ) {
+        repaired.push(headingPrefix);
+        repaired.push(`${dropCapLine}${currentLines.slice(bodyStartIndex).join("\n")}`);
+        continue;
+      }
+    }
+
+    const trailingDropCap = currentLines.length >= 2 ? currentLines[currentLines.length - 1] : "";
+    const headingPrefix = currentLines.slice(0, -1).join("\n").trim();
+
+    if (
+      trailingDropCap &&
+      isDropCap(trailingDropCap) &&
+      headingPrefix &&
+      isLikelyHeadingOrCaption(headingPrefix) &&
+      i + 1 < paragraphs.length &&
+      startsWithLowercase(paragraphs[i + 1])
+    ) {
+      repaired.push(headingPrefix);
+      repaired.push(`${trailingDropCap}${paragraphs[i + 1]}`);
+      i += 1;
+      continue;
+    }
+
+    if (!isDropCap(current)) {
+      repaired.push(current);
+      continue;
+    }
+
+    const prefixBlocks: string[] = [];
+    let bodyIndex = i + 1;
+
+    while (bodyIndex < paragraphs.length && isLikelyShortDisplayBlock(paragraphs[bodyIndex])) {
+      if (!isLikelyStandalonePageNumber(paragraphs[bodyIndex])) {
+        prefixBlocks.push(paragraphs[bodyIndex]);
+      }
+      bodyIndex += 1;
+    }
+
+    if (bodyIndex < paragraphs.length && startsWithLowercase(paragraphs[bodyIndex])) {
+      repaired.push(...prefixBlocks);
+      repaired.push(`${current}${paragraphs[bodyIndex]}`);
+      i = bodyIndex;
+      continue;
+    }
+
+    repaired.push(current);
+  }
+
+  return repaired.join("\n\n");
+}
+
+export function normalizePdfPageText(text: string): string {
+  if (!text) return "";
+
+  let refined = repairDropCapParagraphs(text);
+  refined = refined.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  // 某些 PDF 会把段首下沉首字母单独放成一行，下一行从小写续写：
+  // O\nn -> On，D\nid -> Did。
+  refined = refined.replace(/(^|\n\s*\n)([ \t]*)([A-Z])\s*\n\s*([a-z])/g, "$1$2$3$4");
+  // 只合并单个换行造成的断词，保留真正的段落边界（避免把标题和正文粘在一起）。
+  refined = refined.replace(/([a-z])[ \t]*\n(?!\s*\n)[ \t]*([a-z])/g, "$1 $2");
+  refined = refined.replace(/-\s*[\r\n]+\s*/g, "");
+  refined = refined.replace(/\n{3,}/g, "\n\n");
+
+  const normalized = refined
+    .split(/\n\s*\n/)
+    .map((paragraph) =>
+      paragraph
+        .split("\n")
+        .map((line) => line.replace(/[ \t]+/g, " ").trim())
+        .filter(Boolean)
+        .join(" ")
+    )
+    .filter(Boolean)
+    .join("\n\n");
+
+  return repairBrokenEnglishWords(normalized);
 }
 
 function containsCJK(text: string): boolean {
@@ -152,10 +308,7 @@ function removeStandalonePageNumberParagraphs(text: string): string {
     const trimmed = paragraph.trim();
     if (!trimmed) return false;
 
-    // 过滤常见孤立页码，例如 "44"、"- 44 -"、"Page 44"
-    if (/^[-–—]?\s*\d{1,4}\s*[-–—]?$/.test(trimmed)) return false;
-    if (/^[-–—]?\s*Page\s+\d{1,4}\s*[-–—]?$/i.test(trimmed)) return false;
-    if (/^第\s*\d{1,4}\s*页$/.test(trimmed)) return false;
+    if (isLikelyStandalonePageNumber(trimmed)) return false;
 
     return true;
   });

@@ -23,9 +23,38 @@ const PREFETCH_DEPTH_DEFAULT = 1;
 const PREFETCH_DEPTH_QWEN3 = 2;
 
 const EDGE_VOICES = [
-  { id: 'default', label: 'Aria (女声)' },
-  { id: 'male',    label: 'Christopher (男声)' },
-  { id: 'female',  label: 'Jenny (女声)' },
+  // en-US
+  { id: 'aria',        label: 'Aria (美式女声)' },
+  { id: 'jenny',       label: 'Jenny (美式女声)' },
+  { id: 'michelle',    label: 'Michelle (美式女声)' },
+  { id: 'ana',         label: 'Ana (美式女声 · 童声)' },
+  { id: 'emma',        label: 'Emma (美式女声)' },
+  { id: 'ava',         label: 'Ava (美式女声)' },
+  { id: 'guy',         label: 'Guy (美式男声)' },
+  { id: 'christopher', label: 'Christopher (美式男声)' },
+  { id: 'eric',        label: 'Eric (美式男声)' },
+  { id: 'roger',       label: 'Roger (美式男声)' },
+  { id: 'steffan',     label: 'Steffan (美式男声)' },
+  { id: 'andrew',      label: 'Andrew (美式男声)' },
+  { id: 'brian',       label: 'Brian (美式男声)' },
+  // en-GB
+  { id: 'sonia',       label: 'Sonia (英式女声)' },
+  { id: 'libby',       label: 'Libby (英式女声)' },
+  { id: 'maisie',      label: 'Maisie (英式女声)' },
+  { id: 'ryan',        label: 'Ryan (英式男声)' },
+  { id: 'thomas',      label: 'Thomas (英式男声)' },
+  // en-AU
+  { id: 'natasha',     label: 'Natasha (澳式女声)' },
+  { id: 'william',     label: 'William (澳式男声)' },
+  // en-CA
+  { id: 'clara',       label: 'Clara (加式女声)' },
+  { id: 'liam',        label: 'Liam (加式男声)' },
+  // en-IN
+  { id: 'neerja',      label: 'Neerja (印度女声)' },
+  { id: 'prabhat',     label: 'Prabhat (印度男声)' },
+  // en-IE
+  { id: 'emily',       label: 'Emily (爱尔兰女声)' },
+  { id: 'connor',      label: 'Connor (爱尔兰男声)' },
 ] as const;
 
 export type TTSVoice = string;
@@ -220,7 +249,7 @@ export function useFullTextTTS({
         }
 
         setVoices([...EDGE_VOICES]);
-        setVoice(config.edge.voice || 'default');
+        setVoice(config.edge.voice || 'aria');
         setSpeed(config.edge.speed || 1);
         persistReadyRef.current = true;
       } catch {

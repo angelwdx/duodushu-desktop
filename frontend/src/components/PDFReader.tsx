@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useReaderGestures } from "../hooks/useReaderGestures";
 import { useFullTextTTS } from "../hooks/useFullTextTTS";
 import TTSLoadingDots from "./TTSLoadingDots";
-import { preprocessTTSPlainText } from "../lib/ttsText";
+import { normalizePdfPageText, preprocessTTSPlainText } from "../lib/ttsText";
 import { getLookupWordFromText, splitTextForWordLookup, splitWordDataForLookup } from "../lib/wordLookup";
 import { Document, Page as PDFPage, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -191,6 +191,11 @@ function buildStructuredTextFromPDFItems(items: any[], pageWidth: number): strin
 
       if (movedToNewLine || movedToNextColumn) {
         flushLine();
+        // 标题（大字体）与正文（小字体）之间插入空行，确保段落分隔
+        const heightRatio = Math.max(prevHeight, currHeight) / Math.max(1, Math.min(prevHeight, currHeight));
+        if (heightRatio > 1.4) {
+          lines.push("");
+        }
       } else if (shouldInsertSpaceBetweenPDFItems(prevItem, item)) {
         currentLine += " ";
       }
@@ -491,48 +496,46 @@ interface ReaderProps {
     // Phase 1: Identify Drop Caps and find their matching words
     const dropCapIndices = new Set<number>();
     const matchedPairs: Map<number, number> = new Map(); // dropCapIndex -> matchIndex
+    const matchedTargets = new Set<number>();
 
     for (let i = 0; i < words.length; i++) {
       const w = words[i];
       if (!/^[A-Z]$/.test(w.text)) continue;
 
-      // A and I need stricter distance check since they're often independent words
+      // A / I 很常见为独立单词，误并代价高，需要更严格。
       const isAorI = /^[AI]$/.test(w.text);
-
-      // Find the closest matching lowercase-starting word
       let bestMatch = -1;
       let bestDistance = Infinity;
-
-      // Optimize: Only check nearby words (window-based search)
-      // Drop caps must be physically close to their matched words
-      // Search BOTH directions since word order may vary
-      const SEARCH_WINDOW = 15;
-      const startJ = Math.max(0, i - SEARCH_WINDOW);
-      const endJ = Math.min(i + SEARCH_WINDOW, words.length);
-
-      for (let j = startJ; j < endJ; j++) {
+      // 不能只看相邻 index。
+      // 某些页（例如这本书第 23 页）下沉首字母与正文碎片之间会夹着图片说明/标题块，
+      // 但几何位置仍然是紧邻的，所以这里按坐标做全页搜索。
+      for (let j = 0; j < words.length; j++) {
         if (i === j) continue;
         const candidate = words[j];
+        if (matchedTargets.has(j)) continue;
         if (!/^[a-z]/.test(candidate.text)) continue;
+        if (candidate.x < w.x) continue;
 
         const dx = candidate.x - (w.x + w.width);
         const dy = Math.abs(candidate.y - w.y);
+        const candidateHeight = Math.max(candidate.height, 1);
+        const heightRatio = w.height / candidateHeight;
+        const isLargeDropCap = heightRatio >= 1.35;
 
-        // Calculate height ratio
-        const heightRatio = w.height / candidate.height;
+        // 真正的下沉首字母允许更大的纵向错位；
+        // 若高度接近，则只允许极小间距的紧邻碎片（如 D + id, O + n）。
+        const maxDx = isLargeDropCap
+          ? Math.max(candidateHeight * 0.8, 18)
+          : Math.max(candidateHeight * 0.18, 2.5);
+        const maxDy = isLargeDropCap
+          ? Math.max(candidateHeight * 1.1, 20)
+          : Math.max(candidateHeight * 0.4, 8);
 
-        // For A/I, they are often independent words.
-        // ONLY merge if:
-        // 1. It's a real drop cap (heightRatio > 1.2) -> standard logic
-        // 2. It's roughly same height (heightRatio <= 1.2) -> DO NOT MERGE unless strictly overlapping (negative gap)
-        // Some PDFs might have kerning making gap extremely small, but usually space > 0.
-        // We set maxDx = 0 for same-height A/I to be safe against "A casual".
-        const maxDx = isAorI 
-          ? (heightRatio > 1.2 ? 10 : -1) // -1 means they must overlap significantly to merge
-          : 50;
-        const maxDy = isAorI ? 30 : 60;
-
-        if (dx < -10 || dx > maxDx || dy > maxDy) continue;
+        if (dx < -2 || dx > maxDx || dy > maxDy) continue;
+        if (!isLargeDropCap) {
+          if (isAorI) continue;
+          if (j !== i + 1) continue;
+        }
 
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < bestDistance) {
@@ -544,6 +547,7 @@ interface ReaderProps {
       if (bestMatch !== -1) {
         dropCapIndices.add(i);
         matchedPairs.set(i, bestMatch);
+        matchedTargets.add(bestMatch);
       }
     }
 
@@ -831,7 +835,7 @@ interface ReaderProps {
         setPageTextForTTSPage(pageNumber);
         if (onContentChange) {
           try {
-            onContentChange(backendText);
+            onContentChange(normalizeText(backendText));
           } catch (err) {
             // 静默处理
           }
@@ -893,7 +897,7 @@ interface ReaderProps {
       setPageTextForTTSPage(pageNumber);
       if (onContentChange) {
         try {
-          onContentChange(resolvedText);
+          onContentChange(normalizeText(resolvedText));
         } catch (err) {
           // 静默处理
         }
@@ -959,104 +963,7 @@ interface ReaderProps {
   const resolvedPageText =
     (pageTextForTTSPage === pageNumber ? pageTextForTTS : "") || textContent || "";
 
-  const repairDropCapParagraphs = (text: string) => {
-    if (!text) return "";
-
-    const paragraphs = text
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n")
-      .split(/\n\s*\n/)
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    const isDropCap = (part: string) => /^[A-Z]$/.test(part);
-    const startsWithLowercase = (part: string) => /^[a-z]/.test(part);
-    const isLikelyHeadingOrCaption = (part: string) => {
-      if (!part || startsWithLowercase(part)) return false;
-      const lines = part
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean);
-
-      if (lines.length === 0 || lines.length > 4) return false;
-      if (lines.some((line) => line.length > 48)) return false;
-      if (/[.!?]\s*$/.test(part)) return false;
-
-      return true;
-    };
-
-    const repaired: string[] = [];
-
-    for (let i = 0; i < paragraphs.length; i += 1) {
-      const current = paragraphs[i];
-      const currentLines = current
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean);
-      const trailingDropCap = currentLines.length >= 2 ? currentLines[currentLines.length - 1] : "";
-      const headingPrefix = currentLines.slice(0, -1).join("\n").trim();
-
-      if (
-        trailingDropCap &&
-        isDropCap(trailingDropCap) &&
-        headingPrefix &&
-        isLikelyHeadingOrCaption(headingPrefix) &&
-        i + 1 < paragraphs.length &&
-        startsWithLowercase(paragraphs[i + 1])
-      ) {
-        repaired.push(headingPrefix);
-        repaired.push(`${trailingDropCap}${paragraphs[i + 1]}`);
-        i += 1;
-        continue;
-      }
-
-      if (!isDropCap(current)) {
-        repaired.push(current);
-        continue;
-      }
-
-      const prefixBlocks: string[] = [];
-      let bodyIndex = i + 1;
-
-      while (bodyIndex < paragraphs.length && isLikelyHeadingOrCaption(paragraphs[bodyIndex])) {
-        prefixBlocks.push(paragraphs[bodyIndex]);
-        bodyIndex += 1;
-      }
-
-      if (bodyIndex < paragraphs.length && startsWithLowercase(paragraphs[bodyIndex])) {
-        repaired.push(...prefixBlocks);
-        repaired.push(`${current}${paragraphs[bodyIndex]}`);
-        i = bodyIndex;
-        continue;
-      }
-
-      repaired.push(current);
-    }
-
-    return repaired.join("\n\n");
-  };
-
-  const normalizeText = (text: string) => {
-    if (!text) return "";
-    let refined = repairDropCapParagraphs(text);
-    // 注意：页码过滤（Page N / 第N页 / 孤立数字行）统一由 preprocessTTSPlainText 负责，
-    // 此处不重复处理，避免双重匹配误伤正文中的数字段落。
-    refined = refined.replace(/([A-Z])\s*[\r\n]+\s*([a-z])/g, "$1$2");
-    refined = refined.replace(/-\s*[\r\n]+\s*/g, "");
-    refined = refined.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    refined = refined.replace(/\n{3,}/g, "\n\n");
-    return refined
-      .split(/\n\s*\n/)
-      .map((paragraph) =>
-        paragraph
-          .split("\n")
-          .map((line) => line.replace(/[ \t]+/g, " ").trim())
-          .filter(Boolean)
-          .join(" ")
-      )
-      .filter(Boolean)
-      .join("\n\n");
-  };
+  const normalizeText = (text: string) => normalizePdfPageText(text);
 
   // 全文朗读的文本来源与文本模式显示保持一致：都使用 normalizeText 处理后的文本
   const getPageText = useCallback((_page: number): string => {

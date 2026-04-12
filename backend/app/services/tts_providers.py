@@ -16,11 +16,40 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Edge TTS 内置音色映射
+# Edge TTS 内置音色映射（按地区分组，仅保留通用音色，不含 Multilingual / Expressive 变体）
 EDGE_VOICE_MAP: dict[str, str] = {
-    "default": "en-US-AriaNeural",
-    "male":    "en-US-ChristopherNeural",
-    "female":  "en-US-JennyNeural",
+    # en-US
+    "aria":          "en-US-AriaNeural",
+    "jenny":         "en-US-JennyNeural",
+    "guy":           "en-US-GuyNeural",
+    "christopher":   "en-US-ChristopherNeural",
+    "eric":          "en-US-EricNeural",
+    "michelle":      "en-US-MichelleNeural",
+    "roger":         "en-US-RogerNeural",
+    "steffan":       "en-US-SteffanNeural",
+    "ana":           "en-US-AnaNeural",
+    "andrew":        "en-US-AndrewNeural",
+    "emma":          "en-US-EmmaNeural",
+    "brian":         "en-US-BrianNeural",
+    "ava":           "en-US-AvaNeural",
+    # en-GB
+    "sonia":         "en-GB-SoniaNeural",
+    "libby":         "en-GB-LibbyNeural",
+    "maisie":        "en-GB-MaisieNeural",
+    "ryan":          "en-GB-RyanNeural",
+    "thomas":        "en-GB-ThomasNeural",
+    # en-AU
+    "natasha":       "en-AU-NatashaNeural",
+    "william":       "en-AU-WilliamMultilingualNeural",
+    # en-CA
+    "clara":         "en-CA-ClaraNeural",
+    "liam":          "en-CA-LiamNeural",
+    # en-IN
+    "neerja":        "en-IN-NeerjaNeural",
+    "prabhat":       "en-IN-PrabhatNeural",
+    # en-IE
+    "emily":         "en-IE-EmilyNeural",
+    "connor":        "en-IE-ConnorNeural",
 }
 
 
@@ -55,14 +84,14 @@ class EdgeTTSProvider(BaseTTSProvider):
     """微软 Edge TTS - 免费，无需配置，输出 audio/mpeg"""
 
     async def stream_with_content_type(
-        self, text: str, voice: str = "default"
+        self, text: str, voice: str = "aria"
     ) -> Tuple[str, AsyncGenerator[bytes, None]]:
         return "audio/mpeg", self._stream_inner(text, voice)
 
     async def _stream_inner(
         self, text: str, voice: str
     ) -> AsyncGenerator[bytes, None]:
-        voice_name = EDGE_VOICE_MAP.get(voice, voice) if voice else EDGE_VOICE_MAP["default"]
+        voice_name = EDGE_VOICE_MAP.get(voice, voice) if voice else EDGE_VOICE_MAP["aria"]
         try:
             communicate = edge_tts.Communicate(text, voice_name)
             async for chunk in communicate.stream():

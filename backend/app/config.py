@@ -20,11 +20,20 @@ else:
     logger.info(f"开发环境，BASE_DIR: {BASE_DIR}")
 
 # 获取数据目录
-# 优先使用环境变量 APP_DATA_DIR，否则默认使用 backend/data (开发环境)
+# 优先级：环境变量 APP_DATA_DIR > macOS 安装版 userData > backend/data (开发回退)
 env_data_dir = os.getenv("APP_DATA_DIR")
 if env_data_dir:
     DATA_DIR = Path(env_data_dir).resolve()
     logger.info(f"使用环境变量 APP_DATA_DIR: {DATA_DIR}")
+elif not getattr(sys, "frozen", False) and sys.platform == "darwin":
+    # 开发环境 macOS：使用与安装版相同的 userData 目录，保持数据统一
+    mac_user_data = Path.home() / "Library" / "Application Support" / "duodushu-desktop"
+    if mac_user_data.exists():
+        DATA_DIR = mac_user_data
+        logger.info(f"开发环境：检测到 macOS 安装版数据目录，复用: {DATA_DIR}")
+    else:
+        DATA_DIR = BASE_DIR / "data"
+        logger.warning(f"未找到 macOS 安装版数据目录，使用默认开发环境路径: {DATA_DIR}")
 else:
     DATA_DIR = BASE_DIR / "data"
     logger.warning(f"未设置 APP_DATA_DIR 环境变量，使用默认开发环境路径: {DATA_DIR}")

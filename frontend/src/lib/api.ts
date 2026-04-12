@@ -394,7 +394,7 @@ export interface TTSCacheInfo {
 
 const DEFAULT_TTS_CONFIG: TTSConfig = {
   provider: 'edge',
-  edge: { voice: 'default', speed: 1 },
+  edge: { voice: 'aria', speed: 1 },
   openai_api: { base_url: 'https://api.openai.com/v1', api_key: '', model: 'tts-1', voice: 'alloy', speed: 1 },
   qwen3: { base_url: 'http://127.0.0.1:18790/v1', model: 'tts-1', voice: '塔塔', speed: 1 },
 };

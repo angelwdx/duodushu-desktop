@@ -15,6 +15,7 @@ import { createLogger } from "../../lib/logger";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { createReaderShortcuts, SHORTCUT_TITLES } from "../../lib/shortcuts";
+import { normalizePdfPageText } from "../../lib/ttsText";
 
 const log = createLogger('ReaderPage');
 
@@ -465,76 +466,26 @@ function ReaderContent() {
   const extractSentence = (text: string, word: string): string => {
     if (!text || !word) return "";
 
-    // 1. Split into lines and merge based on casing (heuristic for PDF/Text line wraps)
-    const rawLines = text.split(/\r?\n/);
-    const mergedBlocks: string[] = [];
-    let currentBlock = "";
+    const mergedBlocks = normalizePdfPageText(text)
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .split(/\n\s*\n/)
+      .map((block) => block.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
 
-    for (let i = 0; i < rawLines.length; i++) {
-      const line = rawLines[i].trim();
-      if (!line) {
-        if (currentBlock) {
-          mergedBlocks.push(currentBlock);
-          currentBlock = "";
-        }
-        continue;
-      }
-
-      if (currentBlock) {
-        const lastChar = currentBlock[currentBlock.length - 1];
-        const nextFirstChar = line[0];
-
-        // Merge if:
-        // - Previous line doesn't end with sentence terminal (.!?)
-        // - AND Next line starts with lowercase letter (indicating a wrap)
-        // OR if previous line ends with a comma (definite wrap)
-        const isHyphenated = lastChar === "-";
-        const isSentenceTerminal = /[.!?]/.test(lastChar);
-        const startsWithLower = /[a-z]/.test(nextFirstChar);
-        const endsWithComma = lastChar === ",";
-
-        if (
-          (!isSentenceTerminal && startsWithLower) ||
-          endsWithComma ||
-          isHyphenated
-        ) {
-          if (isHyphenated) {
-            currentBlock = currentBlock.slice(0, -1) + line;
-          } else {
-            currentBlock += " " + line;
-          }
-        } else {
-          mergedBlocks.push(currentBlock);
-          currentBlock = line;
-        }
-      } else {
-        currentBlock = line;
-      }
-    }
-    if (currentBlock) mergedBlocks.push(currentBlock);
-
-    // 2. Clean up blocks and find the one containing our word
     const target = word.toLowerCase();
     for (const block of mergedBlocks) {
-      // Normalize text: fix broken drop caps (e.g., "M eteors" -> "Meteors")
-      const cleanedBlock = block
-        .replace(/\b([A-Z])\s+([a-z]+)\b/g, "$1$2")
-        .replace(/\s+/g, " ")
-        .trim();
-
-      if (cleanedBlock.toLowerCase().includes(target)) {
-        // 3. Find specific sentence within the block
+      if (block.toLowerCase().includes(target)) {
         // Split by . ! ? but keep delimiters
-        const sentences = cleanedBlock.match(/[^.!?]+[.!?]*/g) || [
-          cleanedBlock,
+        const sentences = block.match(/[^.!?]+[.!?]*/g) || [
+          block,
         ];
         for (const s of sentences) {
           if (s.toLowerCase().includes(target)) {
             return s.trim();
           }
         }
-        // Fallback to full cleaned block if word is found but sentence split failed
-        return cleanedBlock;
+        return block;
       }
     }
 
