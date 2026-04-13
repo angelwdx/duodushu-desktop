@@ -2,6 +2,38 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 
+const LOOKUP_WORD_CHAR_RE = /[A-Za-zÀ-ÿ'’]/;
+
+function getTextNodesInRoot(root: Node): Text[] {
+  const doc = root.ownerDocument || document;
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  let current = walker.nextNode();
+  while (current) {
+    if (current.nodeType === Node.TEXT_NODE) {
+      nodes.push(current as Text);
+    }
+    current = walker.nextNode();
+  }
+  return nodes;
+}
+
+function collectWordPrefix(text: string): string {
+  let index = text.length;
+  while (index > 0 && LOOKUP_WORD_CHAR_RE.test(text[index - 1])) {
+    index -= 1;
+  }
+  return text.slice(index);
+}
+
+function collectWordSuffix(text: string): string {
+  let index = 0;
+  while (index < text.length && LOOKUP_WORD_CHAR_RE.test(text[index])) {
+    index += 1;
+  }
+  return text.slice(0, index);
+}
+
 interface SelectionState {
   text: string;
   x: number;
@@ -123,6 +155,57 @@ export default function SelectionToolbar({
     calculatePosition();
   }, [calculatePosition]);
 
+  const getLookupText = useCallback(() => {
+    const rawText = selection?.text?.trim() || "";
+    if (!rawText || /\s/.test(rawText) || !selection?.range) {
+      return rawText;
+    }
+
+    const { startContainer, endContainer, startOffset, endOffset } = selection.range;
+    if (startContainer.nodeType !== Node.TEXT_NODE || endContainer.nodeType !== Node.TEXT_NODE) {
+      return rawText;
+    }
+
+    const root =
+      (startContainer.parentElement?.closest(".react-pdf__Page__textContent") as Node | null) ||
+      startContainer.parentElement ||
+      startContainer;
+    const textNodes = getTextNodesInRoot(root);
+    const startNodeIndex = textNodes.findIndex((node) => node === startContainer);
+    const endNodeIndex = textNodes.findIndex((node) => node === endContainer);
+    if (startNodeIndex === -1 || endNodeIndex === -1 || startNodeIndex > endNodeIndex) {
+      return rawText;
+    }
+
+    let prefix = collectWordPrefix((startContainer.textContent || "").slice(0, startOffset));
+    let suffix = collectWordSuffix((endContainer.textContent || "").slice(endOffset));
+
+    for (let i = startNodeIndex - 1; i >= 0; i -= 1) {
+      const fragment = textNodes[i].textContent || "";
+      if (!fragment) break;
+      const collected = collectWordPrefix(fragment);
+      if (!collected) break;
+      prefix = collected + prefix;
+      if (collected.length !== fragment.length) break;
+    }
+
+    for (let i = endNodeIndex + 1; i < textNodes.length; i += 1) {
+      const fragment = textNodes[i].textContent || "";
+      if (!fragment) break;
+      const collected = collectWordSuffix(fragment);
+      if (!collected) break;
+      suffix += collected;
+      if (collected.length !== fragment.length) break;
+    }
+
+    const expandedText = `${prefix}${rawText}${suffix}`.trim();
+    if (!expandedText || /\s/.test(expandedText)) {
+      return rawText;
+    }
+
+    return expandedText;
+  }, [selection]);
+
   // 处理操作
   const handleNote = () => {
     if (!selection) return;
@@ -138,7 +221,7 @@ export default function SelectionToolbar({
 
   const handleLookup = () => {
     if (!selection) return;
-    onLookup?.(selection.text);
+    onLookup?.(getLookupText());
     onClear?.();
   };
 

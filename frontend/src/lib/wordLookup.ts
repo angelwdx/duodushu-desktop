@@ -137,7 +137,9 @@ function inferOcrJoinedSegments(text: string): LookupSegment[] {
     const right = normalizedText.slice(split);
     let score = Number.NEGATIVE_INFINITY;
 
-    if (OCR_JOIN_STOPWORDS.has(right) && left.length >= 4) {
+    // Restrict OCR joined-word inference to cases with a substantial left token.
+    // This avoids false positives like "Auroras" -> "Auror" + "as".
+    if (OCR_JOIN_STOPWORDS.has(right) && left.length >= 6) {
       score = left.length * 2 - right.length;
     } else if (right.length <= 3 && OCR_JOIN_STOPWORDS.has(right.slice(-2))) {
       score = left.length - 6;

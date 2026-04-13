@@ -59,5 +59,18 @@
     "text": "themselves",
     "expected": ["themselves"],
     "note": "正常单词应保持单段"
+  },
+  {
+    "kind": "click_ratio",
+    "text": "Auroras",
+    "ratio": 0.2,
+    "expected": "auroras",
+    "note": "正常单词 Auroras 不应被误拆成 auror + as"
+  },
+  {
+    "kind": "segments",
+    "text": "Auroras",
+    "expected": ["auroras"],
+    "note": "Auroras 应保持单段"
   }
 ]
