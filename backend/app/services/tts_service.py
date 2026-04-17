@@ -4,7 +4,7 @@ import asyncio
 import json
 from fastapi.responses import FileResponse, Response
 from fastapi import HTTPException
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Dict, List, Optional, Tuple
 from app.config import UPLOADS_DIR
 from app.services.tts_providers import (
     BaseTTSProvider,
@@ -15,7 +15,7 @@ AUDIO_CACHE_DIR = os.path.join(UPLOADS_DIR, "audio_cache")
 os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
 
 # Lock to prevent duplicate generation of same text
-_generation_locks: dict[str, asyncio.Lock] = {}
+_generation_locks: Dict[str, asyncio.Lock] = {}
 _locks_lock = asyncio.Lock()
 
 CONTENT_TYPE_EXTENSIONS = {
@@ -25,8 +25,8 @@ CONTENT_TYPE_EXTENSIONS = {
     "audio/x-wav": ".wav",
     "audio/wave": ".wav",
 }
-MAX_CACHE_FILES = 200
-MAX_CACHE_BYTES = 512 * 1024 * 1024
+MAX_CACHE_FILES = 50000
+MAX_CACHE_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
 
 
 def _get_tts_config() -> dict:
@@ -57,14 +57,14 @@ def _guess_extension(content_type: str) -> str:
     return CONTENT_TYPE_EXTENSIONS.get(content_type, ".bin")
 
 
-def _find_cached_audio_path(cache_key: str) -> str | None:
+def _find_cached_audio_path(cache_key: str) -> Optional[str]:
     for entry in os.listdir(AUDIO_CACHE_DIR):
         if entry.startswith(f"{cache_key}.") and not entry.endswith(".json"):
             return os.path.join(AUDIO_CACHE_DIR, entry)
     return None
 
 
-def _list_cached_audio_files() -> list[str]:
+def _list_cached_audio_files() -> List[str]:
     return [
         os.path.join(AUDIO_CACHE_DIR, entry)
         for entry in os.listdir(AUDIO_CACHE_DIR)
@@ -72,7 +72,7 @@ def _list_cached_audio_files() -> list[str]:
     ]
 
 
-def _load_cached_audio(cache_key: str) -> tuple[str, bytes] | None:
+def _load_cached_audio(cache_key: str) -> Optional[Tuple[str, bytes]]:
     meta_path = _get_cache_meta_path(cache_key)
     audio_path = _find_cached_audio_path(cache_key)
     if not audio_path or not os.path.exists(meta_path):
@@ -167,7 +167,7 @@ async def get_or_generate_audio(text: str, voice: str = "default") -> tuple[str,
 
         try:
             content_type, body = await provider.stream_with_content_type(text, voice)
-            chunks: list[bytes] = []
+            chunks: List[bytes] = []
             async for chunk in body:
                 chunks.append(chunk)
             audio_bytes = b"".join(chunks)

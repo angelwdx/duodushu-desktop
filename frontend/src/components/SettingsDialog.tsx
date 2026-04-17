@@ -253,7 +253,7 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col animate-in zoom-in-95 duration-200" 
-           style={{ boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)" }}>
+           style={{ boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)", maxHeight: "90vh" }}>
         
         {/* Header */}
         <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100">
@@ -275,7 +275,7 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-5">
+        <div className="p-6 space-y-5 overflow-y-auto flex-1 min-h-0">
            
            {/* Global Message */}
            {message && (

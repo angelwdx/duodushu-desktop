@@ -712,16 +712,32 @@ app.whenReady().then(async () => {
         }
       ]);
 
-      tray.setContextMenu(contextMenu);
-      tray.on('click', () => {
-        if (mainWindow?.isVisible()) {
-          mainWindow.hide();
-          if (process.platform === 'darwin') app.dock.hide();
-        } else {
-          mainWindow?.show();
-          if (process.platform === 'darwin') app.dock.show();
-        }
-      });
+      if (process.platform === 'darwin') {
+        // macOS: 不设置 setContextMenu，否则单击会被系统劫持（需要长按才响应）
+        // 改为：单击 → 显示/隐藏主窗口；右键 → 手动弹出菜单
+        tray.on('click', () => {
+          if (mainWindow?.isVisible()) {
+            mainWindow.hide();
+            app.dock.hide();
+          } else {
+            mainWindow?.show();
+            app.dock.show();
+          }
+        });
+        tray.on('right-click', () => {
+          tray?.popUpContextMenu(contextMenu);
+        });
+      } else {
+        // Windows / Linux: 直接设置右键菜单，单击事件正常
+        tray.setContextMenu(contextMenu);
+        tray.on('click', () => {
+          if (mainWindow?.isVisible()) {
+            mainWindow.hide();
+          } else {
+            mainWindow?.show();
+          }
+        });
+      }
     } catch (error) {
       logErrorToFile('Tray initialization failed', error);
     }
