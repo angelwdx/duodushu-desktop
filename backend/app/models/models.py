@@ -104,6 +104,20 @@ class Bookmark(Base):
     created_at = Column(SADateTime(timezone=True), server_default=func.now())
 
 
+class Note(Base):
+    """用户划线笔记模型"""
+
+    __tablename__ = "notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    book_id = Column(String, ForeignKey("books.id"), nullable=False)
+    page_number = Column(Integer, nullable=False)
+    highlighted_text = Column(Text, nullable=False)  # 划线文本
+    comment = Column(Text, default="")  # 用户评论
+    color = Column(String, default="#fef08a")  # 高亮颜色
+    created_at = Column(SADateTime(timezone=True), server_default=func.now())
+
+
 class WordContext(Base):
     """单词上下文表"""
 

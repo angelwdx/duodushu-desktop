@@ -929,3 +929,84 @@ export function saveBookOrder(ids: string[]): void {
     // ignore
   }
 }
+
+// ─── 笔记 API ─────────────────────────────────────────────────────────────────
+
+export interface NoteItem {
+  id: number;
+  book_id: string;
+  page_number: number;
+  highlighted_text: string;
+  comment: string;
+  color: string;
+  created_at: string;
+}
+
+export async function getNotes(bookId?: string): Promise<NoteItem[]> {
+  const url = new URL(`${API_URL}/api/notes/`);
+  if (bookId) url.searchParams.append('book_id', bookId);
+  const res = await fetch(url.toString(), { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to fetch notes');
+  return res.json();
+}
+
+export async function createNote(data: {
+  book_id: string;
+  page_number: number;
+  highlighted_text: string;
+  comment?: string;
+  color?: string;
+}): Promise<NoteItem> {
+  const res = await fetch(`${API_URL}/api/notes/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error('Failed to create note');
+  return res.json();
+}
+
+export async function updateNoteComment(noteId: number, comment: string): Promise<NoteItem> {
+  const res = await fetch(`${API_URL}/api/notes/${noteId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ comment }),
+  });
+  if (!res.ok) throw new Error('Failed to update note');
+  return res.json();
+}
+
+export async function deleteNote(noteId: number): Promise<void> {
+  const res = await fetch(`${API_URL}/api/notes/${noteId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete note');
+}
+
+// ─── 全局搜索 API ──────────────────────────────────────────────────────────────
+
+export interface SearchBookResult {
+  id: string;
+  title: string;
+  author?: string;
+  format: string;
+}
+
+export interface SearchPageResult {
+  book_id: string;
+  book_title: string;
+  page_number: number;
+  snippet: string;
+}
+
+export interface SearchResult {
+  books: SearchBookResult[];
+  pages: SearchPageResult[];
+}
+
+export async function searchContent(q: string, limit = 20): Promise<SearchResult> {
+  const url = new URL(`${API_URL}/api/search/`);
+  url.searchParams.append('q', q);
+  url.searchParams.append('limit', String(limit));
+  const res = await fetch(url.toString(), { cache: 'no-store' });
+  if (!res.ok) return { books: [], pages: [] };
+  return res.json();
+}

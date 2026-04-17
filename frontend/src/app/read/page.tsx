@@ -5,7 +5,8 @@ import { useParams, useSearchParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import DictionarySidebar from "../../components/DictionarySidebar";
 import AITeacherSidebar from "../../components/AITeacherSidebar";
-import NotesSidebar, { Note } from "../../components/NotesSidebar";
+import NotesSidebar from "../../components/NotesSidebar";
+import type { Note } from "../../components/NotesSidebar";
 import LeftSidebar from "../../components/LeftSidebar";
 import SelectionToolbar from "../../components/SelectionToolbar";
 import { useGlobalTextSelection } from "../../hooks/useGlobalTextSelection";
@@ -316,31 +317,26 @@ function ReaderContent() {
   // --- Notes State ---
   const [notes, setNotes] = useState<Note[]>([]);
 
-  // Load notes from localStorage
+  // 从后端加载笔记（替代 localStorage）
   useEffect(() => {
     if (!id) return;
-    const savedNotes = localStorage.getItem(`notes-${id}`);
-    if (savedNotes) {
-      try {
-        setNotes(JSON.parse(savedNotes));
-      } catch (e) {
-        console.error("Failed to parse notes:", e);
-      }
-    }
+    import('../../lib/api').then(({ getNotes }) => {
+      getNotes(id).then((data) => {
+        // 将后端 NoteItem 转为前端 Note 格式
+        setNotes(data.map((n) => ({
+          id: String(n.id),
+          bookId: n.book_id,
+          pageNumber: n.page_number,
+          highlightedText: n.highlighted_text,
+          comment: n.comment,
+          createdAt: new Date(n.created_at).getTime(),
+          color: n.color,
+        })));
+      }).catch((e) => console.error('Failed to load notes:', e));
+    });
   }, [id]);
 
-  // Save notes to localStorage
-  useEffect(() => {
-    if (!id) return;
-    if (notes.length > 0) {
-      localStorage.setItem(`notes-${id}`, JSON.stringify(notes));
-    } else {
-      // Remove localStorage when all notes are deleted
-      localStorage.removeItem(`notes-${id}`);
-    }
-  }, [notes, id]);
-
-  // Handle Highlight (划线)
+  // 划线 → 创建笔记，同步到后端
   const handleHighlight = (text: string, arg2?: string | number, arg3?: string) => {
     let pageNum = currentPage;
     let source = arg3;
@@ -364,29 +360,61 @@ function ReaderContent() {
     } else if (source === 'vocab') {
         displaySource = '生词本';
     }
+    void displaySource; // 避免 TS 未使用变量警告
 
-    const newNote: Note = {
-      id: `note-${Date.now()}`,
+    // 乐观更新：先插入临时笔记，后端成功后替换为真实 id
+    const tempId = `temp-${Date.now()}`;
+    const optimisticNote: Note = {
+      id: tempId,
       bookId: id,
       pageNumber: pageNum,
       highlightedText: text,
-      comment: "",
+      comment: '',
       createdAt: Date.now(),
-      color: "#fef08a", // yellow-200
+      color: '#fef08a',
     };
-    setNotes((prev) => [newNote, ...prev]);
-    setSidebarMode("notes");
-    setRightSidebarCollapsed(false); // 自动展开右侧栏
+    setNotes((prev) => [optimisticNote, ...prev]);
+    setSidebarMode('notes');
+    setRightSidebarCollapsed(false);
+
+    // 异步同步到后端
+    import('../../lib/api').then(({ createNote }) => {
+      createNote({
+        book_id: id,
+        page_number: pageNum,
+        highlighted_text: text,
+        color: '#fef08a',
+      }).then((saved) => {
+        // 替换临时 id 为后端真实 id
+        setNotes((prev) =>
+          prev.map((n) => n.id === tempId ? { ...n, id: String(saved.id) } : n)
+        );
+      }).catch((e) => console.error('Failed to save note:', e));
+    });
   };
 
   const handleDeleteNote = (noteId: string) => {
     setNotes((prev) => prev.filter((n) => n.id !== noteId));
+    // 同步删除到后端（忽略 temp- 前缀的乐观笔记，等后端确认后它们会有真实 id）
+    const numId = parseInt(noteId, 10);
+    if (!isNaN(numId)) {
+      import('../../lib/api').then(({ deleteNote }) => {
+        deleteNote(numId).catch((e) => console.error('Failed to delete note:', e));
+      });
+    }
   };
 
   const handleUpdateComment = (noteId: string, comment: string) => {
     setNotes((prev) =>
       prev.map((n) => (n.id === noteId ? { ...n, comment } : n)),
     );
+    // 同步更新到后端
+    const numId = parseInt(noteId, 10);
+    if (!isNaN(numId)) {
+      import('../../lib/api').then(({ updateNoteComment }) => {
+        updateNoteComment(numId, comment).catch((e) => console.error('Failed to update note comment:', e));
+      });
+    }
   };
 
   // --- Dictionary Sidebar State ---

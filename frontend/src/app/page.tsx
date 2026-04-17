@@ -23,6 +23,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { getBooks, deleteBook, updateBookType, Book, getApiUrl, loadBookOrder, saveBookOrder } from '../lib/api';
 import MenuHandler from '../components/MenuHandler';
+import SearchDialog from '../components/SearchDialog';
 import Link from 'next/link';
 import { useSettings } from '../contexts/SettingsContext';
 import { useGlobalDialogs } from '../contexts/GlobalDialogsContext';
@@ -215,7 +216,20 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Cmd+F / Ctrl+F 打开全局搜索
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -409,6 +423,17 @@ export default function Home() {
             <p className="mt-2 text-gray-500">上传书籍，开始沉浸式阅读</p>
           </div>
           <div className="flex items-center gap-2 sm:gap-4">
+            {/* 全局搜索 */}
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="w-11 h-11 inline-grid place-items-center text-gray-500 hover:text-gray-900 transition-colors hover:bg-gray-100 rounded-full shrink-0 touch-icon-btn"
+              title="搜索书名/内容 (⌘F)"
+              aria-label="全局搜索"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </button>
             <button
               onClick={openUpload}
               className="w-11 h-11 inline-grid place-items-center text-gray-500 hover:text-gray-900 transition-colors group hover:bg-gray-100 rounded-full border-none outline-none shrink-0 touch-icon-btn"
@@ -528,6 +553,9 @@ export default function Home() {
           )}
         </section>
       </div>
+
+      {/* 全局搜索弹窗 */}
+      <SearchDialog isOpen={searchOpen} onClose={() => setSearchOpen(false)} />
 
       {/* Menu Handler - 处理 Electron 菜单事件 (首页特定) */}
       <MenuHandler />

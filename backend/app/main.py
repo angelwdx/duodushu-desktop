@@ -8,6 +8,8 @@ from .routers import (
     vocabulary,
     vocabulary_snippet,
     bookmarks,
+    notes,
+    search,
     ai,
     rag,
     dicts,
@@ -303,6 +305,8 @@ app.include_router(dictionary.router)
 app.include_router(tts.router)
 app.include_router(vocabulary.router)
 app.include_router(bookmarks.router)
+app.include_router(notes.router)
+app.include_router(search.router)
 app.include_router(ai.router)
 app.include_router(rag.router)
 app.include_router(dicts.router)
