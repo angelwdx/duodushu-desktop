@@ -952,6 +952,10 @@ interface ReaderProps {
   useEffect(() => {
     setPageTextForTTS(textContent || "");
     setPageTextForTTSPage(textContent ? pageNumber : null);
+    // 当后端 textContent 就绪时通知父组件，解决 PDF.js 渲染早于 API 返回的时序问题
+    if (textContent && onContentChange) {
+      onContentChange(normalizeText(textContent));
+    }
   }, [pageNumber, textContent]);
 
   useEffect(() => {

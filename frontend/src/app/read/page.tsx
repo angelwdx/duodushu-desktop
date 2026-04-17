@@ -83,7 +83,7 @@ function ReaderContent() {
   const [totalPages, setTotalPages] = useState<number | null>(null);
   const [pageData, setPageData] = useState<any>(null);
   const [visibleContent, setVisibleContent] = useState<string>(""); // 新增：当前视窗可见文本
-  const [isContentLoading, setIsContentLoading] = useState(false); // 新增：内容加载状态
+  const [isContentLoading, setIsContentLoading] = useState(true); // 初始为 true，等待首次内容加载完成
 
   // 追踪 visibleContent 的变化，用于调试
   useEffect(() => {
@@ -149,6 +149,7 @@ function ReaderContent() {
     if (!id) return;
     // Clear immediately to prevent stale data usage during race condition
     setPageData(null);
+    setIsContentLoading(true);
     log.debug('Fetching page data', { page: currentPage });
     const controller = new AbortController();
 
