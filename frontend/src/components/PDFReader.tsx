@@ -61,7 +61,12 @@ function sortPDFTextItemsByReadingOrder(items: any[], pageWidth: number): any[] 
   const sortByYDesc = (a: any, b: any) => {
     const ay = Number(a?.transform?.[5] || 0);
     const by = Number(b?.transform?.[5] || 0);
-    if (Math.abs(ay - by) > 4) return by - ay; // y desc（高处先读）
+    // 使用与 buildStructuredTextFromPDFItems 相同的动态阈值，避免上标字符（如"th"/"nd"）
+    // 因 y 坐标偏高而被排在数字（如"16"/"2"）之前，导致序数词顺序错误。
+    const aHeight = Number(a?.height || 0);
+    const bHeight = Number(b?.height || 0);
+    const lineThreshold = Math.max(4, Math.max(aHeight, bHeight) * 0.65);
+    if (Math.abs(ay - by) > lineThreshold) return by - ay; // y desc（高处先读）
     return Number(a?.transform?.[4] || 0) - Number(b?.transform?.[4] || 0); // x asc
   };
 
