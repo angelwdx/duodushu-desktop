@@ -11,12 +11,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 
-# 2. 清理可能占用的 8000 端口 (正式版后台)
+# 2. 清理可能占用的端口 (后端 8000, 前端 3000)
 echo "🔍 检查并清理端口占用..."
-PID_8000=$(lsof -ti:8000)
-if [ -not -z "$PID_8000" ]; then
-    echo "⚠️ 发现端口 8000 被占用 (PID: $PID_8000)，正在清理..."
-    kill -9 $PID_8000
+PIDS=$(lsof -ti:8000,3000)
+if [ -n "$PIDS" ]; then
+    echo "⚠️ 发现端口被占用，正在清理进程: $PIDS"
+    echo "$PIDS" | xargs kill -9
 fi
 
 # 3. 设置数据目录

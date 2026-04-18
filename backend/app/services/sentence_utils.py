@@ -365,16 +365,12 @@ def extract_sentences_with_word(text: str, word: str) -> list:
             matching_sentences.append((cleaned, sentence_quality_score(cleaned), 1))
             continue
 
-        # 优先级3: 前缀匹配
+        # 优先级3: 前缀匹配（\b 保证词边界，不会误匹配含该词作子串的其他词）
         if len(matching_sentences) < 5:
-            prefix_pattern = r"\b" + re.escape(word) + r"[a-z]*"
+            prefix_pattern = r"\b" + re.escape(word) + r"[a-z]*\b"
             if re.search(prefix_pattern, sentence, re.IGNORECASE):
                 matching_sentences.append((cleaned, sentence_quality_score(cleaned), 2))
                 continue
-
-        # 优先级4：放宽匹配
-        if len(matching_sentences) < 3 and word_lower in cleaned.lower():
-            matching_sentences.append((cleaned, sentence_quality_score(cleaned), 3))
 
     matching_sentences.sort(key=lambda item: (item[2], -item[1], len(item[0])))
 
