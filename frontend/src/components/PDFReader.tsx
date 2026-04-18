@@ -1063,7 +1063,12 @@ interface ReaderProps {
                     key={i}
                     className={isHighlighted ? 'bg-yellow-100' : ''}
                   >
-                    {token.split("\n").map((nl, idx) => (idx > 0 ? <br key={idx} /> : null))}
+                    {token.split("\n").map((part, idx) => (
+                      <span key={idx}>
+                        {idx > 0 && <br />}
+                        {part}
+                      </span>
+                    ))}
                   </span>
                 );
               return (
