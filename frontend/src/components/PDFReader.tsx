@@ -6,7 +6,7 @@ import { useFullTextTTS } from "../hooks/useFullTextTTS";
 import TTSLoadingDots from "./TTSLoadingDots";
 import { normalizePdfPageText, preprocessTTSPlainText } from "../lib/ttsText";
 import { getLookupWordFromText, splitTextForWordLookup, splitWordDataForLookup } from "../lib/wordLookup";
-import logger from "../lib/logger";
+import { logger } from "../lib/logger";
 import { Document, Page as PDFPage, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
