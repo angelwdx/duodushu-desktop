@@ -1086,7 +1086,7 @@ def export_vocabulary_anki(db: Session = Depends(get_db)):
             ORDER BY wc.is_primary DESC, wc.id ASC
         """)).fetchall()
 
-        # 对每个单词最多取 3 条例句，直接使用数据库已缓存的翻译，不在导出时发起 AI 调用
+        # 取所有例句（主例句在前，按 id 排序），直接使用数据库已缓存的翻译，不在导出时发起 AI 调用
         ctx_map: dict = {}  # word_key -> [(ctx_id, sentence, translation), ...]
 
         for ctx in ctx_rows:
@@ -1095,8 +1095,7 @@ def export_vocabulary_anki(db: Session = Depends(get_db)):
                 continue
             if word_key not in ctx_map:
                 ctx_map[word_key] = []
-            if len(ctx_map[word_key]) < 3:
-                ctx_map[word_key].append([ctx_id, sentence, translation or ""])
+            ctx_map[word_key].append([ctx_id, sentence, translation or ""])
 
         output = io.StringIO()
         # Anki 识别的元数据注释（可选，让导入时自动选对分隔符和 HTML 模式）
