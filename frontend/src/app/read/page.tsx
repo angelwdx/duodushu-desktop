@@ -193,6 +193,9 @@ function ReaderContent() {
 
   const handlePageChange = useCallback((page: number) => {
     log.debug('Page change', { from: currentPage, to: page });
+    // 如果跳转的是当前页（如从生词本查看原文时 jumpRequest 导航到同一页），
+    // 则不清除 pageData，否则 words_data 被清空后不会重新请求导致无法点击查词
+    if (page === currentPage) return;
     setCurrentPage(page);
     saveProgress(page);
     // 重置可见内容，等待新页面的文本提取

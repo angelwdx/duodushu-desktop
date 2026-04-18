@@ -451,11 +451,15 @@ interface ReaderProps {
         if (Array.isArray(dest)) {
           const destRef = dest[0];
           const pageIndex = await pdfDocRef.current.getPageIndex(destRef);
-          if (pageIndex !== -1) {
+          // 只有目标页与当前页不同时才跳转，避免 goToPage 清除 pageData
+          if (pageIndex !== -1 && pageIndex + 1 !== pageNumber) {
             goToPage(pageIndex + 1);
           }
         } else if (typeof dest === "number") {
-          goToPage(dest + 1);
+          // 只有目标页与当前页不同时才跳转
+          if (dest + 1 !== pageNumber) {
+            goToPage(dest + 1);
+          }
         }
       } catch (e) {
         console.warn("Failed to jump to destination:", e);
