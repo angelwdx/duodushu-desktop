@@ -284,6 +284,7 @@ def find_and_save_example_contexts(
 
                 if not existing:
                     # 尝试翻译例句（允许失败，不阻断提取）
+                    # 注意：AI 翻译在 INSERT 之前执行，此时不持有 DB 写锁
                     sentence_translation = None
                     try:
                         from app.services import supplier_factory as _sf
@@ -308,11 +309,12 @@ def find_and_save_example_contexts(
                             "source_type": AUTO_EXTRACTED_SOURCE_TYPE,
                         },
                     )
+                    # 每条例句立即 commit，释放 SQLite 写锁，
+                    # 避免长时间持锁导致主线程的收藏操作报 "database is locked"
+                    db.commit()
                     contexts_found += 1
                     extraction_logger.info(f"[例句提取] 保存例句 #{contexts_found}: {sentence[:50]}...")
                     break  # 每页只取一个例句
-
-        db.commit()
 
         extraction_logger.info(
             f"[例句提取] ✓ 成功为单词 '{word}' 保存 {contexts_found} 个新例句 "
