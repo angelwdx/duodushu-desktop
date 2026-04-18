@@ -1,4 +1,3 @@
-import os
 import logging
 import re
 from pathlib import Path
@@ -72,9 +71,9 @@ class EPUBParser(BaseParser):
             data = book.get_metadata(namespace, name)
             return data[0][0] if data else None  # type: ignore
         except Exception as e:
-            print(f"Failed to extract metadata {namespace}:{name}: {e}")
+            logger = logging.getLogger(__name__)
+            logger.warning(f"提取元数据 {namespace}:{name} 失败: {e}")
             return None
-
     def _count_chapters(self, book: epub.EpubBook) -> int:
         """统计章节数"""
         return len([item for item in book.get_items() if item.get_type() == ebooklib.ITEM_DOCUMENT])
@@ -84,10 +83,10 @@ class EPUBParser(BaseParser):
         logger = logging.getLogger(__name__)
 
         try:
-            covers_dir = os.path.join(os.path.dirname(file_path), "covers")
-            os.makedirs(covers_dir, exist_ok=True)
+            covers_dir = Path(file_path).parent / "covers"
+            covers_dir.mkdir(parents=True, exist_ok=True)
 
-            logger.info(f"[{book_id}] Starting cover extraction for {os.path.basename(file_path)}")
+            logger.info(f"[{book_id}] Starting cover extraction for {Path(file_path).name}")
 
             result = self._extract_cover_from_opf(file_path, book_id, covers_dir)
             if result:
@@ -147,12 +146,12 @@ class EPUBParser(BaseParser):
                 return None
 
             file_name = getattr(cover_item, "file_name", "cover.png")
-            ext = os.path.splitext(file_name)[1].lower()
+            ext = Path(file_name).suffix.lower()
             if ext not in self._IMAGE_EXTENSIONS:
                 ext = ".jpg"
 
             cover_filename = f"{book_id}_cover{ext}"
-            cover_path = os.path.join(covers_dir, cover_filename)
+            cover_path = covers_dir / cover_filename
 
             with open(cover_path, "wb") as f:
                 f.write(img_data)
@@ -257,12 +256,12 @@ class EPUBParser(BaseParser):
                     logger.error(f"[{book_id}] (OPF) Extracted file is HTML/XML, not an image")
                     return None
 
-                ext = os.path.splitext(full_img_path)[1].lower()
+                ext = Path(full_img_path).suffix.lower()
                 if ext not in self._IMAGE_EXTENSIONS:
                     ext = ".jpg"
 
                 cover_filename = f"{book_id}_cover{ext}"
-                cover_path = os.path.join(covers_dir, cover_filename)
+                cover_path = Path(covers_dir) / cover_filename
                 with open(cover_path, "wb") as f:
                     f.write(img_data)
 
@@ -292,11 +291,11 @@ class EPUBParser(BaseParser):
                 logger.warning("No image reference found in cover document")
                 return None
 
-            img_basename = os.path.basename(src).split("?")[0]
+            img_basename = Path(src).name.split("?")[0]
             for item in book.get_items():
                 if not self._is_image_item(item):
                     continue
-                if os.path.basename(getattr(item, "file_name", "")) == img_basename:
+                if Path(getattr(item, "file_name", "")).name == img_basename:
                     logger.info(f"Matched image in cover doc: {item.file_name}")
                     return item
         except Exception as e:
@@ -306,7 +305,7 @@ class EPUBParser(BaseParser):
     def _is_image_item(self, item: Any) -> bool:
         media_type = (getattr(item, "media_type", "") or "").lower()
         file_name = (getattr(item, "file_name", "") or "").lower()
-        ext = os.path.splitext(file_name)[1]
+        ext = Path(file_name).suffix
         return item.get_type() == ebooklib.ITEM_IMAGE or media_type in self._IMAGE_MEDIA_TYPES or ext in self._IMAGE_EXTENSIONS
 
     def _looks_like_html_document(self, data: bytes) -> bool:
@@ -321,7 +320,7 @@ class EPUBParser(BaseParser):
         )
 
     def _guess_media_type_from_path(self, path: str) -> str:
-        ext = os.path.splitext(path)[1].lower()
+        ext = Path(path).suffix.lower()
         if ext == ".png":
             return "image/png"
         if ext in [".jpg", ".jpeg"]:
@@ -341,7 +340,7 @@ class EPUBParser(BaseParser):
 
         media_type = (getattr(item, "media_type", "") or "").lower()
         file_name = (getattr(item, "file_name", "") or "").lower()
-        ext = os.path.splitext(file_name)[1]
+        ext = Path(file_name).suffix
 
         if self._is_image_item(item):
             return item
