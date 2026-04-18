@@ -206,6 +206,8 @@ export function normalizePdfPageText(text: string): string {
   // 某些 PDF 会把段首下沉首字母单独放成一行，下一行从小写续写：
   // O\nn -> On，D\nid -> Did。
   refined = refined.replace(/(^|\n\s*\n)([ \t]*)([A-Z])\s*\n\s*([a-z])/g, "$1$2$3$4");
+  // 修复序数词数字与上标后缀的换行分离（16\nth → 16th）。
+  refined = refined.replace(/(\d+)\s*\n+\s*(st|nd|rd|th)\b/gi, "$1$2");
   // 只合并单个换行造成的断词，保留真正的段落边界（避免把标题和正文粘在一起）。
   refined = refined.replace(/([a-z])[ \t]*\n(?!\s*\n)[ \t]*([a-z])/g, "$1 $2");
   refined = refined.replace(/-\s*[\r\n]+\s*/g, "");
@@ -357,6 +359,9 @@ export function preprocessTTSPlainText(text: string): string {
   // 过滤常见的纯页码页脚，避免 PDF 朗读把页码念出来。
   processed = processed.replace(/(?:^|\n)\s*[-–—]?\s*Page\s+\d+\s*[-–—]?\s*(?=\n|$)/gim, "\n");
   processed = processed.replace(/(?:^|\n)\s*第\s*\d+\s*页\s*(?=\n|$)/gim, "\n");
+  // 修复序数词拆分：上标后缀（如"th"/"nd"/"rd"/"st"）因排版偏移被分至独立行时，
+  // 先还原为完整序数词（16\nth → 16th），避免后续页码过滤误删数字部分。
+  processed = processed.replace(/(\d+)\s*\n+\s*(st|nd|rd|th)\b/gi, "$1$2");
   processed = processed.replace(/(?:^|\n)\s*\d+\s*(?=\n|$)/gm, "\n");
   processed = normalizeQuotesForTTS(processed);
   processed = removeDecorativeSymbolsForTTS(processed);

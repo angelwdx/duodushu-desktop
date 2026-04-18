@@ -877,13 +877,16 @@ interface ReaderProps {
               return false;
             }
 
-            // 过滤边缘处较短的页眉/页脚碎片
+            // 过滤边缘处较短的页眉/页脚碎片（阈值收紧，避免误删正文第一行短文本）
+            const isVeryNearEdge =
+              pageWidth > 0 &&
+              (x <= pageWidth * 0.12 || x >= pageWidth * 0.88);
             const isShortEdgeHeaderFooter =
               pageWidth > 0 &&
               pageHeight > 0 &&
-              isNearLeftOrRightEdge &&
+              isVeryNearEdge &&
               textLength <= 24 &&
-              (y <= pageHeight * 0.08 || y >= pageHeight * 0.9);
+              (y <= pageHeight * 0.08 || y >= pageHeight * 0.93);
 
             return !isShortEdgeHeaderFooter;
           });

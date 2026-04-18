@@ -151,12 +151,11 @@ class PDFParser(BaseParser):
         for i, block_info in enumerate(ordered_blocks):
             block = block_info["block"]
             block_lines = []
-            ordered_lines = sorted(
+            ordered_lines = PDFParser._sort_visual_line_order(
                 block.get("lines", []),
-                key=lambda line: (
-                    float(line.get("bbox", [0, 0, 0, 0])[1]),
-                    float(line.get("bbox", [0, 0, 0, 0])[0]),
-                ),
+                lambda line: float(line.get("bbox", [0, 0, 0, 0])[1]),
+                lambda line: float(line.get("bbox", [0, 0, 0, 0])[3]),
+                lambda line: float(line.get("bbox", [0, 0, 0, 0])[0]),
             )
             for line in ordered_lines:
                 line_text, line_words = self._extract_line_text_and_words(line, block_idx=i)
@@ -286,6 +285,57 @@ class PDFParser(BaseParser):
         threshold = max(1.2, min(max(prev_width, curr_width) * 0.35, 8.0))
         return gap > threshold
 
+    @staticmethod
+    def _sort_visual_line_order(items: List[Dict], get_y0, get_y1, get_x0) -> List[Dict]:
+        """
+        按视觉阅读顺序排序文本块/行列表，正确处理上标/下标等偏移元素。
+
+        简单的 y0 排序会把上标（如序数词后缀 "th"、"nd"）排到基线文字前面，
+        因为上标的 y0 更小（位置更高）。本方法先粗排，再把 y 范围有重叠的
+        相邻项归入同一视觉行，行内按 x0 排序，确保"16"排在"th"之前。
+
+        Args:
+            items: 要排序的元素列表。
+            get_y0: 取元素顶边 y0 的可调用对象。
+            get_y1: 取元素底边 y1 的可调用对象。
+            get_x0: 取元素左边 x0 的可调用对象。
+
+        Returns:
+            按正确视觉顺序排列的元素列表。
+        """
+        if not items:
+            return []
+
+        # 粗排：以 y0 为主键，x0 为次键
+        rough = sorted(items, key=lambda item: (get_y0(item), get_x0(item)))
+
+        # 将 y 范围有重叠的相邻项归入同一视觉行
+        groups: List[List] = []
+        current_group: List = [rough[0]]
+        group_max_y1: float = get_y1(rough[0])
+
+        for item in rough[1:]:
+            y0 = get_y0(item)
+            y1 = get_y1(item)
+            item_h = max(y1 - y0, 0.5)
+            overlap = group_max_y1 - y0
+            # 重叠量达到当前元素高度的 35%（或至少 1pt）时，视为同一视觉行
+            if overlap >= max(item_h * 0.35, 1.0):
+                current_group.append(item)
+                group_max_y1 = max(group_max_y1, y1)
+            else:
+                groups.append(current_group)
+                current_group = [item]
+                group_max_y1 = y1
+        groups.append(current_group)
+
+        # 行内按 x0 排序，再展平
+        result: List[Dict] = []
+        for group in groups:
+            group.sort(key=lambda item: get_x0(item))
+            result.extend(group)
+        return result
+
     def _detect_columns(self, blocks: List[Dict], page_width: float) -> List[Dict]:
         """
         检测页面是否为多栏布局，返回已按正确阅读顺序排列的扁平块列表。
@@ -310,7 +360,9 @@ class PDFParser(BaseParser):
         if not blocks:
             return []
         if len(blocks) < 2:
-            return sorted(blocks, key=lambda b: (b["y0"], b["x0"]))
+            return PDFParser._sort_visual_line_order(
+                blocks, lambda b: b["y0"], lambda b: b["y1"], lambda b: b["x0"]
+            )
 
         # ── 步骤 1：分离全宽块与窄块 ──────────────────────────────────
         FULL_WIDTH_RATIO = 0.65
@@ -337,7 +389,9 @@ class PDFParser(BaseParser):
 
         # 显著窄块不足 → 单栏
         if len(significant_narrow) < 2:
-            return sorted(blocks, key=lambda b: (b["y0"], b["x0"]))
+            return PDFParser._sort_visual_line_order(
+                blocks, lambda b: b["y0"], lambda b: b["y1"], lambda b: b["x0"]
+            )
 
         # ── 步骤 3：X 聚类找分割点 ────────────────────────────────────
         center_xs = [b["center_x"] for b in significant_narrow]
@@ -352,7 +406,9 @@ class PDFParser(BaseParser):
 
         # 无分割点 → 单栏
         if not split_points:
-            return sorted(blocks, key=lambda b: (b["y0"], b["x0"]))
+            return PDFParser._sort_visual_line_order(
+                blocks, lambda b: b["y0"], lambda b: b["y1"], lambda b: b["x0"]
+            )
 
         # ── 步骤 4：窄块分配到各栏，每栏内按 y0 排序 ─────────────────
         columns: List[List[Dict]] = [[] for _ in range(len(split_points) + 1)]
@@ -365,7 +421,9 @@ class PDFParser(BaseParser):
 
         columns = [col for col in columns if col]
         for col in columns:
-            col.sort(key=lambda b: b["y0"])
+            col[:] = PDFParser._sort_visual_line_order(
+                col, lambda b: b["y0"], lambda b: b["y1"], lambda b: b["x0"]
+            )
 
         # ── 步骤 5：无全宽块 → 各栏顺序展开（左→右）────────────────
         if not full_width_blocks:
