@@ -155,11 +155,12 @@ export function repairDropCapParagraphs(text: string): string {
     const trailingDropCap = currentLines.length >= 2 ? currentLines[currentLines.length - 1] : "";
     const headingPrefix = currentLines.slice(0, -1).join("\n").trim();
 
+    // 图注结尾常带句号，不能用 isLikelyHeadingOrCaption 过滤，
+    // 只要段尾是孤立大写字母且下一段以小写开头即可判定为下沉首字母。
     if (
       trailingDropCap &&
       isDropCap(trailingDropCap) &&
       headingPrefix &&
-      isLikelyHeadingOrCaption(headingPrefix) &&
       i + 1 < paragraphs.length &&
       startsWithLowercase(paragraphs[i + 1])
     ) {
