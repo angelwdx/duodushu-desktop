@@ -44,6 +44,7 @@ def db_session():
             book_id TEXT NOT NULL,
             page_number INTEGER NOT NULL,
             context_sentence TEXT NOT NULL,
+            sentence_translation TEXT,
             is_primary INTEGER DEFAULT 0,
             source_type TEXT DEFAULT 'user_collected',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP

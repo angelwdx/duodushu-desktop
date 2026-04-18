@@ -104,6 +104,8 @@ def split_sentences(text: str) -> list:
 
     # 临时保护缩写（替换为特殊标记）
     protected_text = text
+    # 先保护小数点，避免"3.14"被切分为两句
+    protected_text = re.sub(r"(\d)\.(\d)", r"\1__DECIMAL__\2", protected_text)
     for i, abbr in enumerate(ABBREVIATIONS):
         placeholder = f"__ABBR{i}__"
         protected_text = protected_text.replace(abbr, placeholder)
@@ -111,12 +113,14 @@ def split_sentences(text: str) -> list:
     # 切分句子
     sentences = re.split(r"(?<=[.!?])(?:\s+|(?=[A-Z]))|(?:\n\n+)", protected_text)
 
-    # 恢复缩写
+    # 恢复缩写和小数点
     result_sentences = []
     for sent in sentences:
         for i, abbr in enumerate(ABBREVIATIONS):
             placeholder = f"__ABBR{i}__"
             sent = sent.replace(placeholder, abbr)
+        # 恢复小数点占位符
+        sent = sent.replace("__DECIMAL__", ".")
 
         cleaned = " ".join(sent.split())
         if len(cleaned) >= 10:
@@ -180,8 +184,6 @@ def is_valid_sentence(sentence: str, word: str) -> bool:
     if word_count < 5:
         return False
     if not re.search(r"[.!?\"']$", s):
-        return False
-    if "," not in s and word_count < 5:
         return False
 
     return True

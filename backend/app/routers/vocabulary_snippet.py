@@ -6,7 +6,7 @@ from sqlalchemy import text
 import logging
 
 from ..models.database import get_db
-from .vocabulary import run_example_extraction_task
+from ..services.extraction_service import run_example_extraction_task
 
 router = APIRouter(prefix="/api/vocabulary_snippet", tags=["vocabulary_snippet"])
 logger = logging.getLogger(__name__)

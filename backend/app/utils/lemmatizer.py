@@ -17,7 +17,6 @@ IRREGULAR_MAPPINGS = {
     # 不规则动词
     "went": "go",
     "gone": "go",
-    "went": "go",
     "bought": "buy",
     "caught": "catch",
     "chose": "choose",
@@ -58,7 +57,7 @@ IRREGULAR_MAPPINGS = {
     "lent": "lend",
     "let": "let",
     "lay": "lie",
-    "lay": "lay",
+    "laid": "lay",
     "lain": "lie",
     "lost": "lose",
     "made": "make",
@@ -68,7 +67,6 @@ IRREGULAR_MAPPINGS = {
     "put": "put",
     "read": "read",
     "ran": "run",
-    "run": "run",
     "said": "say",
     "saw": "see",
     "seen": "see",
@@ -93,7 +91,6 @@ IRREGULAR_MAPPINGS = {
     "threw": "throw",
     "thrown": "throw",
     "told": "tell",
-    "thought": "think",
     "understood": "understand",
     "wore": "wear",
     "worn": "wear",
@@ -142,6 +139,39 @@ IRREGULAR_MAPPINGS = {
     "most": "many",
     "less": "little",
     "least": "little",
+    # 辅音双写动词的现在分词（规则推导无法正确生成双写形式）
+    "running": "run",
+    "sitting": "sit",
+    "hitting": "hit",
+    "getting": "get",
+    "putting": "put",
+    "cutting": "cut",
+    "letting": "let",
+    "setting": "set",
+    "swimming": "swim",
+    "beginning": "begin",
+    "planning": "plan",
+    "stopping": "stop",
+    "dropping": "drop",
+    "shopping": "shop",
+    "winning": "win",
+    "spinning": "spin",
+    "skipping": "skip",
+    "fitting": "fit",
+    "quitting": "quit",
+    "committing": "commit",
+    "omitting": "omit",
+    "permitting": "permit",
+    # 辅音双写的过去式
+    "planned": "plan",
+    "stopped": "stop",
+    "dropped": "drop",
+    "shopped": "shop",
+    "skipped": "skip",
+    "fitted": "fit",
+    "committed": "commit",
+    "omitted": "omit",
+    "permitted": "permit",
 }
 
 
@@ -168,7 +198,12 @@ def get_word_variants(word: str) -> Set[str]:
     # 2. 添加常见后缀变体
     # -s/-es (复数/第三人称单数)
     if not word_lower.endswith("s"):
-        variants.add(word_lower + "s")
+        # -y → -ies（辅音 + y 结尾：study→studies, carry→carries）
+        if (word_lower.endswith("y") and len(word_lower) > 1
+                and word_lower[-2] not in "aeiou"):
+            variants.add(word_lower[:-1] + "ies")
+        else:
+            variants.add(word_lower + "s")
         variants.add(word_lower + "es")
 
     # -ed (过去式/过去分词)

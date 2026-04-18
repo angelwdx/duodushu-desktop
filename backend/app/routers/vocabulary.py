@@ -380,7 +380,7 @@ def test_word_examples(word: str, db: Session = Depends(get_db)):
         return {
             "word": word,
             "total_contexts": sum(c[3] for c in contexts),
-            "contexts": [{"source_type": c[0], "is_primary": c[1], "count": c[2]} for c in contexts],
+            "contexts": [{"source_type": c[1], "is_primary": c[2], "count": c[3]} for c in contexts],
         }
 
     except Exception as e:

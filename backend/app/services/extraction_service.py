@@ -9,7 +9,6 @@ import threading
 import time
 import traceback
 import logging
-import os
 
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -29,7 +28,7 @@ extraction_logger.setLevel(logging.INFO)
 if not extraction_logger.handlers:
     try:
         from app.config import DATA_DIR
-        log_path = os.path.join(str(DATA_DIR), "extraction.log")
+        log_path = DATA_DIR / "extraction.log"
         file_handler = logging.FileHandler(log_path, encoding="utf-8")
     except Exception:
         file_handler = logging.FileHandler("extraction.log", encoding="utf-8")
@@ -102,50 +101,52 @@ def run_example_extraction_task(word: str, exclude_book_id: Optional[str] = None
         extraction_logger.info(f"[后台任务] 单词 '{word}' 正在处理中，跳过")
         return
 
+    # 在整个重试流程开始前标记，退出后统一清除（避免重试间产生竞态窗口）
+    with extraction_lock:
+        if word_lower in processing_words:
+            extraction_logger.info(f"[后台任务] 单词 '{word}' 正在处理中（锁检查），跳过")
+            return
+        processing_words.add(word_lower)
+
     retry_count = 0
     max_retries = 3
 
-    while retry_count < max_retries:
-        db = None
-        try:
-            # 标记为正在处理
-            with extraction_lock:
-                if word_lower in processing_words:
-                    extraction_logger.info(f"[后台任务] 单词 '{word}' 正在处理中（锁检查），跳过")
-                    return
-                processing_words.add(word_lower)
+    try:
+        while retry_count < max_retries:
+            db = None
+            try:
+                extraction_logger.info(
+                    f"[后台任务] 开始为单词 '{word}' 提取例句，上限 {max_total} 个（尝试 {retry_count + 1}/{max_retries}）"
+                )
+                logger.info(f"[后台任务] 开始为单词 '{word}' 提取例句，上限 {max_total} 个")
 
-            extraction_logger.info(
-                f"[后台任务] 开始为单词 '{word}' 提取例句，上限 {max_total} 个（尝试 {retry_count + 1}/{max_retries}）"
-            )
-            logger.info(f"[后台任务] 开始为单词 '{word}' 提取例句，上限 {max_total} 个")
+                db = SessionLocal()
+                find_and_save_example_contexts(word, db, exclude_book_id=exclude_book_id, max_total=max_total)
+                extraction_logger.info(f"[后台任务] 完成单词 '{word}' 的例句提取")
+                logger.info(f"[后台任务] 完成单词 '{word}' 的例句提取")
+                break  # 成功，退出重试
 
-            db = SessionLocal()
-            find_and_save_example_contexts(word, db, exclude_book_id=exclude_book_id, max_total=max_total)
-            extraction_logger.info(f"[后台任务] 完成单词 '{word}' 的例句提取")
-            logger.info(f"[后台任务] 完成单词 '{word}' 的例句提取")
-            break  # 成功，退出重试
+            except Exception as e:
+                retry_count += 1
+                extraction_logger.error(f"[后台任务] 单词 '{word}' 例句提取失败（尝试 {retry_count}/{max_retries}）: {e}")
+                extraction_logger.error(f"[后台任务] 错误详情: {traceback.format_exc()}")
+                logger.error(f"[后台任务] 单词 '{word}' 例句提取失败（尝试 {retry_count}/{max_retries}）: {e}")
 
-        except Exception as e:
-            retry_count += 1
-            extraction_logger.error(f"[后台任务] 单词 '{word}' 例句提取失败（尝试 {retry_count}/{max_retries}）: {e}")
-            extraction_logger.error(f"[后台任务] 错误详情: {traceback.format_exc()}")
-            logger.error(f"[后台任务] 单词 '{word}' 例句提取失败（尝试 {retry_count}/{max_retries}）: {e}")
+                if retry_count >= max_retries:
+                    extraction_logger.error(f"[后台任务] 单词 '{word}' 达到最大重试次数，放弃")
+                else:
+                    wait_time = 2 ** (retry_count - 1)
+                    extraction_logger.info(f"[后台任务] 单词 '{word}' 等待 {wait_time} 秒后重试")
+                    time.sleep(wait_time)
 
-            if retry_count >= max_retries:
-                extraction_logger.error(f"[后台任务] 单词 '{word}' 达到最大重试次数，放弃")
-            else:
-                wait_time = 2 ** (retry_count - 1)
-                extraction_logger.info(f"[后台任务] 单词 '{word}' 等待 {wait_time} 秒后重试")
-                time.sleep(wait_time)
+            finally:
+                if db:
+                    db.close()
+                    db = None
 
-        finally:
-            if db:
-                db.close()
-                db = None
-
-            with extraction_lock:
-                processing_words.discard(word_lower)
+    finally:
+        with extraction_lock:
+            processing_words.discard(word_lower)
 
 
 def find_and_save_example_contexts(
