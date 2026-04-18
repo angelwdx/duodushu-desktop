@@ -6,6 +6,7 @@ import { useFullTextTTS } from '../hooks/useFullTextTTS';
 import TTSLoadingDots from './TTSLoadingDots';
 import { saveEpubState, getEpubState } from '../lib/epubCache';
 import { createLogger } from '../lib/logger';
+import { getApiUrl } from '../lib/api';
 import { preprocessTTSPlainText } from '../lib/ttsText';
 
 const log = createLogger('EPUBReader');
@@ -34,7 +35,7 @@ interface EPUBReaderProps {
   onWordClick?: (word: string, context?: string) => void;
   onOutlineChange?: (outline: OutlineItem[]) => void;
   onPageChange?: (progress: number) => void;
-  onContentChange?: (content: string) => void; // 鏂板锛：唴瀹瑰彉鍖栧洖璋僜r
+  onContentChange?: (content: string) => void; // 新增：内容变更回调
   onAskAI?: (text: string) => void;
   onHighlight?: (text: string, source?: string | number) => void;
   jumpRequest?: { dest: string | number; text?: string; word?: string; ts: number } | null;
@@ -44,11 +45,11 @@ export default function EPUBReader({
   fileUrl,
   bookId,
   initialProgress,
-  initialChapter, // 鏂板
+  initialChapter, // 新增
   onWordClick,
   onOutlineChange,
   onPageChange,
-  onContentChange, // 鏂板
+  onContentChange, // 新增
   onHighlight, // Add this
   jumpRequest
 }: EPUBReaderProps) {
@@ -105,7 +106,7 @@ export default function EPUBReader({
   
 
 
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const API_URL = getApiUrl();
 
   // 搜索中遮罩状态
   const [isSearching, setIsSearching] = useState(false);
@@ -968,7 +969,7 @@ export default function EPUBReader({
                                        (e.message && e.message.includes('IndexSizeError')) ||
                                        (e.message && e.message.includes('The offset is larger than'));
                 if (isIndexSizeError) {
-                   console.debug('[EPUB] Silenced IndexSizeError in setEnd', e);
+                   log.debug('[EPUB] Silenced IndexSizeError in setEnd', e);
                    return;
                 }
                 throw e;
@@ -984,7 +985,7 @@ export default function EPUBReader({
                                        (e.message && e.message.includes('IndexSizeError')) ||
                                        (e.message && e.message.includes('The offset is larger than'));
                 if (isIndexSizeError) {
-                   console.debug('[EPUB] Silenced IndexSizeError in setStart', e);
+                   log.debug('[EPUB] Silenced IndexSizeError in setStart', e);
                    return;
                 }
                 throw e;
@@ -1067,11 +1068,11 @@ export default function EPUBReader({
                        let end = offset;
                        
                        // Search backward
-                       while (start > 0 && /[\w\u00C0-\u00FF\u4e00-\u9fa5'-]/.test(text[start - 1])) {
+                       while (start > 0 && /[\w\u00C0-\u024F\u4e00-\u9fa5'-]/.test(text[start - 1])) {
                            start--;
                        }
                        // Search forward
-                       while (end < text.length && /[\w\u00C0-\u00FF\u4e00-\u9fa5'-]/.test(text[end])) {
+                       while (end < text.length && /[\w\u00C0-\u024F\u4e00-\u9fa5'-]/.test(text[end])) {
                            end++;
                        }
 
@@ -1547,7 +1548,7 @@ export default function EPUBReader({
                             (range as any).expand('word');
                             const word = range.toString().trim();
                              // Simple regex to clean the word
-                            const cleanWord = word.replace(/[^a-zA-ZÀ-ÿ'-]/g, '').toLowerCase();
+                            const cleanWord = word.replace(/[^a-zA-Z\u00C0-\u024F'-]/g, '').toLowerCase();
                             if (cleanWord && cleanWord.length > 1) {
                                 log.debug('Looked up word:', cleanWord);
                                 

@@ -367,6 +367,17 @@ export function preprocessTTSPlainText(text: string): string {
   processed = normalizeQuotesForTTS(processed);
   processed = removeDecorativeSymbolsForTTS(processed);
   processed = repairBrokenEnglishWordsForTTS(processed);
+
+  // 全大写单词（≥5字符且含至少1个元音）通常是标题或章节名等排版强调，而非缩略词。
+  // 将其转为首字母大写，避免 TTS 引擎将其逐字母拼读（如 "FOREWORD" → "Foreword"）。
+  // 短缩略词（≤4字符，如 NASA、HTML）或无元音词（如 HTTP、HTTPS）不受影响。
+  processed = processed.replace(/\b[A-Z]{5,}\b/g, (match) => {
+    if (/[AEIOU]/.test(match)) {
+      return match.charAt(0) + match.slice(1).toLowerCase();
+    }
+    return match;
+  });
+
   processed = insertHeadingPauses(processed);
   processed = removeStandalonePageNumberParagraphs(processed);
 
