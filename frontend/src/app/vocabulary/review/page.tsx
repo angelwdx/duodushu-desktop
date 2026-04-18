@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  getVocabulary,
+  getDueVocabulary,
   updateVocabularyMastery,
   loadReviewSettings,
   saveReviewSettings,
@@ -16,61 +16,51 @@ import {
 } from "../../../components/Icons";
 import VocabDetailContent from "../../../components/VocabDetailContent";
 
-interface VocabularyDetail {
+interface DueWord {
   id: number;
   word: string;
   phonetic?: string;
-  definition?: any;
   translation?: string;
-  // ... 其他字段在 VocabDetailContent 内部重新获取，这里只需最基础的用于列表展示
-  review_count: number;
   mastery_level: number;
+  review_count: number;
   difficulty_score: number;
   priority_score: number;
+  learning_status: string;
+  next_review_at?: string;
+  overdue_days?: number;
+  srs_interval: number;
+  srs_repetitions: number;
 }
 
 export default function ReviewPage() {
   const router = useRouter();
-  const [vocabList, setVocabList] = useState<VocabularyDetail[]>([]);
+  const [vocabList, setVocabList] = useState<DueWord[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showDefinition, setShowDefinition] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showCompletionDialog, setShowCompletionDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [reviewCount, setReviewCount] = useState<number>(DEFAULT_REVIEW_COUNT);
+  // SRS 反馈提示：显示"下次复习：N 天后"
+  const [srsToast, setSrsToast] = useState<string | null>(null);
 
   const currentVocab = vocabList[currentIndex];
 
   useEffect(() => {
     const settings = loadReviewSettings();
     setReviewCount(settings.reviewCount);
-    // 加载数据放在这里，确保 reviewCount 已初始化 (虽然 setState 是异步的，但这里作为初始加载逻辑)
-    // 更好的方式是将 loadVocab 独立调用，并依赖 reviewCount
   }, []);
 
   const loadVocab = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await getVocabulary(
-        undefined,  // bookId
-        1,          // page
-        reviewCount, // limit
-        'all',      // filterType
-        undefined,  // search
-        'priority_score'  // sortBy
-      );
-
-      const items = Array.isArray(data) ? data : (data.items || []);
-      if (items.length === 0) {
-        // 不跳转，直接显示空状态
-        setVocabList([]);
-      } else {
-        setVocabList(items);
-        setCurrentIndex(0);
-        setShowDefinition(false);
-      }
+      const data = await getDueVocabulary(reviewCount);
+      const items = data.items ?? [];
+      setVocabList(items);
+      setCurrentIndex(0);
+      setShowDefinition(false);
     } catch (e) {
-      console.error("加载单词列表失败:", e);
+      console.error("加载到期单词失败:", e);
       alert("加载失败");
     } finally {
       setLoading(false);
@@ -81,47 +71,24 @@ export default function ReviewPage() {
     loadVocab();
   }, [loadVocab]);
 
-  /* Moved loadVocab up */
-
-  const handleForgot = async () => {
-    if (!currentVocab) return;
-    try {
-      await updateVocabularyMastery(currentVocab.id, {
-        mastery_level: 1,
-        difficulty_score: currentVocab.difficulty_score + 1,
-        review_count: currentVocab.review_count + 1,
-        last_reviewed_at: new Date().toISOString(),
-      });
-      setShowDefinition(true);
-    } catch (e) {
-      console.error(e);
-    }
+  const showSrsToast = (days: number) => {
+    const text = days === 1 ? "下次复习：明天" : `下次复习：${days} 天后`;
+    setSrsToast(text);
+    setTimeout(() => setSrsToast(null), 2200);
   };
 
-  const handleVague = async () => {
+  const handleRate = async (quality: 0 | 3 | 5) => {
     if (!currentVocab) return;
     try {
-      await updateVocabularyMastery(currentVocab.id, {
-        mastery_level: Math.max(1, currentVocab.mastery_level - 1),
-        difficulty_score: currentVocab.difficulty_score + 1,
-        review_count: currentVocab.review_count + 1,
-        last_reviewed_at: new Date().toISOString(),
-      });
-      setShowDefinition(true);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleRemembered = async () => {
-    if (!currentVocab) return;
-    try {
-      await updateVocabularyMastery(currentVocab.id, {
-        mastery_level: Math.min(5, currentVocab.mastery_level + 1),
-        review_count: currentVocab.review_count + 1,
-        last_reviewed_at: new Date().toISOString(),
-      });
-      goToNext();
+      const result = await updateVocabularyMastery(currentVocab.id, { quality });
+      if (quality < 3) {
+        // 忘了：展示释义后停在当前词
+        setShowDefinition(true);
+        if (result?.next_review_days != null) showSrsToast(result.next_review_days);
+      } else {
+        if (result?.next_review_days != null) showSrsToast(result.next_review_days);
+        goToNext();
+      }
     } catch (e) {
       console.error(e);
     }
@@ -153,8 +120,10 @@ export default function ReviewPage() {
   if (vocabList.length === 0 && !loading) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center">
-        <div className="text-center text-gray-500">
-          <p className="mb-4">暂无需要复习的生词</p>
+        <div className="text-center">
+          <div className="text-5xl mb-4">🎉</div>
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">今日复习完成！</h2>
+          <p className="text-gray-500 mb-6 text-sm">暂无到期单词，保持学习节奏！</p>
           <button
             onClick={() => router.push("/vocabulary")}
             className="px-4 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
@@ -168,6 +137,13 @@ export default function ReviewPage() {
 
   return (
     <div className="h-screen bg-white flex flex-col overflow-hidden">
+      {/* SRS 反馈 Toast */}
+      {srsToast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-gray-900 text-white text-sm px-4 py-2 rounded-full shadow-lg animate-fade-in-out pointer-events-none">
+          {srsToast}
+        </div>
+      )}
+
       {/* 顶部导航栏 */}
       <header className="border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 bg-white z-50">
         <div className="flex items-center gap-4">
@@ -197,16 +173,20 @@ export default function ReviewPage() {
       <div className="w-full bg-gray-100 h-1 sticky top-[60px] z-40">
         <div
           className="bg-gray-900 h-1 transition-all"
-          style={{
-            width: `${((currentIndex + 1) / vocabList.length) * 100}%`,
-          }}
+          style={{ width: `${((currentIndex + 1) / vocabList.length) * 100}%` }}
         />
       </div>
+
+      {/* 逾期提示（调试/信息用） */}
+      {currentVocab?.overdue_days != null && currentVocab.overdue_days > 1 && (
+        <div className="text-center py-1 text-xs text-amber-600 bg-amber-50">
+          已逾期 {currentVocab.overdue_days} 天
+        </div>
+      )}
 
       {/* 主要内容区 */}
       <main className="flex-1 overflow-hidden relative">
         {!showDefinition ? (
-          // 折叠状态 - 简约居中卡片
           <div className="h-full flex flex-col items-center justify-center p-4">
             <div className="text-center mb-16 scale-110">
               <h1 className="text-6xl font-bold text-gray-900 mb-6 tracking-tight">
@@ -219,35 +199,33 @@ export default function ReviewPage() {
               )}
             </div>
 
-            {/* 评级按钮 - 极简白底风格 */}
             <div className="flex gap-6 w-full max-w-lg">
               <button
-                onClick={handleForgot}
-                className="flex-1 py-4 bg-white border-2 border-gray-200 hover:border-gray-900 text-gray-900 rounded-xl font-medium transition-all hover:-translate-y-1 hover:shadow-lg"
+                onClick={() => handleRate(0)}
+                className="flex-1 py-4 bg-white border-2 border-gray-200 hover:border-red-400 hover:text-red-600 text-gray-900 rounded-xl font-medium transition-all hover:-translate-y-1 hover:shadow-lg"
               >
-                不记得
+                忘了
               </button>
               <button
-                onClick={handleVague}
-                className="flex-1 py-4 bg-white border-2 border-gray-200 hover:border-gray-900 text-gray-900 rounded-xl font-medium transition-all hover:-translate-y-1 hover:shadow-lg"
+                onClick={() => handleRate(3)}
+                className="flex-1 py-4 bg-white border-2 border-gray-200 hover:border-amber-400 hover:text-amber-600 text-gray-900 rounded-xl font-medium transition-all hover:-translate-y-1 hover:shadow-lg"
               >
                 模糊
               </button>
               <button
-                onClick={handleRemembered}
-                className="flex-1 py-4 bg-white border-2 border-gray-200 hover:border-gray-900 text-gray-900 rounded-xl font-medium transition-all hover:-translate-y-1 hover:shadow-lg"
+                onClick={() => handleRate(5)}
+                className="flex-1 py-4 bg-white border-2 border-gray-200 hover:border-green-500 hover:text-green-700 text-gray-900 rounded-xl font-medium transition-all hover:-translate-y-1 hover:shadow-lg"
               >
                 记得
               </button>
             </div>
           </div>
         ) : (
-          // 展开状态 - 复用 VocabDetailContent
           <VocabDetailContent
             vocabId={currentVocab.id}
             showBackButton={false}
             backUrl="/vocabulary"
-            isLearnMode={true} // 启用学习模式布局（无返回按钮，适配容器）
+            isLearnMode={true}
             bottomBar={
               <div className="bg-white/70 backdrop-blur-xl shadow-xl rounded-full p-1.5 flex items-center gap-1 border border-white/20">
                 <button
@@ -259,9 +237,7 @@ export default function ReviewPage() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
-
                 <div className="w-px h-4 bg-gray-200 mx-1"></div>
-
                 <button
                   onClick={goToNext}
                   className="w-10 h-10 flex items-center justify-center rounded-full bg-gray-900 text-white hover:bg-black shadow-md hover:shadow-lg transition-all"
@@ -282,7 +258,7 @@ export default function ReviewPage() {
             <h2 className="text-lg font-semibold text-gray-900 mb-4">复习设置</h2>
             <div className="mb-6">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                每次复习单词数量
+                每次最多加载单词数
               </label>
               <input
                 type="number"
@@ -292,23 +268,14 @@ export default function ReviewPage() {
                 onChange={(e) => setReviewCount(parseInt(e.target.value) || DEFAULT_REVIEW_COUNT)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-500"
               />
+              <p className="text-xs text-gray-400 mt-1">实际数量取决于当日到期单词数</p>
             </div>
             <div className="flex justify-end gap-3">
+              <button onClick={() => setShowSettings(false)} className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50">取消</button>
               <button
-                onClick={() => setShowSettings(false)}
-                className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => {
-                  handleReviewCountChange(reviewCount);
-                  setShowSettings(false);
-                }}
+                onClick={() => { handleReviewCountChange(reviewCount); setShowSettings(false); }}
                 className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 text-sm font-medium"
-              >
-                确定
-              </button>
+              >确定</button>
             </div>
           </div>
         </div>
@@ -321,10 +288,8 @@ export default function ReviewPage() {
             <div className="flex justify-center mb-6">
               <CheckIcon className="w-16 h-16 text-gray-900" />
             </div>
-            <h2 className="text-2xl font-semibold text-gray-900 mb-3">
-              复习完成
-            </h2>
-            <p className="text-gray-600 mb-8">所有生词都复习完了！</p>
+            <h2 className="text-2xl font-semibold text-gray-900 mb-3">本轮复习完成</h2>
+            <p className="text-gray-600 mb-8">已完成 {vocabList.length} 个单词的复习</p>
             <button
               onClick={() => router.push("/vocabulary")}
               className="w-full px-8 py-3 bg-gray-900 text-white rounded-lg hover:bg-gray-800 font-medium transition-all"
@@ -337,3 +302,4 @@ export default function ReviewPage() {
     </div>
   );
 }
+

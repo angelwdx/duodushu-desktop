@@ -1191,8 +1191,8 @@ interface ReaderProps {
 
             while (start > 0) {
                 if (allWords[start-1].block_id !== targetBlockId) break;
-                if (isTerminator(allWords[start-2]?.text.trim() || "")) break; // 简单判定
-                if (isTerminator(allWords[start-1].text.trim())) break; 
+                // 若上一个词是句子结束符（. ! ?），说明当前 start 已是句首，停止回溯
+                if (isTerminator(allWords[start-1].text.trim())) break;
                 start--;
             }
             while (end < allWords.length - 1) {

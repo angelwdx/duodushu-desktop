@@ -283,17 +283,28 @@ def find_and_save_example_contexts(
                 ).fetchone()
 
                 if not existing:
+                    # 尝试翻译例句（允许失败，不阻断提取）
+                    sentence_translation = None
+                    try:
+                        from app.services import supplier_factory as _sf
+                        sentence_translation = _sf.translate_with_active_supplier(sentence)
+                    except Exception:
+                        pass
+
                     db.execute(
                         text("""
                         INSERT OR IGNORE INTO word_contexts
-                            (word, book_id, page_number, context_sentence, is_primary, source_type)
-                            VALUES (:word, :book_id, :page_number, :context_sentence, 0, :source_type)
+                            (word, book_id, page_number, context_sentence, sentence_translation,
+                             is_primary, source_type)
+                            VALUES (:word, :book_id, :page_number, :context_sentence,
+                                    :sentence_translation, 0, :source_type)
                     """),
                         {
                             "word": word,
                             "book_id": page[1],
                             "page_number": page[2],
                             "context_sentence": sentence,
+                            "sentence_translation": sentence_translation,
                             "source_type": AUTO_EXTRACTED_SOURCE_TYPE,
                         },
                     )

@@ -1557,15 +1557,22 @@ export default function EPUBReader({
                                     // Get text content around the clicked word
                                     const node = range.commonAncestorContainer;
                                     // Walk up to find a paragraph or div
-                                    let contextNode = node.nodeType === 3 ? node.parentElement : node as Element;
+                                    let contextNode: Element | null = node.nodeType === 3 ? node.parentElement : node as Element;
                                     while (contextNode && !['P', 'DIV', 'SECTION', 'ARTICLE', 'BODY'].includes(contextNode.tagName)) {
                                         contextNode = contextNode.parentElement;
                                     }
                                     if (contextNode) {
-                                        const fullText = contextNode.textContent || '';
+                                        const target = cleanWord.toLowerCase();
+
+                                        // 优先用父容器的 textContent，确保跨段落句子（如句首在上一个 <p>）能被完整捕获
+                                        const widerNode: Element | null =
+                                            contextNode.tagName === 'P'
+                                                ? (contextNode.parentElement ?? contextNode)
+                                                : contextNode;
+                                        const fullText = (widerNode.textContent || '').replace(/\s+/g, ' ').trim();
+
                                         // Try to extract the sentence containing the word
                                         const sentences = fullText.match(/[^.!?]+[.!?]*/g) || [];
-                                        const target = cleanWord.toLowerCase();
                                         for (const s of sentences) {
                                             if (s.toLowerCase().includes(target)) {
                                                 contextSentence = s.trim();

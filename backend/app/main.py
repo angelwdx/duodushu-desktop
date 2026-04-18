@@ -239,6 +239,10 @@ async def lifespan(app: FastAPI):
                 "last_queried_at": "ALTER TABLE vocabulary ADD COLUMN last_queried_at TIMESTAMP",
                 "priority_score": "ALTER TABLE vocabulary ADD COLUMN priority_score REAL DEFAULT 0.0",
                 "learning_status": 'ALTER TABLE vocabulary ADD COLUMN learning_status VARCHAR DEFAULT "new"',
+                # SRS 间隔重复列
+                "srs_interval": "ALTER TABLE vocabulary ADD COLUMN srs_interval INTEGER DEFAULT 1",
+                "srs_ease_factor": "ALTER TABLE vocabulary ADD COLUMN srs_ease_factor REAL DEFAULT 2.5",
+                "srs_repetitions": "ALTER TABLE vocabulary ADD COLUMN srs_repetitions INTEGER DEFAULT 0",
             }
 
             for col_name, alter_sql in new_columns.items():
@@ -249,6 +253,18 @@ async def lifespan(app: FastAPI):
                         logger.info(f"已添加列: vocabulary.{col_name}")
                     except Exception as e:
                         logger.warning(f"添加列 {col_name} 失败（可能已存在）: {e}")
+
+            # 检查 word_contexts 表是否有 sentence_translation 列
+            wc_columns = [col["name"] for col in inspector.get_columns("word_contexts")]
+            if "sentence_translation" not in wc_columns:
+                try:
+                    conn.execute(text(
+                        "ALTER TABLE word_contexts ADD COLUMN sentence_translation TEXT"
+                    ))
+                    conn.commit()
+                    logger.info("已添加列: word_contexts.sentence_translation")
+                except Exception as e:
+                    logger.warning(f"添加列 word_contexts.sentence_translation 失败: {e}")
 
         # 初始化 FTS5 全文搜索索引（用于例句提取功能）
         from app.config import DB_PATH

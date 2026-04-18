@@ -502,16 +502,25 @@ function ReaderContent() {
       .map((block) => block.replace(/\s+/g, " ").trim())
       .filter(Boolean);
 
-    const target = word.toLowerCase();
-    for (const block of mergedBlocks) {
-      if (block.toLowerCase().includes(target)) {
+    // 统一将所有引号/撇号变体（U+2018/2019/02BC）归一化为直引号，用于搜索比对
+    const normalizeApos = (s: string) => s.replace(/[\u2018\u2019\u02bc]/g, "'");
+    const target = normalizeApos(word.toLowerCase());
+    for (let i = 0; i < mergedBlocks.length; i++) {
+      const block = mergedBlocks[i];
+      if (normalizeApos(block.toLowerCase()).includes(target)) {
         // Split by . ! ? but keep delimiters
-        const sentences = block.match(/[^.!?]+[.!?]*/g) || [
-          block,
-        ];
-        for (const s of sentences) {
-          if (s.toLowerCase().includes(target)) {
-            return s.trim();
+        const sentences = block.match(/[^.!?]+[.!?]*/g) || [block];
+        for (let j = 0; j < sentences.length; j++) {
+          const s = sentences[j];
+          if (normalizeApos(s.toLowerCase()).includes(target)) {
+            let result = s.trim();
+            // 若句子开头是小写字母，说明可能是跨段落句子——尝试从上一个 block 末尾拼接句首
+            if (j === 0 && i > 0 && /^[a-z]/.test(result)) {
+              const prevSentences = mergedBlocks[i - 1].match(/[^.!?]+[.!?]*/g) || [];
+              const tail = prevSentences[prevSentences.length - 1]?.trim() || "";
+              if (tail) result = tail + " " + result;
+            }
+            return result;
           }
         }
         return block;
@@ -576,19 +585,21 @@ function ReaderContent() {
         // Assume it is context if it's not a source
         contextSentence = sourceOrContext;
       } else {
-        // Fix: Try to get context from savedWords (from vocabulary list click)
-        const savedWord = savedWords.find(
-          (w) => w.word.toLowerCase() === word.toLowerCase(),
-        );
+        // 优先从当前页面提取（保证上下文准确），仅在没有页面文本时才回退到已保存的 primary_context
+        const pageExtracted = pageData?.text_content
+          ? extractSentence(pageData.text_content, word)
+          : "";
 
-        if (savedWord?.primary_context?.context_sentence) {
-          // Use the saved primary context from when the word was collected
-          contextSentence = savedWord.primary_context.context_sentence;
+        if (pageExtracted) {
+          contextSentence = pageExtracted;
         } else {
-          // Fallback: Extract from pageData (for direct click on text)
-          contextSentence = pageData?.text_content
-            ? extractSentence(pageData.text_content, word)
-            : "Context not available";
+          // 页面无文本或未找到（如从生词本列表点击时）——回退到已保存的上下文
+          const savedWord = savedWords.find(
+            (w) => w.word.toLowerCase() === word.toLowerCase(),
+          );
+          contextSentence = savedWord?.primary_context?.context_sentence
+            ? savedWord.primary_context.context_sentence
+            : (pageData?.text_content ? "" : "Context not available");
         }
       }
 

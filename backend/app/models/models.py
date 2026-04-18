@@ -62,6 +62,10 @@ class Vocabulary(Base):
     priority_score = Column(Float, default=0.0)  # 优先级分数
     learning_status = Column(String, default="new")  # 学习状态: new, learning, familiar, mastered
     next_review_at = Column(SADateTime(timezone=True))
+    # SRS（间隔重复）字段
+    srs_interval = Column(Integer, default=1)          # 当前复习间隔（天）
+    srs_ease_factor = Column(Float, default=2.5)       # 难度因子，SM-2 算法使用
+    srs_repetitions = Column(Integer, default=0)       # 连续成功复习次数
     created_at = Column(SADateTime(timezone=True), server_default=func.now())
 
 
@@ -131,6 +135,7 @@ class WordContext(Base):
     book_id = Column(String, ForeignKey("books.id"), nullable=False)
     page_number = Column(Integer, nullable=False)
     context_sentence = Column(Text, nullable=False)
+    sentence_translation = Column(Text)           # 例句中文翻译（懒加载缓存）
     is_primary = Column(Integer, default=0)  # 0: 额外例句, 1: 主要上下文
     source_type = Column(String, default="user_collected")  # 'user_collected' | 'example_library'
     created_at = Column(SADateTime(timezone=True), server_default=func.now())

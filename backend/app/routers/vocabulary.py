@@ -761,81 +761,154 @@ def delete_vocabulary(vocab_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _sm2(quality: int, repetitions: int, ease_factor: float, interval: int):
+    """
+    SM-2 间隔重复算法核心。
+
+    quality:   0=完全忘记, 3=模糊记得, 5=完美记得
+    返回: (new_interval_days, new_ease_factor, new_repetitions)
+    """
+    if quality >= 3:
+        if repetitions == 0:
+            new_interval = 1
+        elif repetitions == 1:
+            new_interval = 6
+        else:
+            new_interval = max(1, round(interval * ease_factor))
+        new_repetitions = repetitions + 1
+        new_ef = ease_factor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
+        new_ef = max(1.3, round(new_ef, 4))
+    else:
+        new_interval = 1
+        new_repetitions = 0
+        new_ef = ease_factor  # 失败不降低 EF，只重置间隔
+    return new_interval, new_ef, new_repetitions
+
+
 @router.patch("/{vocab_id}/mastery")
 def update_mastery(vocab_id: int, data: dict, db: Session = Depends(get_db)):
-    """更新生词掌握程度和复习信息"""
+    """
+    更新生词掌握程度和复习信息。
+
+    支持传入 quality（0/3/5）触发 SM-2 计算：
+      quality=0  忘了 → 重置间隔为 1 天
+      quality=3  模糊 → 间隔缓慢增长
+      quality=5  记得 → 间隔正常增长
+
+    返回值额外包含 next_review_days（距下次复习的天数）。
+    """
     try:
         with db.begin():
-            # 检查生词是否存在
             vocab = db.execute(text("SELECT * FROM vocabulary WHERE id = :id"), {"id": vocab_id}).fetchone()
 
             if not vocab:
                 raise HTTPException(status_code=404, detail="Vocabulary not found")
 
-            # 更新字段
-            if "mastery_level" in data:
+            now = datetime.utcnow()
+
+            # --- SRS：若传入 quality，运行 SM-2 ---
+            next_review_days = None
+            if "quality" in data:
+                quality = int(data["quality"])
+                # 从数据库读取当前 SRS 状态（列可能不存在则用默认值）
+                vocab_keys = vocab._fields if hasattr(vocab, "_fields") else []
+                srs_interval = vocab[vocab_keys.index("srs_interval")] if "srs_interval" in vocab_keys else 1
+                srs_ease = vocab[vocab_keys.index("srs_ease_factor")] if "srs_ease_factor" in vocab_keys else 2.5
+                srs_reps = vocab[vocab_keys.index("srs_repetitions")] if "srs_repetitions" in vocab_keys else 0
+
+                new_interval, new_ef, new_reps = _sm2(
+                    quality,
+                    srs_reps or 0,
+                    srs_ease or 2.5,
+                    srs_interval or 1,
+                )
+                next_review_at = now + timedelta(days=new_interval)
+                next_review_days = new_interval
+
                 db.execute(
                     text("""
-                    UPDATE vocabulary
-                    SET mastery_level = :mastery_level
-                    WHERE id = :id
-                """),
-                    {"mastery_level": data["mastery_level"], "id": vocab_id},
+                        UPDATE vocabulary
+                        SET srs_interval = :interval,
+                            srs_ease_factor = :ef,
+                            srs_repetitions = :reps,
+                            next_review_at = :next_review,
+                            review_count = review_count + 1,
+                            last_reviewed_at = :now
+                        WHERE id = :id
+                    """),
+                    {
+                        "interval": new_interval,
+                        "ef": new_ef,
+                        "reps": new_reps,
+                        "next_review": next_review_at,
+                        "now": now,
+                        "id": vocab_id,
+                    },
                 )
-
-            if "review_count" in data:
+                # 根据质量同步更新 mastery_level
+                vocab_row = db.execute(text("SELECT mastery_level FROM vocabulary WHERE id = :id"), {"id": vocab_id}).fetchone()
+                current_mastery = vocab_row[0] if vocab_row else 1
+                if quality >= 4:
+                    new_mastery = min(5, current_mastery + 1)
+                elif quality <= 1:
+                    new_mastery = max(1, current_mastery - 1)
+                else:
+                    new_mastery = current_mastery
                 db.execute(
-                    text("""
-                    UPDATE vocabulary
-                    SET review_count = review_count + 1
-                    WHERE id = :id
-                """),
-                    {"review_count": data["review_count"], "id": vocab_id},
+                    text("UPDATE vocabulary SET mastery_level = :m WHERE id = :id"),
+                    {"m": new_mastery, "id": vocab_id},
                 )
+            else:
+                # 兼容旧版调用（直接设置 mastery_level / difficulty_score 等字段）
+                if "mastery_level" in data:
+                    db.execute(
+                        text("UPDATE vocabulary SET mastery_level = :mastery_level WHERE id = :id"),
+                        {"mastery_level": data["mastery_level"], "id": vocab_id},
+                    )
+                if "review_count" in data:
+                    db.execute(
+                        text("UPDATE vocabulary SET review_count = review_count + 1 WHERE id = :id"),
+                        {"id": vocab_id},
+                    )
+                if "last_reviewed_at" in data:
+                    db.execute(
+                        text("UPDATE vocabulary SET last_reviewed_at = :last_reviewed_at WHERE id = :id"),
+                        {"last_reviewed_at": data["last_reviewed_at"], "id": vocab_id},
+                    )
+                if "difficulty_score" in data:
+                    db.execute(
+                        text("UPDATE vocabulary SET difficulty_score = :difficulty_score WHERE id = :id"),
+                        {"difficulty_score": data["difficulty_score"], "id": vocab_id},
+                    )
 
-            if "last_reviewed_at" in data:
-                db.execute(
-                    text("""
-                    UPDATE vocabulary
-                    SET last_reviewed_at = :last_reviewed_at
-                    WHERE id = :id
-                """),
-                    {"last_reviewed_at": data["last_reviewed_at"], "id": vocab_id},
-                )
-
-            if "difficulty_score" in data:
-                db.execute(
-                    text("""
-                    UPDATE vocabulary
-                    SET difficulty_score = :difficulty_score
-                    WHERE id = :id
-                """),
-                    {"difficulty_score": data["difficulty_score"], "id": vocab_id},
-                )
-
-            # 返回更新后的数据
+            # 同步 learning_status
             vocab_updated = db.execute(text("SELECT * FROM vocabulary WHERE id = :id"), {"id": vocab_id}).fetchone()
-
             if vocab_updated is None:
                 raise HTTPException(status_code=404, detail="Vocabulary not found")
 
-            # Update learning_status logic based on mastery_level and review_count
-            new_status = vocab_updated[12]
-            if vocab_updated[9] >= 5 and vocab_updated[7] >= 3:
+            cols = vocab_updated._fields if hasattr(vocab_updated, "_fields") else []
+            mastery_idx = cols.index("mastery_level") if "mastery_level" in cols else 9
+            review_idx = cols.index("review_count") if "review_count" in cols else 7
+            status_idx = cols.index("learning_status") if "learning_status" in cols else 12
+
+            new_status = vocab_updated[status_idx]
+            if vocab_updated[mastery_idx] >= 5 and vocab_updated[review_idx] >= 3:
                 new_status = "mastered"
-            elif vocab_updated[7] > 0:
+            elif vocab_updated[review_idx] > 0:
                 new_status = "learning"
 
-            if new_status != vocab_updated[12]:
+            if new_status != vocab_updated[status_idx]:
                 db.execute(
                     text("UPDATE vocabulary SET learning_status = :status WHERE id = :id"),
                     {"status": new_status, "id": vocab_id},
                 )
-                vocab_updated = db.execute(text("SELECT * FROM vocabulary WHERE id = :id"), {"id": vocab_id}).fetchone()
 
             db.commit()
 
-            return format_vocab_response_with_db(vocab_updated, db)
+            result = format_vocab_response_with_db(vocab_updated, db)
+            if next_review_days is not None:
+                result["next_review_days"] = next_review_days
+            return result
 
     except HTTPException:
         raise
@@ -845,23 +918,88 @@ def update_mastery(vocab_id: int, data: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/due")
+def get_due_vocabulary(
+    limit: int = 20,
+    db: Session = Depends(get_db)
+):
+    """
+    获取当前到期需要复习的生词（SRS 调度）。
+
+    排序规则：
+      1. 从未复习过的新词（next_review_at IS NULL）优先
+      2. 按到期时间升序（最早到期的优先）
+    """
+    try:
+        now = datetime.utcnow()
+        rows = db.execute(
+            text("""
+                SELECT v.id, v.word, v.phonetic, v.translation,
+                       v.mastery_level, v.review_count, v.difficulty_score,
+                       v.priority_score, v.learning_status,
+                       v.next_review_at, v.srs_interval, v.srs_repetitions
+                FROM vocabulary v
+                WHERE v.next_review_at IS NULL
+                   OR v.next_review_at <= :now
+                ORDER BY v.next_review_at ASC NULLS FIRST
+                LIMIT :limit
+            """),
+            {"now": now, "limit": limit},
+        ).fetchall()
+
+        result = []
+        for row in rows:
+            next_review_at = row[9]
+            # 计算逾期天数（负数表示逾期，正数不应出现）
+            overdue_days = None
+            if next_review_at:
+                try:
+                    if isinstance(next_review_at, str):
+                        nra = datetime.fromisoformat(next_review_at)
+                    else:
+                        nra = next_review_at
+                    overdue_days = (now - nra).days
+                except Exception:
+                    pass
+
+            result.append({
+                "id": row[0],
+                "word": row[1],
+                "phonetic": row[2],
+                "translation": row[3],
+                "mastery_level": row[4] or 1,
+                "review_count": row[5] or 0,
+                "difficulty_score": row[6] or 0,
+                "priority_score": row[7] or 0.0,
+                "learning_status": row[8] or "new",
+                "next_review_at": next_review_at.isoformat() if hasattr(next_review_at, "isoformat") else next_review_at,
+                "overdue_days": overdue_days,
+                "srs_interval": row[10] or 1,
+                "srs_repetitions": row[11] or 0,
+            })
+
+        return {"items": result, "total": len(result), "reviewed_at": now.isoformat()}
+    except Exception as e:
+        logger.error(f"Error fetching due vocabulary: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/export/csv")
 def export_vocabulary_csv(db: Session = Depends(get_db)):
-    """导出所有生词为 CSV，格式适合 Anki"""
+    """导出所有生词为 CSV（Excel 兼容格式）"""
     try:
-        # 提取所有生词，左连接首选例句
         rows = db.execute(text("""
-            SELECT 
-                v.word, v.phonetic, v.translation, v.definition,
-                wc.context_sentence, b.title as book_title, v.created_at
+            SELECT v.word, v.phonetic, v.translation, v.definition,
+                   (SELECT wc2.context_sentence FROM word_contexts wc2
+                    WHERE lower(wc2.word) = lower(v.word) AND wc2.is_primary = 1
+                    LIMIT 1) AS primary_context,
+                   b.title AS book_title, v.created_at
             FROM vocabulary v
-            LEFT JOIN word_contexts wc ON v.word = wc.word AND wc.is_primary = 1
-            LEFT JOIN books b ON v.book_id = b.id OR wc.book_id = b.id
+            LEFT JOIN books b ON v.book_id = b.id
             ORDER BY v.created_at DESC
         """)).fetchall()
 
         output = io.StringIO()
-        # 对于 Anki，通常不需要 Headers，但为了 Excel 兼容加上，导入 Anki 时可勾选忽略第一行
         writer = csv.writer(output)
         writer.writerow(['Word', 'Phonetic', 'Translation', 'Definition', 'Context', 'Book Title', 'Created At'])
 
@@ -869,28 +1007,10 @@ def export_vocabulary_csv(db: Session = Depends(get_db)):
             word = row[0] or ""
             phonetic = row[1] or ""
             translation = row[2] or ""
-            
-            # 提取简化的定义
-            definition_text = ""
-            if row[3]:
-                try:
-                    df = json.loads(row[3])
-                    if isinstance(df, dict):
-                        # 尝试提取中英文释义，或者直接合并
-                        if "chinese_summary" in df:
-                            definition_text = df["chinese_summary"]
-                        elif "en_definition" in df:
-                            definition_text = df["en_definition"]
-                        else:
-                            # 随便拿个能展示的
-                            definition_text = str(df.get("translation", "")) or str(df)[:100]
-                except:
-                    pass
-
+            definition_text = _extract_definition_text(row[3])
             context = row[4] or ""
             book_title = row[5] or ""
-            created_at = row[6][:10] if row[6] else "" # 只要日期 YYYY-MM-DD
-
+            created_at = row[6][:10] if row[6] else ""
             writer.writerow([word, phonetic, translation, definition_text, context, book_title, created_at])
 
         output.seek(0)
@@ -902,7 +1022,135 @@ def export_vocabulary_csv(db: Session = Depends(get_db)):
             }
         )
     except Exception as e:
-        logger.error(f"Error exporting vocabulary: {e}", exc_info=True)
+        logger.error(f"Error exporting vocabulary CSV: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _extract_definition_text(raw: str) -> str:
+    """从 JSON 或纯文本中提取可读释义"""
+    if not raw:
+        return ""
+    try:
+        df = json.loads(raw)
+        if isinstance(df, dict):
+            for key in ("chinese_summary", "translation", "en_definition"):
+                if df.get(key):
+                    return str(df[key])
+            return str(raw)[:200]
+    except Exception:
+        pass
+    return str(raw)[:200]
+
+
+@router.get("/export/anki")
+def export_vocabulary_anki(db: Session = Depends(get_db)):
+    """
+    导出生词为 Anki 可导入的 TSV 文本文件。
+
+    字段顺序（在 Anki 导入时按此顺序映射字段）：
+    单词 | 读音 | 翻译/释义 | 例句（HTML，含翻译）| 来源书名
+
+    首次导出时会调用 AI 翻译未翻译的例句并缓存，后续导出直接复用缓存。
+    若 AI 未配置，例句不含翻译。
+
+    导入步骤：
+      1. Anki → 文件 → 导入
+      2. 选择此 .txt 文件，分隔符选 Tab
+      3. 将字段映射到对应的笔记类型字段
+    """
+    try:
+        # 获取所有生词及其全部例句（主例句 + 自动提取例句）
+        vocab_rows = db.execute(text("""
+            SELECT v.id, v.word, v.phonetic, v.translation, v.definition,
+                   b.title AS book_title
+            FROM vocabulary v
+            LEFT JOIN books b ON v.book_id = b.id
+            ORDER BY v.created_at DESC
+        """)).fetchall()
+
+        if not vocab_rows:
+            return Response(
+                content="",
+                media_type="text/plain",
+                headers={"Content-Disposition": "attachment; filename=vocabulary_anki.txt"}
+            )
+
+        # 批量查询所有例句（含已缓存翻译），按 word 聚合
+        ctx_rows = db.execute(text("""
+            SELECT lower(wc.word) AS word_key,
+                   wc.id,
+                   wc.context_sentence,
+                   wc.sentence_translation,
+                   wc.is_primary
+            FROM word_contexts wc
+            ORDER BY wc.is_primary DESC, wc.id ASC
+        """)).fetchall()
+
+        # 对每个单词最多取 3 条例句，直接使用数据库已缓存的翻译，不在导出时发起 AI 调用
+        ctx_map: dict = {}  # word_key -> [(ctx_id, sentence, translation), ...]
+
+        for ctx in ctx_rows:
+            word_key, ctx_id, sentence, translation, _is_primary = ctx[0], ctx[1], ctx[2], ctx[3], ctx[4]
+            if not sentence:
+                continue
+            if word_key not in ctx_map:
+                ctx_map[word_key] = []
+            if len(ctx_map[word_key]) < 3:
+                ctx_map[word_key].append([ctx_id, sentence, translation or ""])
+
+        output = io.StringIO()
+        # Anki 识别的元数据注释（可选，让导入时自动选对分隔符和 HTML 模式）
+        output.write("#separator:tab\n")
+        output.write("#html:true\n")
+        output.write("#notetype:Basic\n")
+
+        for row in vocab_rows:
+            word = row[1] or ""
+            phonetic = f"[{row[2]}]" if row[2] else ""
+            translation = row[3] or ""
+            definition = _extract_definition_text(row[4])
+            book_title = row[5] or ""
+
+            # 合并翻译和释义
+            back_text = translation
+            if definition and definition != translation:
+                back_text = f"{translation}<br><small>{definition}</small>" if translation else definition
+
+            # 例句：主例句在前，最多取 3 条，每条附上翻译
+            entries = ctx_map.get(word.lower(), [])
+            example_parts = []
+            for _ctx_id, sentence, sent_trans in entries:
+                if not sentence or not sentence.strip():
+                    continue
+                part = f"<i>{sentence.strip()}</i>"
+                if sent_trans and sent_trans.strip():
+                    part += f"<br><span style='color:#888;font-size:0.85em'>{sent_trans.strip()}</span>"
+                example_parts.append(part)
+            examples_html = "<br><br>".join(example_parts)
+
+            # 字段：正面（word + 读音），背面（翻译 + 释义 + 例句 + 书名）
+            front = f"{word}<br><span style='color:#888;font-size:0.85em'>{phonetic}</span>" if phonetic else word
+            back_parts = [back_text]
+            if examples_html:
+                back_parts.append(examples_html)
+            if book_title:
+                back_parts.append(f"<small style='color:#aaa'>📖 {book_title}</small>")
+            back = "<br><br>".join(p for p in back_parts if p)
+
+            # TSV 中 tab 和换行需要转义
+            front_clean = front.replace("\t", " ")
+            back_clean = back.replace("\t", " ")
+            output.write(f"{front_clean}\t{back_clean}\n")
+
+        output.seek(0)
+        filename = f"vocabulary_anki_{datetime.now().strftime('%Y%m%d')}.txt"
+        return Response(
+            content=output.getvalue().encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        logger.error(f"Error exporting Anki vocabulary: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -981,7 +1229,7 @@ def track_word_query(data: dict, db: Session = Depends(get_db)):
                 return {
                     "success": True,
                     "tracked": True,
-                    "query_count": existing[1] + 1,
+                    "query_count": (existing[1] or 0) + 1,
                     "priority_score": priority,
                     "learning_status": status,
                 }

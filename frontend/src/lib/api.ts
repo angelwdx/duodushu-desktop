@@ -248,32 +248,30 @@ export async function getVocabulary(
 }
 
 export async function exportVocabulary() {
-  const res = await fetch(`${API_URL}/api/vocabulary/export/csv`, {
-    method: "GET",
-  });
+  const res = await fetch(`${API_URL}/api/vocabulary/export/csv`, { method: "GET" });
   if (!res.ok) throw new Error("Failed to export vocabulary");
-  
-  const blob = await res.blob();
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  
-  // 从 response header 中提取文件名（可选），或者设置默认文件名
-  const contentDisposition = res.headers.get("Content-Disposition");
-  let filename = "vocabulary.csv";
-  if (contentDisposition) {
-    const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
-    if (filenameMatch && filenameMatch.length === 2) {
-      filename = filenameMatch[1];
-    }
-  }
-  
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  
-  window.URL.revokeObjectURL(url);
-  document.body.removeChild(a);
+  await _downloadBlob(res, "vocabulary.csv");
+}
+
+export async function exportVocabularyAnki() {
+  const res = await fetch(`${API_URL}/api/vocabulary/export/anki`, { method: "GET" });
+  if (!res.ok) throw new Error("Failed to export Anki vocabulary");
+  await _downloadBlob(res, "vocabulary_anki.txt");
+}
+
+function _downloadBlob(res: Response, defaultFilename: string) {
+  return res.blob().then((blob) => {
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const cd = res.headers.get("Content-Disposition");
+    const match = cd?.match(/filename="?([^"]+)"?/);
+    a.download = match?.[1] ?? defaultFilename;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  });
 }
 
 export async function getVocabularyDetail(id: number) {
@@ -289,6 +287,8 @@ export async function updateVocabularyMastery(
     review_count?: number;
     last_reviewed_at?: string;
     difficulty_score?: number;
+    /** SM-2 复习质量：0=忘了, 3=模糊, 5=记得 */
+    quality?: 0 | 3 | 5;
   },
 ) {
   const res = await fetch(`${API_URL}/api/vocabulary/${vocabId}/mastery`, {
@@ -298,6 +298,30 @@ export async function updateVocabularyMastery(
   });
   if (!res.ok) throw new Error("Failed to update vocabulary");
   return res.json();
+}
+
+/** 获取当前到期需要复习的生词（SRS 调度）*/
+export async function getDueVocabulary(limit: number = 20) {
+  const res = await fetch(`${API_URL}/api/vocabulary/due?limit=${limit}`);
+  if (!res.ok) throw new Error("Failed to fetch due vocabulary");
+  return res.json() as Promise<{
+    items: Array<{
+      id: number;
+      word: string;
+      phonetic?: string;
+      translation?: string;
+      mastery_level: number;
+      review_count: number;
+      difficulty_score: number;
+      priority_score: number;
+      learning_status: string;
+      next_review_at?: string;
+      overdue_days?: number;
+      srs_interval: number;
+      srs_repetitions: number;
+    }>;
+    total: number;
+  }>;
 }
 
 export async function deleteVocabulary(id: number) {
