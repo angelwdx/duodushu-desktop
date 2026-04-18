@@ -6,8 +6,8 @@ PDF解析器 - 使用 PyMuPDF (fitz) 进行文字提取
 """
 
 import fitz  # PyMuPDF
-import os
 import logging
+from pathlib import Path
 from .base import BaseParser
 from typing import Dict, Any, List, Tuple, Optional
 from ..services.thumbnail_service import ThumbnailService
@@ -49,7 +49,7 @@ class PDFParser(BaseParser):
             # 提取元数据
             pdf_meta = doc.metadata
             metadata = {
-                "title": pdf_meta.get("title") or os.path.basename(file_path),  # type: ignore
+                "title": pdf_meta.get("title") or Path(file_path).name,  # type: ignore
                 "author": pdf_meta.get("author") or "Unknown",  # type: ignore
                 "total_pages": len(doc),
             }
@@ -85,11 +85,11 @@ class PDFParser(BaseParser):
         try:
             if len(doc) > 0:
                 first_page = doc[0]
-                covers_dir = os.path.join(os.path.dirname(file_path), "covers")
-                os.makedirs(covers_dir, exist_ok=True)
+                covers_dir = Path(file_path).parent / "covers"
+                covers_dir.mkdir(parents=True, exist_ok=True)
 
                 cover_filename = f"{book_id}_cover.png"
-                cover_path = os.path.join(covers_dir, cover_filename)
+                cover_path = covers_dir / cover_filename
 
                 # 渲染页面为图片 (150 DPI)
                 mat = fitz.Matrix(150 / 72, 150 / 72)  # 72 DPI -> 150 DPI
@@ -433,39 +433,30 @@ class PDFParser(BaseParser):
             return flat
 
         # ── 步骤 6：有全宽块 → 归并插回 ──────────────────────────────
+        # 正确策略：以每个全宽块为分隔符，将各栏中位于该分隔符之前的所有块
+        # 按栏顺序（左→右）全部输出后，再插入全宽块。
+        # 这避免了逐行交织双栏内容的问题。
         full_width_sorted = sorted(full_width_blocks, key=lambda b: b["y0"])
         final_order: List[Dict] = []
         col_indices = [0] * len(columns)
         fw_idx = 0
 
-        while True:
-            next_col_items = [
-                (columns[ci][col_indices[ci]]["y0"], ci)
-                for ci in range(len(columns))
-                if col_indices[ci] < len(columns[ci])
-            ]
-            next_fw_y = (
-                full_width_sorted[fw_idx]["y0"]
-                if fw_idx < len(full_width_sorted)
-                else float("inf")
-            )
+        while fw_idx < len(full_width_sorted):
+            fw_y = full_width_sorted[fw_idx]["y0"]
+            # 先按栏顺序输出所有 y0 < fw_y 的栏内块
+            for ci in range(len(columns)):
+                while col_indices[ci] < len(columns[ci]) and columns[ci][col_indices[ci]]["y0"] < fw_y:
+                    final_order.append(columns[ci][col_indices[ci]])
+                    col_indices[ci] += 1
+            # 插入全宽块
+            final_order.append(full_width_sorted[fw_idx])
+            fw_idx += 1
 
-            if not next_col_items and fw_idx >= len(full_width_sorted):
-                break
-
-            if not next_col_items:
-                final_order.append(full_width_sorted[fw_idx])
-                fw_idx += 1
-                continue
-
-            min_col_y, min_ci = min(next_col_items)
-
-            if next_fw_y <= min_col_y:
-                final_order.append(full_width_sorted[fw_idx])
-                fw_idx += 1
-            else:
-                final_order.append(columns[min_ci][col_indices[min_ci]])
-                col_indices[min_ci] += 1
+        # 输出所有剩余栏内块
+        for ci in range(len(columns)):
+            while col_indices[ci] < len(columns[ci]):
+                final_order.append(columns[ci][col_indices[ci]])
+                col_indices[ci] += 1
 
         return final_order
 
