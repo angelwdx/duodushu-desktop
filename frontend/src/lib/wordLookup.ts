@@ -1,4 +1,4 @@
-const LOOKUP_SEGMENT_RE = /[A-Za-zÀ-ÿ]+(?:['’][A-Za-zÀ-ÿ]+)*/g;
+const LOOKUP_SEGMENT_RE = /[A-Za-zÀ-ɏ]+(?:['’][A-Za-zÀ-ɏ]+)*/g;
 const OCR_JOIN_STOPWORDS = new Set([
   "a", "an", "and", "as", "at", "be", "but", "by", "for", "from", "if",
   "in", "into", "is", "it", "of", "on", "or", "than", "that", "the", "to",
@@ -34,7 +34,7 @@ export function normalizeLookupWord(raw: string): string | null {
 
   word = word.replace(/[’]/g, "'");
 
-  const directMatch = word.match(/^[A-Za-zÀ-ÿ]+(?:'[A-Za-zÀ-ÿ]+)*$/);
+  const directMatch = word.match(/^[A-Za-zÀ-ɏ]+(?:'[A-Za-zÀ-ɏ]+)*$/);
   if (!directMatch) {
     const segments = word.match(LOOKUP_SEGMENT_RE);
     if (!segments || segments.length === 0) return null;
@@ -73,7 +73,7 @@ export function getLookupSegments(text: string): LookupSegment[] {
   }
 
   const onlySegment = directSegments[0];
-  if (onlySegment.raw.length < 7 || onlySegment.raw.length !== text.length || /[^A-Za-zÀ-ÿ]/.test(text)) {
+  if (onlySegment.raw.length < 7 || onlySegment.raw.length !== text.length || /[^A-Za-zÀ-ɏ]/.test(text)) {
     return directSegments;
   }
 
@@ -105,7 +105,7 @@ export function getLookupWordFromText(text: string, clickRatio = 0.5): string | 
 }
 
 export function splitTextForWordLookup(text: string): string[] {
-  return text.split(/([A-Za-zÀ-ÿ]+(?:['’][A-Za-zÀ-ÿ]+)*)/);
+  return text.split(/([A-Za-zÀ-ɏ]+(?:['’][A-Za-zÀ-ɏ]+)*)/);
 }
 
 export function splitWordDataForLookup<T extends SplittableWordData>(word: T): T[] {
@@ -137,11 +137,12 @@ function inferOcrJoinedSegments(text: string): LookupSegment[] {
     const right = normalizedText.slice(split);
     let score = Number.NEGATIVE_INFINITY;
 
-    // Restrict OCR joined-word inference to cases with a substantial left token.
-    // This avoids false positives like "Auroras" -> "Auror" + "as".
+    // 只在 left 本身不像完整词根时才拆分，避免误切 Washington→Washingt+on。
+    // branch 1：right 是完整停用词（如 "on"/"in"），left 足够长
     if (OCR_JOIN_STOPWORDS.has(right) && left.length >= 6) {
       score = left.length * 2 - right.length;
-    } else if (right.length <= 3 && OCR_JOIN_STOPWORDS.has(right.slice(-2))) {
+    } else if (OCR_JOIN_STOPWORDS.has(right) && left.length >= 4 && right.length <= 2) {
+      // branch 2 仅限 right 为 2 字母完整停用词（不再用 slice(-2) 模糊匹配）
       score = left.length - 6;
     }
 
@@ -151,7 +152,9 @@ function inferOcrJoinedSegments(text: string): LookupSegment[] {
     }
   }
 
-  if (bestSplit === -1 || bestScore < 2) {
+  // 门槛从 2 提高到 8，等价于要求 left.length >= 7（branch 1）才拆分，
+  // 过滤 Washington(8)、Anderson(7) 等正常词，保留真正的 OCR 粘连词。
+  if (bestSplit === -1 || bestScore < 8) {
     return [];
   }
 

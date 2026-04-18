@@ -6,6 +6,7 @@ import { useFullTextTTS } from "../hooks/useFullTextTTS";
 import TTSLoadingDots from "./TTSLoadingDots";
 import { normalizePdfPageText, preprocessTTSPlainText } from "../lib/ttsText";
 import { getLookupWordFromText, splitTextForWordLookup, splitWordDataForLookup } from "../lib/wordLookup";
+import logger from "../lib/logger";
 import { Document, Page as PDFPage, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -104,18 +105,17 @@ function sortPDFTextItemsByReadingOrder(items: any[], pageWidth: number): any[] 
     return [...items].sort(sortByYDesc);
   }
 
-  // 2. 将所有 items 按照分割点分配到各子栏中
+  // 2. 将所有 items 按照分割点分配到各子栏中；全宽元素单独收集后归并
+  const fullWidthItems: any[] = [];
   const columns: any[][] = Array.from({ length: splitPoints.length + 1 }, () => []);
 
   for (const item of items) {
     const x = Number(item?.transform?.[4] || 0);
     const width = Number(item?.width || 0);
     const centerX = x + width / 2;
-    
-    // 全宽元素（如跨栏标题），PDF.js 里很少直接返回这种大块，但如果有，做个简单宽容度处理
+
     if (width > pageWidth * 0.7) {
-      // 作为一个妥协，全宽元素放到第一栏，依赖后续可能有更高级的归并处理
-      columns[0].push(item);
+      fullWidthItems.push(item);
       continue;
     }
 
@@ -128,14 +128,47 @@ function sortPDFTextItemsByReadingOrder(items: any[], pageWidth: number): any[] 
     columns[colIdx].push(item);
   }
 
-  // 3. 展开各栏
-  const result: any[] = [];
+  // 3. 各栏内按 y 排序
   for (const col of columns) {
-    if (col.length > 0) {
-      result.push(...col.sort(sortByYDesc));
-    }
+    col.sort(sortByYDesc);
   }
 
+  // 4. 无全宽元素时直接按栏顺序展开
+  if (fullWidthItems.length === 0) {
+    const result: any[] = [];
+    for (const col of columns) {
+      if (col.length > 0) result.push(...col);
+    }
+    return result;
+  }
+
+  // 5. 有全宽元素时，以每个全宽元素的 y 为分隔符，按栏顺序归并插入
+  fullWidthItems.sort((a, b) => Number(b?.transform?.[5] || 0) - Number(a?.transform?.[5] || 0)); // y 降序（高处先读）
+  const colPointers = new Array(columns.length).fill(0);
+  const result: any[] = [];
+  for (const fw of fullWidthItems) {
+    const fwY = Number(fw?.transform?.[5] || 0);
+    // 先按栏顺序输出所有 y > fwY 的栏内 item（高处先读，y值更大）
+    for (let ci = 0; ci < columns.length; ci++) {
+      while (colPointers[ci] < columns[ci].length) {
+        const itemY = Number(columns[ci][colPointers[ci]]?.transform?.[5] || 0);
+        if (itemY > fwY) {
+          result.push(columns[ci][colPointers[ci]]);
+          colPointers[ci]++;
+        } else {
+          break;
+        }
+      }
+    }
+    result.push(fw);
+  }
+  // 输出剩余栏内 items
+  for (let ci = 0; ci < columns.length; ci++) {
+    while (colPointers[ci] < columns[ci].length) {
+      result.push(columns[ci][colPointers[ci]]);
+      colPointers[ci]++;
+    }
+  }
   return result;
 }
 
@@ -239,7 +272,7 @@ async function resolveOutlinePageNumbers(
         }
       }
     } catch (e) {
-      console.warn(
+      logger.warn(
         "Failed to resolve page number for outline item:",
         item.title,
         e,
@@ -467,7 +500,7 @@ interface ReaderProps {
           }
         }
       } catch (e) {
-        console.warn("Failed to jump to destination:", e);
+        logger.warn("Failed to jump to destination:", e);
       }
     };
 
@@ -605,19 +638,6 @@ interface ReaderProps {
 
     return merged.flatMap((word) => splitWordDataForLookup(word));
   }, [words]);
-
-  useEffect(() => {
-    const isExpanding = false;
-    const handleSelectionChange = () => {
-      // 禁用自定义选择逻辑，完全交给浏览器原生处理
-      return; 
-    };
-
-
-    document.addEventListener("selectionchange", handleSelectionChange);
-    return () =>
-      document.removeEventListener("selectionchange", handleSelectionChange);
-  }, [processedWords, pageDimensions, renderWidth, pageOffset, manualOffset.x, manualOffset.y]);
 
   // Effect to perform scroll when words are loaded and we have a pending highlight
   useEffect(() => {
@@ -804,7 +824,7 @@ interface ReaderProps {
         onOutlineChange?.(resolvedOutline);
       }
     } catch (e) {
-      console.warn("Failed to extract PDF outline:", e);
+      logger.warn("Failed to extract PDF outline:", e);
     }
   }
 
@@ -833,6 +853,8 @@ interface ReaderProps {
 
     // 文本模式和朗读统一优先使用后端落库文本，保证翻页路径一致。
     // 只有后端该页文本为空时，才回退到 PDF.js 实时提取结果。
+    // 记录本次 handlePageLoad 对应的页码快照，用于异步回调时检查是否已翻页
+    const capturedPageNumber = pageNumber;
     const extractPageText = async () => {
       if (typeof textContent !== "string") {
         return;
@@ -840,6 +862,7 @@ interface ReaderProps {
 
       const backendText = textContent.trim();
       if (backendText) {
+        if (capturedPageNumber !== pageNumber) return; // 已翻页，丢弃
         setPageTextForTTS(backendText);
         setPageTextForTTSPage(pageNumber);
         if (onContentChange) {
@@ -855,6 +878,8 @@ interface ReaderProps {
       let extractedText = "";
       try {
         const textContentFromPDF = await page.getTextContent();
+        // 异步等待后检查页码是否仍为当前页，避免旧页内容覆盖新页状态
+        if (capturedPageNumber !== pageNumber) return;
         if (textContentFromPDF && textContentFromPDF.items && textContentFromPDF.items.length > 0) {
           const pageWidth = page.view?.[2] || 0;
           const pageHeight = page.view?.[3] || 0;
@@ -899,14 +924,14 @@ interface ReaderProps {
           extractedText = buildStructuredTextFromPDFItems(filtered, pageWidth).trim();
         }
       } catch (error) {
-        console.error(`[PDFReader] Failed to extract text from page ${pageNumber}:`, error);
+        logger.error(`[PDFReader] Failed to extract text from page ${capturedPageNumber}:`, error);
       }
 
       const resolvedText = backendText || extractedText;
       if (!resolvedText) return;
 
       setPageTextForTTS(resolvedText);
-      setPageTextForTTSPage(pageNumber);
+      setPageTextForTTSPage(capturedPageNumber);
       if (onContentChange) {
         try {
           onContentChange(normalizeText(resolvedText));
@@ -918,7 +943,7 @@ interface ReaderProps {
 
     // 调用文本提取函数（不等待，避免阻塞页面渲染）
     extractPageText().catch(err => {
-      console.error(`[PDFReader] extractPageText failed:`, err);
+      logger.error(`[PDFReader] extractPageText failed:`, err);
     });
   }
 
