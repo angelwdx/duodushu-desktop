@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useRef } from "react";
+import { createLogger } from "../../lib/logger";
 import {
   getVocabulary,
   deleteVocabulary,
@@ -11,6 +12,8 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeftIcon, BookIcon } from "../../components/Icons";
+
+const log = createLogger("VocabularyPage");
 
 interface VocabularyItem {
   id: number;
@@ -86,7 +89,7 @@ interface VocabularyItem {
           dismissedUntil = localStorage.getItem("reminder_dismissed_until");
         } catch (e) {
           // localStorage 不可用（隐私模式等）
-          console.warn('localStorage not available:', e);
+          log.warn('localStorage not available:', e);
         }
         if (dismissedUntil && Date.now() < parseInt(dismissedUntil)) {
           setShowReminder(false);
@@ -103,7 +106,7 @@ interface VocabularyItem {
           setShowReminder(false);
         }
       } catch (e) {
-        console.error("Failed to load high priority words:", e);
+        log.error("Failed to load high priority words:", e);
       }
     };
 
@@ -120,11 +123,13 @@ interface VocabularyItem {
         searchQuery || undefined,
         sortBy,
       );
-      setVocab(data);
-      // 假设 API 返回的是数组，实际可能需要调整
-      setTotal(data.length || 0);
+      // 后端返回 {items, total}；兼容旧版纯数组格式
+      const items = Array.isArray(data) ? data : (data.items || []);
+      const total = Array.isArray(data) ? data.length : (data.total ?? data.length ?? 0);
+      setVocab(items);
+      setTotal(total);
     } catch (e) {
-      console.error(e);
+      log.error("Failed to load vocabulary:", e);
     }
   }, [page, sortBy, searchQuery]);
 
@@ -139,7 +144,7 @@ interface VocabularyItem {
     try {
       await deleteVocabulary(numId);
     } catch (e) {
-      console.error("Delete failed:", e);
+      log.error("Delete failed:", e);
       alert("删除失败，重新加载...");
       loadVocab();
     }
@@ -155,7 +160,7 @@ interface VocabularyItem {
       setIsExporting(true);
       await exportVocabulary();
     } catch (e) {
-      console.error("Export failed:", e);
+      log.error("Export failed:", e);
       alert("导出失败，请重试。");
     } finally {
       setIsExporting(false);
@@ -168,7 +173,7 @@ interface VocabularyItem {
       setIsExportingAnki(true);
       await exportVocabularyAnki();
     } catch (e) {
-      console.error("Anki export failed:", e);
+      log.error("Anki export failed:", e);
       alert("导出失败，请重试。");
     } finally {
       setIsExportingAnki(false);
@@ -300,7 +305,7 @@ interface VocabularyItem {
                       String(Date.now() + 24 * 60 * 60 * 1000),
                     );
                   } catch (e) {
-                    console.warn('Failed to save reminder state to localStorage:', e);
+                    log.warn('Failed to save reminder state to localStorage:', e);
                   }
                 }}
                 className="text-gray-400 hover:text-gray-600"
@@ -404,7 +409,8 @@ interface VocabularyItem {
           <span className="text-sm text-gray-600">第 {page} 页</span>
           <button
             onClick={() => setPage((p) => p + 1)}
-            className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-sm text-gray-700"
+            disabled={page * 30 >= total}
+            className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed text-sm text-gray-700"
           >
             下一页
           </button>

@@ -145,11 +145,15 @@ def batch_update_priorities(db_session) -> dict:
                 {"priority": priority, "status": status, "vocab_id": word_id},
             )
 
-            # 提交单个更新
-            db_session.commit()
             updated_count += 1
 
         except Exception as e:
             errors.append(f"单词ID {word[0]} 更新失败: {str(e)}")
+
+    # 所有更新完成后统一提交，避免逐行提交的性能开销
+    try:
+        db_session.commit()
+    except Exception as e:
+        errors.append(f"批量提交失败: {str(e)}")
 
     return {"total": len(words), "updated": updated_count, "errors": errors}

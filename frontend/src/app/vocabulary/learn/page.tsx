@@ -2,9 +2,12 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { createLogger } from "../../../lib/logger";
 import { getVocabulary } from "../../../lib/api";
 import VocabDetailContent from "../../../components/VocabDetailContent";
 import { ArrowLeftIcon, SettingsIcon, CheckIcon } from "../../../components/Icons";
+
+const log = createLogger("VocabLearn");
 
 interface VocabularyDetail {
   id: number;
@@ -63,22 +66,14 @@ export default function LearnPage() {
       // Filter valid items
       const validItems = items.filter((item: any) => item && item.id && item.word);
       
-      if (validItems.length === 0) {
-        setVocabList([]);
-        return;
-      }
-
       setVocabList(validItems);
-      if (currentIndex >= validItems.length) {
-        setCurrentIndex(0);
-      }
     } catch (e) {
-      console.error("加载单词列表失败:", e);
+      log.error("加载单词列表失败:", e);
       setError("加载失败，请检查网络或刷新页面");
     } finally {
       setLoading(false);
     }
-  }, [settings.learnCount, settings.sortBy, currentIndex]);
+  }, [settings.learnCount, settings.sortBy]);
 
   // 加载设置和进度
   useEffect(() => {
@@ -95,9 +90,16 @@ export default function LearnPage() {
         setCurrentIndex(progress.currentIndex);
       }
     } catch (e) {
-      console.error("Failed to load settings:", e);
+      log.error("Failed to load settings:", e);
     }
   }, [settings.rememberProgress]);
+
+  // 当词表变化时重置越界的 currentIndex，与加载逻辑解耦
+  useEffect(() => {
+    if (vocabList.length > 0 && currentIndex >= vocabList.length) {
+      setCurrentIndex(0);
+    }
+  }, [vocabList.length, currentIndex]);
 
   // 加载单词列表
   useEffect(() => {

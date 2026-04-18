@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import { createLogger } from "../lib/logger";
 import {
   updateVocabularyMastery,
   translateText,
@@ -13,6 +14,8 @@ import {
 import ContextAwareLayout from "./ContextAwareLayout";
 import ClickableText from "./ClickableText";
 import { useGlobalTextSelection } from "../hooks/useGlobalTextSelection";
+
+const log = createLogger("VocabDetail");
 
 interface VocabularyDetail {
   id: number;
@@ -99,7 +102,7 @@ export default function VocabDetailContent({
       try {
         setNotes(JSON.parse(savedNotes));
       } catch (e) {
-        console.error("Failed to parse notes:", e);
+        log.error("Failed to parse notes:", e);
       }
     }
   }, [vocabId]);
@@ -178,7 +181,7 @@ export default function VocabDetailContent({
         source: data?.source || source, // Ensure source is preserved if returned or fallback
       });
     } catch (e) {
-      console.error(e);
+      log.error(e);
       setActiveWord({
         word,
         meanings: [],
@@ -214,7 +217,7 @@ export default function VocabDetailContent({
         }
       }
     } catch (e) {
-      console.error("Failed to load translation cache:", e);
+      log.error("Failed to load translation cache:", e);
       localStorage.removeItem(TRANSLATION_CACHE_KEY);
     }
   }, []);
@@ -241,14 +244,14 @@ export default function VocabDetailContent({
             try {
               localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify(updated));
             } catch (e) {
-              console.error("Failed to save translation cache:", e);
+              log.error("Failed to save translation cache:", e);
             }
             return updated;
           });
         }
       } catch (e) {
         const errorMessage = e instanceof Error ? e.message : String(e);
-        console.error(`翻译失败 [${sentence.substring(0, 30)}...]:`, errorMessage);
+        log.error(`翻译失败 [${sentence.substring(0, 30)}...]:`, errorMessage);
         // 记录失败，避免无限重试
         setFailedSet((prev) => {
             if (prev.has(sentence)) return prev;
@@ -311,7 +314,7 @@ export default function VocabDetailContent({
       const data = await getVocabularyDetail(vocabId);
       setVocab(data);
     } catch (e) {
-      console.error(e);
+      log.error(e);
       setVocab(null);
     } finally {
       setLoading(false);
@@ -335,7 +338,7 @@ export default function VocabDetailContent({
       alert("已标记为掌握");
       loadVocab();
     } catch (e) {
-      console.error(e);
+      log.error(e);
       alert("操作失败");
     } finally {
       setMarkingMastered(false);
@@ -375,7 +378,7 @@ export default function VocabDetailContent({
         setRecentlyAddedWords(prev => prev.filter(w => w.id !== wordId));
       }
     } catch (e) {
-      console.error(e);
+      log.error(e);
       alert("删除失败");
     }
   }, [router, vocab]);
@@ -398,7 +401,7 @@ export default function VocabDetailContent({
       });
       setRecentlyAddedWords(prev => [...prev, newItem]);
     } catch (e) {
-      console.error(e);
+      log.error(e);
       alert("添加失败");
     }
   }, [vocab]);
@@ -450,7 +453,7 @@ export default function VocabDetailContent({
           return status;
         }
       } catch (e) {
-        console.error("轮询例句提取状态失败:", e);
+        log.error("轮询例句提取状态失败:", e);
         break;
       }
     }
@@ -476,7 +479,7 @@ export default function VocabDetailContent({
         }
       }
     } catch (e) {
-      console.error(e);
+      log.error(e);
       alert("无法启动提取任务");
     } finally {
       setExtracting(false);

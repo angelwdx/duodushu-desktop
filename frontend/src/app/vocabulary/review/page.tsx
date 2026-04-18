@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { createLogger } from "../../../lib/logger";
 import {
   getDueVocabulary,
   updateVocabularyMastery,
@@ -15,6 +16,8 @@ import {
   SettingsIcon,
 } from "../../../components/Icons";
 import VocabDetailContent from "../../../components/VocabDetailContent";
+
+const log = createLogger("VocabReview");
 
 interface DueWord {
   id: number;
@@ -60,7 +63,7 @@ export default function ReviewPage() {
       setCurrentIndex(0);
       setShowDefinition(false);
     } catch (e) {
-      console.error("加载到期单词失败:", e);
+      log.error("加载到期单词失败:", e);
       alert("加载失败");
     } finally {
       setLoading(false);
@@ -90,7 +93,7 @@ export default function ReviewPage() {
         goToNext();
       }
     } catch (e) {
-      console.error(e);
+      log.error(e);
     }
   };
 

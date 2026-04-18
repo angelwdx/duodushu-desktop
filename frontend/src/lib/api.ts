@@ -1,6 +1,10 @@
 // 尝试从 Electron 获取后端 URL（便携版使用）
 // 在开发环境或 Electron 未提供 URL 时，使用默认值
 // 使用 127.0.0.1 而非 localhost 以避免 macOS 上的 IPv6 (::1) 解析问题
+import { createLogger } from "./logger";
+
+const log = createLogger("api");
+
 let API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
 export function getApiUrl(): string {
@@ -14,10 +18,10 @@ if (typeof window !== 'undefined' && (window as any).electronAPI) {
     if (backendUrl) {
       // 规范化后端 URL，确保不以斜杠结尾
       API_URL = backendUrl.endsWith('/') ? backendUrl.slice(0, -1) : backendUrl;
-      console.log('[API] Using backend URL from Electron:', API_URL);
+      log.debug('[API] Using backend URL from Electron:', API_URL);
     }
   }).catch((e: any) => {
-    console.warn('[API] Failed to get backend URL from Electron:', e);
+    log.warn('[API] Failed to get backend URL from Electron:', e);
   });
 }
 
@@ -26,10 +30,10 @@ if (typeof window !== 'undefined' && (window as any).electronAPI) {
 // 这里保留 localhost 作为最后的退路
 if (typeof window !== 'undefined' && API_URL === "http://127.0.0.1:8000" && !(window as any).electronAPI) {
   // 可能是网页直播预览模式，保持默认
-  console.log('[API] Using default API URL');
+  log.debug('[API] Using default API URL');
 }
 
-console.log('[API] Initial API URL configured:', API_URL);
+log.debug('[API] Initial API URL configured:', API_URL);
 
 // 带超时的 fetch 函数
 async function fetchWithTimeout(url: string, timeout: number, options?: RequestInit): Promise<Response> {
@@ -119,9 +123,7 @@ export async function lookupWord(word: string, source?: string) {
   if (source) {
     url += `?source=${encodeURIComponent(source)}`;
   }
-  console.log(
-    `Looking up word: ${word}${source ? ` (source: ${source})` : ""}`,
-  );
+  log.debug(`Looking up word: ${word}${source ? ` (source: ${source})` : ""}`);
 
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) {
@@ -137,7 +139,7 @@ export async function lookupWordMultipleSources(word: string, sources: string[])
     return null;
   }
 
-  console.log(`Looking up word: ${word} from ${sources.length} source(s): ${sources.join(", ")}`);
+  log.debug(`Looking up word: ${word} from ${sources.length} source(s): ${sources.join(", ")}`);
 
   // Parallel queries for all sources
   const promises = sources.map((source) =>
@@ -152,7 +154,7 @@ export async function lookupWordMultipleSources(word: string, sources: string[])
         return res.json();
       })
       .catch((err) => {
-        console.warn(`Failed to lookup from ${source}:`, err);
+        log.warn(`Failed to lookup from ${source}:`, err);
         return null;
       })
   );
@@ -190,7 +192,7 @@ export async function checkWordSources(
 ): Promise<SourceAvailability> {
   const res = await fetch(`${API_URL}/api/dict/${word}/sources`, { cache: "no-store" });
   if (!res.ok) {
-    console.error("Failed to check sources");
+    log.error("Failed to check sources");
     return {};
   }
   return res.json();
@@ -665,7 +667,7 @@ export function saveReviewSettings(settings: ReviewSettings) {
   try {
     localStorage.setItem('review_settings', JSON.stringify(settings));
   } catch (e) {
-    console.error("Failed to save review settings:", e);
+    log.error("Failed to save review settings:", e);
   }
 }
 
@@ -677,7 +679,7 @@ export function loadReviewSettings(): ReviewSettings {
       return JSON.parse(saved);
     }
   } catch (e) {
-    console.error("Failed to load review settings:", e);
+    log.error("Failed to load review settings:", e);
   }
   return { reviewCount: DEFAULT_REVIEW_COUNT };
 }
@@ -920,7 +922,7 @@ export async function checkTranslationConfigured(): Promise<boolean> {
     const active = data.suppliers.find((s: any) => s.type === data.active_supplier);
     return active && active.configured;
   } catch (e) {
-    console.error("Failed to check translation config:", e);
+    log.error("Failed to check translation config:", e);
     // 发生错误时保守返回 false，避免无效请求
     return false;
   }

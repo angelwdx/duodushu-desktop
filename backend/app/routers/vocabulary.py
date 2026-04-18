@@ -508,7 +508,7 @@ def get_vocabulary_detail(vocab_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/", response_model=List[VocabularyResponse])
+@router.get("/")
 def get_vocabulary(
     page: int = 1,
     per_page: int = 20,
@@ -518,11 +518,11 @@ def get_vocabulary(
     book_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """获取生词列表，包含主要上下文和额外例句"""
+    """获取生词列表，包含主要上下文和额外例句。返回 {items, total}"""
     try:
         normalized_source_expr = _normalized_context_source_sql("wc")
-        # Explicit column selection to avoid index errors
-        query = """
+        # 显式选择列，避免依赖 SELECT * 的列顺序
+        base_select = """
             SELECT
                 v.id, v.word, v.phonetic, v.definition, v.translation,
                 v.book_id, v.context, v.review_count, v.query_count,
@@ -533,47 +533,59 @@ def get_vocabulary(
             LEFT JOIN books b ON v.book_id = b.id
             WHERE 1=1
         """
+        count_select = """
+            SELECT COUNT(*)
+            FROM vocabulary v
+            LEFT JOIN books b ON v.book_id = b.id
+            WHERE 1=1
+        """
 
         # 查询参数字典
         query_params = {}
+        where_clause = ""
 
         # 搜索条件
         if search:
-            query += " AND v.word LIKE :search"
+            where_clause += " AND v.word LIKE :search"
             query_params["search"] = f"%{search}%"
 
         # 按书籍筛选
         if book_id:
-            query += " AND v.book_id = :book_id"
+            where_clause += " AND v.book_id = :book_id"
             query_params["book_id"] = book_id
 
         # 筛选书籍类型
         if filter_type == "webnovel":
-            query += " AND b.book_type = :filter_type"
+            where_clause += " AND b.book_type = :filter_type"
             query_params["filter_type"] = "webnovel"
         elif filter_type == "normal":
-            query += " AND b.book_type = :filter_type"
+            where_clause += " AND b.book_type = :filter_type"
             query_params["filter_type"] = "normal"
 
+        # 查询总数（用于分页）
+        total = db.execute(text(count_select + where_clause), query_params).scalar() or 0
+
         # 排序
+        order_clause = ""
         if sort_by == "alphabetical":
-            query += " ORDER BY lower(v.word) ASC"
+            order_clause = " ORDER BY lower(v.word) ASC"
         elif sort_by == "review_count":
-            query += " ORDER BY v.review_count DESC"
+            order_clause = " ORDER BY v.review_count DESC"
         elif sort_by == "query_count":
-            query += " ORDER BY v.query_count DESC, v.last_queried_at DESC"
+            order_clause = " ORDER BY v.query_count DESC, v.last_queried_at DESC"
         elif sort_by == "priority_score":
-            query += " ORDER BY v.priority_score DESC, v.last_queried_at DESC"
+            order_clause = " ORDER BY v.priority_score DESC, v.last_queried_at DESC"
         else:  # newest
-            query += " ORDER BY v.created_at DESC"
+            order_clause = " ORDER BY v.created_at DESC"
 
         # 分页
         offset = (page - 1) * per_page
-        query += " LIMIT :per_page OFFSET :offset"
+        paginate_clause = " LIMIT :per_page OFFSET :offset"
         query_params["per_page"] = per_page
         query_params["offset"] = offset
 
         # 执行查询
+        query = base_select + where_clause + order_clause + paginate_clause
         vocab_rows = db.execute(text(query), query_params).fetchall()
 
         # 获取所有上下文
@@ -688,7 +700,7 @@ def get_vocabulary(
                     "created_at": row[14].isoformat() if hasattr(row[14], "isoformat") else str(row[14]),
                 }
             )
-        return result
+        return {"items": result, "total": total}
 
     except Exception as e:
         logger.error(f"Error fetching vocabulary: {e}", exc_info=True)
@@ -697,8 +709,16 @@ def get_vocabulary(
 
 
 
-def format_vocab_response_with_db(vocab_row: tuple, db: Session):
-    """格式化生词响应（使用原生SQL）"""
+def format_vocab_response_with_db(vocab_row: tuple, db: Session) -> dict:
+    """格式化生词响应（使用原生SQL），返回 dict 以支持动态添加字段。
+
+    SELECT * FROM vocabulary 列顺序（0-based）：
+    id(0) word(1) phonetic(2) definition(3) translation(4) audio_url(5)
+    book_id(6) page_number(7) context(8) mastery_level(9) review_count(10)
+    query_count(11) last_reviewed_at(12) last_queried_at(13) difficulty_score(14)
+    priority_score(15) learning_status(16) next_review_at(17) srs_interval(18)
+    srs_ease_factor(19) srs_repetitions(20) created_at(21)
+    """
     definition_data = None
     if vocab_row[3]:
         try:
@@ -712,23 +732,26 @@ def format_vocab_response_with_db(vocab_row: tuple, db: Session):
         if book:
             book_title = book[0]
 
-    return VocabularyResponse(
-        id=vocab_row[0],
-        word=vocab_row[1],
-        phonetic=vocab_row[2],
-        definition=definition_data,
-        translation=vocab_row[4],
-        primary_context=None,  # 需要重新查询
-        example_contexts=[],
-        review_count=vocab_row[11] if vocab_row[11] else 0,
-        query_count=vocab_row[15] if vocab_row[15] else 0,
-        mastery_level=vocab_row[9] if vocab_row[9] else 1,
-        difficulty_score=vocab_row[13] if vocab_row[13] else 0,
-        priority_score=vocab_row[17] if vocab_row[17] else 0.0,
-        learning_status=vocab_row[18] if vocab_row[18] else "new",
-        created_at=vocab_row[10].isoformat() if hasattr(vocab_row[10], "isoformat") else str(vocab_row[10]),
-        last_queried_at=vocab_row[16].isoformat() if vocab_row[16] and hasattr(vocab_row[16], "isoformat") else None,
-    )
+    created_at_val = vocab_row[21]
+    last_queried_val = vocab_row[13]
+
+    return {
+        "id": vocab_row[0],
+        "word": vocab_row[1],
+        "phonetic": vocab_row[2],
+        "definition": definition_data,
+        "translation": vocab_row[4],
+        "primary_context": None,
+        "example_contexts": [],
+        "review_count": vocab_row[10] if vocab_row[10] else 0,
+        "query_count": vocab_row[11] if vocab_row[11] else 0,
+        "mastery_level": vocab_row[9] if vocab_row[9] else 1,
+        "difficulty_score": vocab_row[14] if vocab_row[14] else 0,
+        "priority_score": vocab_row[15] if vocab_row[15] else 0.0,
+        "learning_status": vocab_row[16] if vocab_row[16] else "new",
+        "created_at": created_at_val.isoformat() if hasattr(created_at_val, "isoformat") else str(created_at_val),
+        "last_queried_at": last_queried_val.isoformat() if last_queried_val and hasattr(last_queried_val, "isoformat") else None,
+    }
 
 
 @router.delete("/{vocab_id}")
@@ -736,11 +759,11 @@ def delete_vocabulary(vocab_id: int, db: Session = Depends(get_db)):
     """删除生词"""
     try:
         with db.begin():
-            # 删除关联的上下文
+            # 删除关联的上下文（大小写不敏感匹配）
             db.execute(
                 text("""
                 DELETE FROM word_contexts
-                WHERE word = (SELECT word FROM vocabulary WHERE id = :vocab_id)
+                WHERE lower(word) = lower((SELECT word FROM vocabulary WHERE id = :vocab_id))
             """),
                 {"vocab_id": vocab_id},
             )
@@ -750,8 +773,6 @@ def delete_vocabulary(vocab_id: int, db: Session = Depends(get_db)):
                 text("DELETE FROM vocabulary WHERE id = :vocab_id"),
                 {"vocab_id": vocab_id},
             )
-
-            db.commit()
 
         return {"status": "success"}
 
@@ -902,8 +923,6 @@ def update_mastery(vocab_id: int, data: dict, db: Session = Depends(get_db)):
                     text("UPDATE vocabulary SET learning_status = :status WHERE id = :id"),
                     {"status": new_status, "id": vocab_id},
                 )
-
-            db.commit()
 
             result = format_vocab_response_with_db(vocab_updated, db)
             if next_review_days is not None:
@@ -1337,6 +1356,15 @@ def add_word_context(vocab_id: int, data: dict, db: Session = Depends(get_db)):
         is_primary = data.get("is_primary", 0)
         source_type = "user_collected"  # 用户主动收藏的上下文
 
+        if not word or not context_sentence:
+            raise HTTPException(
+                status_code=400,
+                detail="Missing required fields: word and context_sentence",
+            )
+
+        if not book_id:
+            raise HTTPException(status_code=400, detail="Missing required field: book_id")
+
         # 验证 vocab_id 是否存在，并且对应的单词是否匹配
         vocab = db.execute(text("SELECT word FROM vocabulary WHERE id = :id"), {"id": vocab_id}).fetchone()
 
@@ -1348,15 +1376,6 @@ def add_word_context(vocab_id: int, data: dict, db: Session = Depends(get_db)):
                 status_code=400,
                 detail=f"Word '{word}' does not match vocabulary ID {vocab_id}",
             )
-
-        if not word or not context_sentence:
-            raise HTTPException(
-                status_code=400,
-                detail="Missing required fields: word and context_sentence",
-            )
-
-        if not book_id:
-            raise HTTPException(status_code=400, detail="Missing required field: book_id")
 
         # 验证 book_id 是否存在
         book_exists = db.execute(text("SELECT 1 FROM books WHERE id = :book_id"), {"book_id": book_id}).fetchone()
