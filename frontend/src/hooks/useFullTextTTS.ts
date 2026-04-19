@@ -84,6 +84,8 @@ export interface UseFullTextTTSReturn {
   setVoice: (v: TTSVoice) => void;
   setSpeed: (speed: number) => void;
   play: () => void;
+  /** 只朗读当前页，读完后停止，不自动翻页 */
+  playCurrentPage: () => void;
   pause: () => void;
   resume: () => void;
   stop: () => void;
@@ -460,6 +462,30 @@ export function useFullTextTTS({
   }, [stopAudio, startReadingLoop, currentPage]);
 
   /**
+   * 只朗读当前页，读完后停止，不自动翻页。
+   */
+  const playCurrentPage = useCallback(async () => {
+    stopAudio();
+    shouldPlayRef.current = true;
+    setIsPlaying(true);
+    setIsPaused(false);
+    const page = currentPage > 0 ? currentPage : 1;
+    readingPageRef.current = page;
+    setTimeout(() => setCurrentReadingPage(page), 0);
+    try {
+      await playPageRef.current(page);
+    } catch (err) {
+      console.error('[useFullTextTTS] playCurrentPage error:', err);
+    } finally {
+      stopAudio();
+      setIsPlaying(false);
+      setIsPaused(false);
+      setTimeout(() => setCurrentReadingPage(null), 0);
+      setTimeout(() => setCurrentChunkText(null), 0);
+    }
+  }, [stopAudio, currentPage]);
+
+  /**
    * 暂停：只暂停音频，while 循环保持挂起（等待 onended）
    * 不调用 stopAudio，不改 shouldPlayRef
    */
@@ -506,6 +532,7 @@ export function useFullTextTTS({
     setVoice,
     setSpeed,
     play,
+    playCurrentPage,
     pause,
     resume,
     stop,

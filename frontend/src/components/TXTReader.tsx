@@ -364,13 +364,25 @@ export default function TXTReader({
           </select>
 
           {!tts.isPlaying && !tts.isPaused ? (
-            <button
-              onClick={handlePlay}
-              className="px-4 py-1.5 rounded-full text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-all"
-              title="从当前页面开始朗读"
-            >
-              朗读
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={handlePlay}
+                className="px-4 py-1.5 rounded-full text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-all"
+                title="从当前页面开始朗读（自动翻页）"
+              >
+                朗读
+              </button>
+              <button
+                onClick={() => {
+                  updateVisibleOffsets();
+                  requestAnimationFrame(() => { tts.playCurrentPage(); });
+                }}
+                className="px-4 py-1.5 rounded-full text-sm font-medium text-blue-600 hover:bg-blue-50 transition-all"
+                title="只朗读当前页面，读完后停止"
+              >
+                本页
+              </button>
+            </div>
           ) : (
             <>
               {tts.isPlaying ? (
