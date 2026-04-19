@@ -43,17 +43,13 @@ export default function ReviewPage() {
   const [loading, setLoading] = useState(true);
   const [showCompletionDialog, setShowCompletionDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [reviewCount, setReviewCount] = useState<number>(DEFAULT_REVIEW_COUNT);
+  // 直接从 localStorage 初始化，避免挂载时加载两次
+  const [reviewCount, setReviewCount] = useState<number>(() => loadReviewSettings().reviewCount);
   const [isSubmitting, setIsSubmitting] = useState(false);
   // SRS 反馈提示：显示"下次复习：N 天后"
   const [srsToast, setSrsToast] = useState<string | null>(null);
 
   const currentVocab = vocabList[currentIndex];
-
-  useEffect(() => {
-    const settings = loadReviewSettings();
-    setReviewCount(settings.reviewCount);
-  }, []);
 
   const loadVocab = useCallback(async () => {
     try {
@@ -86,12 +82,12 @@ export default function ReviewPage() {
     setIsSubmitting(true);
     try {
       const result = await updateVocabularyMastery(currentVocab.id, { quality });
-      if (quality < 3) {
-        // 忘了：展示释义后停在当前词
+      if (result?.next_review_days != null) showSrsToast(result.next_review_days);
+      if (quality < 5) {
+        // 忘了 / 模糊：展示单词详情，让用户加深印象再继续
         setShowDefinition(true);
-        if (result?.next_review_days != null) showSrsToast(result.next_review_days);
       } else {
-        if (result?.next_review_days != null) showSrsToast(result.next_review_days);
+        // 记得：直接跳下一词
         goToNext();
       }
     } catch (e) {
