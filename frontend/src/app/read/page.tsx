@@ -440,8 +440,9 @@ function ReaderContent() {
     try {
       const { getVocabulary } = await import("../../lib/api");
       // Fix: Pass bookId as first parameter to filter by current book
-      const vocab = await getVocabulary(id);
-      setSavedWords(vocab);
+      // Fetch a large limit to allow checking all saved words from the book
+      const vocab = await getVocabulary(id, 1, 1000);
+      setSavedWords(vocab.items || []);
     } catch (e) {
       console.error("Failed to load vocabulary", e);
     }
