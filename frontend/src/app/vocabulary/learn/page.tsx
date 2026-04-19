@@ -75,24 +75,29 @@ export default function LearnPage() {
     }
   }, [settings.learnCount, settings.sortBy]);
 
-  // 加载设置和进度
+  // 加载设置和进度（仅在挂载时执行一次）
   useEffect(() => {
     try {
+      let rememberProgress = true;
       const savedSettings = localStorage.getItem(LEARN_SETTINGS_KEY);
       if (savedSettings) {
-        setSettings(JSON.parse(savedSettings));
+        const parsed = JSON.parse(savedSettings) as LearnSettings;
+        setSettings(parsed);
+        rememberProgress = parsed.rememberProgress;
       }
 
-      const savedProgress = localStorage.getItem(LEARN_PROGRESS_KEY);
-      if (savedProgress && settings.rememberProgress) {
-        const progress = JSON.parse(savedProgress) as LearnProgress;
-        setSettings(prev => ({ ...prev, sortBy: progress.sortBy as any }));
-        setCurrentIndex(progress.currentIndex);
+      if (rememberProgress) {
+        const savedProgress = localStorage.getItem(LEARN_PROGRESS_KEY);
+        if (savedProgress) {
+          const progress = JSON.parse(savedProgress) as LearnProgress;
+          setSettings(prev => ({ ...prev, sortBy: progress.sortBy as any }));
+          setCurrentIndex(progress.currentIndex);
+        }
       }
     } catch (e) {
       log.error("Failed to load settings:", e);
     }
-  }, [settings.rememberProgress]);
+  }, []);
 
   // 当词表变化时重置越界的 currentIndex，与加载逻辑解耦
   useEffect(() => {
@@ -141,7 +146,7 @@ export default function LearnPage() {
     setSettings(newSettings);
     localStorage.setItem(LEARN_SETTINGS_KEY, JSON.stringify(newSettings));
     setShowSettings(false);
-    loadVocabList();
+    // useEffect 会因 settings.learnCount / settings.sortBy 变化自动触发重新加载，无需手动调用
   };
 
   if (loading) {

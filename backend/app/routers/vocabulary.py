@@ -712,12 +712,12 @@ def get_vocabulary(
 def format_vocab_response_with_db(vocab_row: tuple, db: Session) -> dict:
     """格式化生词响应（使用原生SQL），返回 dict 以支持动态添加字段。
 
-    SELECT * FROM vocabulary 列顺序（0-based）：
+    SELECT * FROM vocabulary 实际列顺序（0-based）：
     id(0) word(1) phonetic(2) definition(3) translation(4) audio_url(5)
     book_id(6) page_number(7) context(8) mastery_level(9) review_count(10)
     query_count(11) last_reviewed_at(12) last_queried_at(13) difficulty_score(14)
-    priority_score(15) learning_status(16) next_review_at(17) srs_interval(18)
-    srs_ease_factor(19) srs_repetitions(20) created_at(21)
+    priority_score(15) learning_status(16) next_review_at(17) created_at(18)
+    srs_interval(19) srs_ease_factor(20) srs_repetitions(21)
     """
     definition_data = None
     if vocab_row[3]:
@@ -732,7 +732,7 @@ def format_vocab_response_with_db(vocab_row: tuple, db: Session) -> dict:
         if book:
             book_title = book[0]
 
-    created_at_val = vocab_row[21]
+    created_at_val = vocab_row[18]
     last_queried_val = vocab_row[13]
 
     return {
@@ -853,7 +853,7 @@ def update_mastery(vocab_id: int, data: dict, db: Session = Depends(get_db)):
                             srs_ease_factor = :ef,
                             srs_repetitions = :reps,
                             next_review_at = :next_review,
-                            review_count = review_count + 1,
+                            review_count = COALESCE(review_count, 0) + 1,
                             last_reviewed_at = :now
                         WHERE id = :id
                     """),
@@ -866,9 +866,9 @@ def update_mastery(vocab_id: int, data: dict, db: Session = Depends(get_db)):
                         "id": vocab_id,
                     },
                 )
-                # 根据质量同步更新 mastery_level
-                vocab_row = db.execute(text("SELECT mastery_level FROM vocabulary WHERE id = :id"), {"id": vocab_id}).fetchone()
-                current_mastery = vocab_row[0] if vocab_row else 1
+                # 根据质量同步更新 mastery_level（直接复用已读取的 vocab，避免多余查询）
+                mastery_key_idx = vocab_keys.index("mastery_level") if "mastery_level" in vocab_keys else 9
+                current_mastery = vocab[mastery_key_idx] or 1
                 if quality >= 4:
                     new_mastery = min(5, current_mastery + 1)
                 elif quality <= 1:
@@ -912,10 +912,10 @@ def update_mastery(vocab_id: int, data: dict, db: Session = Depends(get_db)):
             review_idx = cols.index("review_count") if "review_count" in cols else 7
             status_idx = cols.index("learning_status") if "learning_status" in cols else 12
 
-            new_status = vocab_updated[status_idx]
-            if vocab_updated[mastery_idx] >= 5 and vocab_updated[review_idx] >= 3:
+            new_status = vocab_updated[status_idx] or "new"
+            if (vocab_updated[mastery_idx] or 0) >= 5 and (vocab_updated[review_idx] or 0) >= 3:
                 new_status = "mastered"
-            elif vocab_updated[review_idx] > 0:
+            elif (vocab_updated[review_idx] or 0) > 0:
                 new_status = "learning"
 
             if new_status != vocab_updated[status_idx]:
@@ -925,6 +925,7 @@ def update_mastery(vocab_id: int, data: dict, db: Session = Depends(get_db)):
                 )
 
             result = format_vocab_response_with_db(vocab_updated, db)
+            result["learning_status"] = new_status  # 使用最新的 learning_status
             if next_review_days is not None:
                 result["next_review_days"] = next_review_days
             return result

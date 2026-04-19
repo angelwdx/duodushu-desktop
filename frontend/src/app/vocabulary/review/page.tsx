@@ -44,6 +44,7 @@ export default function ReviewPage() {
   const [showCompletionDialog, setShowCompletionDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [reviewCount, setReviewCount] = useState<number>(DEFAULT_REVIEW_COUNT);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   // SRS 反馈提示：显示"下次复习：N 天后"
   const [srsToast, setSrsToast] = useState<string | null>(null);
 
@@ -81,7 +82,8 @@ export default function ReviewPage() {
   };
 
   const handleRate = async (quality: 0 | 3 | 5) => {
-    if (!currentVocab) return;
+    if (!currentVocab || isSubmitting) return;
+    setIsSubmitting(true);
     try {
       const result = await updateVocabularyMastery(currentVocab.id, { quality });
       if (quality < 3) {
@@ -93,7 +95,11 @@ export default function ReviewPage() {
         goToNext();
       }
     } catch (e) {
-      log.error(e);
+      log.error("更新复习结果失败:", e);
+      setSrsToast("提交失败，请重试");
+      setTimeout(() => setSrsToast(null), 2200);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -205,19 +211,22 @@ export default function ReviewPage() {
             <div className="flex gap-6 w-full max-w-lg">
               <button
                 onClick={() => handleRate(0)}
-                className="flex-1 py-4 bg-white border-2 border-gray-200 hover:border-red-400 hover:text-red-600 text-gray-900 rounded-xl font-medium transition-all hover:-translate-y-1 hover:shadow-lg"
+                disabled={isSubmitting}
+                className="flex-1 py-4 bg-white border-2 border-gray-200 hover:border-red-400 hover:text-red-600 text-gray-900 rounded-xl font-medium transition-all hover:-translate-y-1 hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 忘了
               </button>
               <button
                 onClick={() => handleRate(3)}
-                className="flex-1 py-4 bg-white border-2 border-gray-200 hover:border-amber-400 hover:text-amber-600 text-gray-900 rounded-xl font-medium transition-all hover:-translate-y-1 hover:shadow-lg"
+                disabled={isSubmitting}
+                className="flex-1 py-4 bg-white border-2 border-gray-200 hover:border-amber-400 hover:text-amber-600 text-gray-900 rounded-xl font-medium transition-all hover:-translate-y-1 hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 模糊
               </button>
               <button
                 onClick={() => handleRate(5)}
-                className="flex-1 py-4 bg-white border-2 border-gray-200 hover:border-green-500 hover:text-green-700 text-gray-900 rounded-xl font-medium transition-all hover:-translate-y-1 hover:shadow-lg"
+                disabled={isSubmitting}
+                className="flex-1 py-4 bg-white border-2 border-gray-200 hover:border-green-500 hover:text-green-700 text-gray-900 rounded-xl font-medium transition-all hover:-translate-y-1 hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 记得
               </button>
