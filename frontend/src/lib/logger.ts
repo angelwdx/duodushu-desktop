@@ -31,25 +31,25 @@ const getPrefix = (module: string): string => {
 };
 
 export const logger = {
-  debug: (module: string, message: string, ...args: any[]) => {
+  debug: (module: string, message: any, ...args: any[]) => {
     if (shouldLog('debug')) {
       console.log(`${getPrefix(module)} DEBUG:`, message, ...args);
     }
   },
 
-  info: (module: string, message: string, ...args: any[]) => {
+  info: (module: string, message: any, ...args: any[]) => {
     if (shouldLog('info')) {
       console.log(`${getPrefix(module)} INFO:`, message, ...args);
     }
   },
 
-  warn: (module: string, message: string, ...args: any[]) => {
+  warn: (module: string, message: any, ...args: any[]) => {
     if (shouldLog('warn')) {
       console.warn(`${getPrefix(module)} WARN:`, message, ...args);
     }
   },
 
-  error: (module: string, message: string, ...args: any[]) => {
+  error: (module: string, message: any, ...args: any[]) => {
     if (shouldLog('error')) {
       console.error(`${getPrefix(module)} ERROR:`, message, ...args);
     }
@@ -58,8 +58,8 @@ export const logger = {
 
 // 快捷方法，用于组件内调用
 export const createLogger = (module: string) => ({
-  debug: (message: string, ...args: any[]) => logger.debug(module, message, ...args),
-  info: (message: string, ...args: any[]) => logger.info(module, message, ...args),
-  warn: (message: string, ...args: any[]) => logger.warn(module, message, ...args),
-  error: (message: string, ...args: any[]) => logger.error(module, message, ...args),
+  debug: (message: any, ...args: any[]) => logger.debug(module, message, ...args),
+  info: (message: any, ...args: any[]) => logger.info(module, message, ...args),
+  warn: (message: any, ...args: any[]) => logger.warn(module, message, ...args),
+  error: (message: any, ...args: any[]) => logger.error(module, message, ...args),
 });
