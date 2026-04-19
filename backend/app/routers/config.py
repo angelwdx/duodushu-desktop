@@ -130,7 +130,12 @@ def load_multi_supplier_config() -> MultiSupplierConfig:
             continue
 
     active_supplier_str = config.get("active_supplier")
-    active_supplier = SupplierType(active_supplier_str) if active_supplier_str else None
+    active_supplier = None
+    if active_supplier_str:
+        try:
+            active_supplier = SupplierType(active_supplier_str)
+        except ValueError:
+            logger.warning(f"配置中的 active_supplier 值无效，已忽略: {active_supplier_str}")
 
     return MultiSupplierConfig(
         suppliers=suppliers,
@@ -354,15 +359,23 @@ def save_supplier_config(request: SupplierConfigRequest):
 
     preset = SUPPLIER_PRESETS.get(supplier_type, {})
 
+    # 前端未重新输入 api_key 时（空字符串），保留已配置的密钥，避免误将供应商禁用
+    effective_api_key = request.api_key
+    if not effective_api_key:
+        existing = multi_config.suppliers.get(supplier_type)
+        if existing and existing.api_key:
+            effective_api_key = existing.api_key
+            logger.info(f"save_supplier_config: 保留已有 API Key for {request.supplier_type}")
+
     # 创建或更新供应商配置
     supplier_config = SupplierConfig(
         supplier_type=supplier_type,
         name=preset.get("name", request.supplier_type),
-        api_key=request.api_key,
+        api_key=effective_api_key,
         api_endpoint=request.api_endpoint or preset.get("default_api_endpoint", ""),
         model=request.model,
         custom_model=request.custom_model,
-        enabled=bool(request.api_key),
+        enabled=bool(effective_api_key),
         is_active=False,  # 新配置默认不是活跃的
     )
 
@@ -399,7 +412,7 @@ def delete_supplier_config(supplier_type: str):
 
     multi_config = load_multi_supplier_config()
 
-    if supplier_type not in multi_config.suppliers:
+    if supplier not in multi_config.suppliers:
         raise HTTPException(status_code=404, detail=f"供应商 {supplier_type} 未配置")
 
     multi_config.remove_supplier(supplier)

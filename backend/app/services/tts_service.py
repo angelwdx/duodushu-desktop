@@ -1,7 +1,8 @@
-import os
 import hashlib
 import asyncio
 import json
+import logging
+from pathlib import Path
 from fastapi.responses import FileResponse, Response
 from fastapi import HTTPException
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
@@ -11,8 +12,10 @@ from app.services.tts_providers import (
     build_provider_from_config,
 )
 
-AUDIO_CACHE_DIR = os.path.join(UPLOADS_DIR, "audio_cache")
-os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+logger = logging.getLogger(__name__)
+
+AUDIO_CACHE_DIR: Path = Path(UPLOADS_DIR) / "audio_cache"
+AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Lock to prevent duplicate generation of same text
 _generation_locks: Dict[str, asyncio.Lock] = {}
@@ -49,74 +52,70 @@ def _build_cache_key(text: str, voice: str) -> str:
     return hashlib.md5(f"{text}-{voice}-{normalized_config}".encode("utf-8")).hexdigest()
 
 
-def _get_cache_meta_path(cache_key: str) -> str:
-    return os.path.join(AUDIO_CACHE_DIR, f"{cache_key}.json")
+def _get_cache_meta_path(cache_key: str) -> Path:
+    return AUDIO_CACHE_DIR / f"{cache_key}.json"
 
 
 def _guess_extension(content_type: str) -> str:
     return CONTENT_TYPE_EXTENSIONS.get(content_type, ".bin")
 
 
-def _find_cached_audio_path(cache_key: str) -> Optional[str]:
-    for entry in os.listdir(AUDIO_CACHE_DIR):
-        if entry.startswith(f"{cache_key}.") and not entry.endswith(".json"):
-            return os.path.join(AUDIO_CACHE_DIR, entry)
+def _find_cached_audio_path(cache_key: str) -> Optional[Path]:
+    for entry in AUDIO_CACHE_DIR.iterdir():
+        if entry.name.startswith(f"{cache_key}.") and entry.suffix != ".json":
+            return entry
     return None
 
 
-def _list_cached_audio_files() -> List[str]:
+def _list_cached_audio_files() -> List[Path]:
     return [
-        os.path.join(AUDIO_CACHE_DIR, entry)
-        for entry in os.listdir(AUDIO_CACHE_DIR)
-        if entry.endswith((".mp3", ".wav", ".bin"))
+        entry
+        for entry in AUDIO_CACHE_DIR.iterdir()
+        if entry.suffix in (".mp3", ".wav", ".bin")
     ]
 
 
 def _load_cached_audio(cache_key: str) -> Optional[Tuple[str, bytes]]:
     meta_path = _get_cache_meta_path(cache_key)
     audio_path = _find_cached_audio_path(cache_key)
-    if not audio_path or not os.path.exists(meta_path):
+    if not audio_path or not meta_path.exists():
         return None
 
     try:
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        with open(audio_path, "rb") as f:
-            audio_bytes = f.read()
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        audio_bytes = audio_path.read_bytes()
         return meta.get("content_type", "audio/mpeg"), audio_bytes
     except Exception:
         return None
 
 
-def _write_cached_audio(cache_key: str, content_type: str, audio_bytes: bytes) -> str:
+def _write_cached_audio(cache_key: str, content_type: str, audio_bytes: bytes) -> Path:
     ext = _guess_extension(content_type)
-    audio_path = os.path.join(AUDIO_CACHE_DIR, f"{cache_key}{ext}")
+    audio_path = AUDIO_CACHE_DIR / f"{cache_key}{ext}"
     meta_path = _get_cache_meta_path(cache_key)
 
-    # Remove stale cache variants for the same key before writing the new one.
-    for entry in os.listdir(AUDIO_CACHE_DIR):
-        if entry.startswith(f"{cache_key}."):
-            os.remove(os.path.join(AUDIO_CACHE_DIR, entry))
+    # 清除同一 cache_key 的旧缓存变体
+    for entry in AUDIO_CACHE_DIR.iterdir():
+        if entry.name.startswith(f"{cache_key}."):
+            entry.unlink()
 
-    with open(audio_path, "wb") as f:
-        f.write(audio_bytes)
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump({"content_type": content_type}, f, ensure_ascii=False)
+    audio_path.write_bytes(audio_bytes)
+    meta_path.write_text(json.dumps({"content_type": content_type}, ensure_ascii=False), encoding="utf-8")
 
     _prune_cache_if_needed()
     return audio_path
 
 
-def _remove_cache_entry(audio_path: str) -> int:
+def _remove_cache_entry(audio_path: Path) -> int:
     removed = 0
-    meta_path = os.path.splitext(audio_path)[0] + ".json"
+    meta_path = audio_path.with_suffix(".json")
 
-    if os.path.exists(audio_path):
+    if audio_path.exists():
         removed += 1
-        os.remove(audio_path)
-    if os.path.exists(meta_path):
+        audio_path.unlink()
+    if meta_path.exists():
         removed += 1
-        os.remove(meta_path)
+        meta_path.unlink()
 
     return removed
 
@@ -126,17 +125,17 @@ def _prune_cache_if_needed() -> None:
     if not audio_files:
         return
 
-    total_size = sum(os.path.getsize(path) for path in audio_files)
+    total_size = sum(p.stat().st_size for p in audio_files)
     if len(audio_files) <= MAX_CACHE_FILES and total_size <= MAX_CACHE_BYTES:
         return
 
-    audio_files.sort(key=lambda path: os.path.getmtime(path))
+    audio_files.sort(key=lambda p: p.stat().st_mtime)
 
     while audio_files and (len(audio_files) > MAX_CACHE_FILES or total_size > MAX_CACHE_BYTES):
         oldest = audio_files.pop(0)
-        if not os.path.exists(oldest):
+        if not oldest.exists():
             continue
-        total_size -= os.path.getsize(oldest)
+        total_size -= oldest.stat().st_size
         _remove_cache_entry(oldest)
 
 
@@ -174,15 +173,14 @@ async def get_or_generate_audio(text: str, voice: str = "default") -> tuple[str,
             _write_cached_audio(cache_key, content_type, audio_bytes)
             return content_type, audio_bytes
         except Exception as e:
-            print(f"TTS Error: {e}")
+            logger.error(f"TTS 生成失败: {e}")
             raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
 
 
 async def generate_speech_file(text: str, voice: str = "default") -> str:
     """
-    Generates speech from text and saves to cache.
-    Returns the absolute path to the audio file.
-    Uses lock to prevent duplicate generation.
+    生成语音并缓存到磁盘，返回音频文件的绝对路径。
+    使用锁防止重复生成。
     """
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text is empty")
@@ -190,25 +188,23 @@ async def generate_speech_file(text: str, voice: str = "default") -> str:
     cache_key = _build_cache_key(text, voice)
     cached_path = _find_cached_audio_path(cache_key)
     if cached_path:
-        return cached_path
+        return str(cached_path)
 
     await get_or_generate_audio(text, voice)
     file_path = _find_cached_audio_path(cache_key)
     if file_path:
-        return file_path
+        return str(file_path)
     raise HTTPException(status_code=500, detail="TTS generation failed: cache file missing")
 
 
 async def stream_speech(text: str, voice: str = "default") -> AsyncGenerator[bytes, None]:
     """
-    Stream speech audio chunks as they are generated.
-    Faster for long texts as audio starts playing immediately.
+    流式生成语音字节块。适合长文本，音频可以更快开始播放。
     """
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text is empty")
 
-    content_type, audio_bytes = await get_or_generate_audio(text, voice)
-    _ = content_type
+    _, audio_bytes = await get_or_generate_audio(text, voice)
     yield audio_bytes
 
 
@@ -218,16 +214,15 @@ async def get_stream_response(text: str, voice: str = "default") -> Response:
 
 
 def get_audio_file(filename: str):
-    file_path = os.path.join(AUDIO_CACHE_DIR, filename)
-    if not os.path.exists(file_path):
+    file_path = AUDIO_CACHE_DIR / filename
+    if not file_path.exists():
         raise HTTPException(status_code=404, detail="Audio file not found")
-    ext = os.path.splitext(file_path)[1].lower()
-    media_type = "audio/wav" if ext == ".wav" else "audio/mpeg"
-    return FileResponse(file_path, media_type=media_type)
+    media_type = "audio/wav" if file_path.suffix.lower() == ".wav" else "audio/mpeg"
+    return FileResponse(str(file_path), media_type=media_type)
 
 
 def clear_cache() -> dict:
-    """Clear all cached audio files. Returns count of deleted files."""
+    """清除所有缓存音频文件，返回删除数量"""
     count = 0
     for audio_path in _list_cached_audio_files():
         count += _remove_cache_entry(audio_path)
@@ -235,9 +230,9 @@ def clear_cache() -> dict:
 
 
 def get_cache_info() -> dict:
-    """Get cache statistics."""
+    """获取缓存统计信息"""
     files = _list_cached_audio_files()
-    total_size = sum(os.path.getsize(path) for path in files)
+    total_size = sum(p.stat().st_size for p in files)
     return {
         "file_count": len(files),
         "total_bytes": total_size,

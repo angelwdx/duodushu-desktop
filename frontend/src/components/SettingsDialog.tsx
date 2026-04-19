@@ -2,8 +2,11 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
+import { createLogger } from '../lib/logger';
 import { getApiUrl } from '../lib/api';
 import TTSConfigPanel from './TTSConfigPanel';
+
+const log = createLogger('SettingsDialog');
 // type definition to match partial update
 interface Supplier {
   type: string;
@@ -59,6 +62,8 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
       }
     };
     init();
+    // loadSuppliers/loadSupplierStatus 是组件内函数，不会在 isOpen 变化间改变行为
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   // Set default selected supplier and initial endpoint if not set
@@ -97,14 +102,14 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
               models[supplier.type] = modelData.models;
             }
           } catch (error) {
-            console.error(`Failed to load models for ${supplier.type}:`, error);
+            log.error(`Failed to load models for ${supplier.type}:`, error);
           }
         }
         setSupplierModels(models);
         return data.suppliers as Supplier[];
       }
     } catch (error) {
-      console.error('Failed to load suppliers:', error);
+      log.error('Failed to load suppliers:', error);
     }
     return [];
   };
@@ -135,7 +140,7 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
         setSupplierStates(states);
       }
     } catch (error) {
-      console.error('Failed to load supplier status:', error);
+      log.error('Failed to load supplier status:', error);
     }
   };
 
@@ -169,7 +174,7 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
 
         const result = await response.json();
         setTestResult(result);
-    } catch (error) {
+    } catch {
         setTestResult({ success: false, message: '连接测试失败，请检查网络' });
     } finally {
         setTesting(false);
@@ -201,20 +206,12 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
       });
 
       if (response.ok) {
-        const data = await response.json();
-        // setMessage({ type: 'success', text: data.message || '配置已保存' });
-        // Close on success or show success? Screenshot shows "Save Config" button.
-        // Maybe close after short delay or just show success message.
-        // Let's just close to be efficient or keep open.
-        // User might want to configure others.
-        onClose(); // As per screenshot, usually "Save" implies done. 
-        // Or we can just refresh status.
-        // await loadSupplierStatus();
+        onClose();
       } else {
-        const error = await response.json();
-        setMessage({ type: 'error', text: error.detail || '保存失败' });
+        const errBody = await response.json();
+        setMessage({ type: 'error', text: errBody.detail || '保存失败' });
       }
-    } catch (error) {
+    } catch {
       setMessage({ type: 'error', text: '保存失败，请检查网络连接' });
     } finally {
         setLoading(false);
@@ -236,16 +233,11 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
     }));
   };
 
-  // SSR Protection & Logging
+  // SSR Protection
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     setMounted(true);
-    console.log('[SettingsDialog] Component mounted');
   }, []);
-
-  useEffect(() => {
-    console.log('[SettingsDialog] isOpen changed:', isOpen);
-  }, [isOpen]);
 
   if (!mounted) return null;
   if (!isOpen) return null;
