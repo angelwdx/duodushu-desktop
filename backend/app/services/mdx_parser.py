@@ -60,11 +60,11 @@ class MDXParser:
             for word_bytes, content_bytes in self.mdx.items():
                 try:
                     word = word_bytes.decode(encoding)
-                except:
+                except UnicodeDecodeError:
                     # 容错处理
                     try:
                         word = word_bytes.decode('utf-8', errors='ignore')
-                    except:
+                    except UnicodeDecodeError:
                         word = word_bytes.decode('latin1', errors='ignore')
 
                 entry_count += 1
@@ -73,10 +73,10 @@ class MDXParser:
                 if not is_mdd and content_bytes is not None:
                     try:
                         decoded_content = content_bytes.decode(encoding)
-                    except:
+                    except UnicodeDecodeError:
                         try:
                             decoded_content = content_bytes.decode('utf-8', errors='ignore')
-                        except:
+                        except UnicodeDecodeError:
                             decoded_content = content_bytes.decode('latin1', errors='ignore')
 
                 yield {
@@ -113,7 +113,7 @@ class MDXParser:
                 content_bytes = results[0]
                 try:
                     return content_bytes.decode('utf-8')
-                except:
+                except UnicodeDecodeError:
                     return content_bytes.decode('latin1', errors='ignore')
         except Exception as e:
             logger.error(f"查询单词内容失败 {word}: {e}")

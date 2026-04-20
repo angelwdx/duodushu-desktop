@@ -47,7 +47,7 @@ class DictManager:
             try:
                 with open(self.config_file, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except:
+            except (json.JSONDecodeError, OSError):
                 pass
 
         default_config = {"dicts": {}, "priority": ["ECDICT"], "auto_index": True}

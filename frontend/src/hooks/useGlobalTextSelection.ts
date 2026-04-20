@@ -1,6 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createLogger } from "../lib/logger";
+
+const log = createLogger('GlobalSelection');
 
 interface SelectionState {
   text: string;
@@ -21,14 +24,14 @@ export function useGlobalTextSelection(
 
     // 监听 EPUB iframe 中的文本选择事件
     const handleEpubSelection = (e: any) => {
-      console.log('[GlobalSelection] Received epub-text-selected event:', e);
+      log.debug('Received epub-text-selected event:', e);
       if (!e.detail) {
-        console.log('[GlobalSelection] No detail in event');
+        log.debug('No detail in event');
         return;
       }
       
       const { text, x, y, source, rect, pageNum, cfi } = e.detail;
-      console.log('[GlobalSelection] Text selected in EPUB:', text, 'at', x, y, 'Page:', pageNum);
+      log.debug('Text selected in EPUB:', text, 'at', x, y, 'Page:', pageNum);
       
       setSelection({
         text,
@@ -275,14 +278,14 @@ export function useGlobalTextSelection(
     // 监听 EPUB iframe 中的文本选择事件
     // 监听 EPUB iframe 中的文本选择事件
     const handleEpubSelection = (e: any) => {
-      console.log('[GlobalSelection] Received epub-text-selected event:', e);
+      log.debug('Received epub-text-selected event:', e);
       if (!e.detail) {
-        console.log('[GlobalSelection] No detail in event');
+        log.debug('No detail in event');
         return;
       }
       
       const { text, x, y, source, rect, pageNum, cfi } = e.detail;
-      console.log('[GlobalSelection] Text selected in EPUB:', text, 'at', x, y, 'Page:', pageNum);
+      log.debug('Text selected in EPUB:', text, 'at', x, y, 'Page:', pageNum);
       
       setSelection({
         text,

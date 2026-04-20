@@ -20,13 +20,13 @@ if [ -n "$PIDS" ]; then
 fi
 
 # 3. 设置数据目录
-# 默认使用开发目录下的 data，如果带参数则使用正式版目录
-DATA_DIR="$BACKEND_DIR/data"
-if [[ "$1" == "--sync" ]]; then
-    DATA_DIR="$HOME/Library/Application Support/duodushu-desktop"
-    echo "🔗 已启用同步模式：连接正式版数据目录"
+# 默认使用与安装版一致的数据目录
+DATA_DIR="$HOME/Library/Application Support/duodushu-desktop"
+if [[ "$1" == "--isolated" ]]; then
+    DATA_DIR="$BACKEND_DIR/data"
+    echo "📂 已启用隔离模式：使用独立开发版数据目录 ($DATA_DIR)"
 else
-    echo "📂 使用独立开发版数据目录 ($DATA_DIR)"
+    echo "🔗 连接正式版数据目录 ($DATA_DIR)"
 fi
 
 echo "🚀 数据路径: $DATA_DIR"

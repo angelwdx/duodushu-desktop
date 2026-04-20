@@ -723,7 +723,7 @@ def format_vocab_response_with_db(vocab_row: tuple, db: Session) -> dict:
     if vocab_row[3]:
         try:
             definition_data = json.loads(vocab_row[3])
-        except:
+        except (json.JSONDecodeError, ValueError):
             pass
 
     book_title = None

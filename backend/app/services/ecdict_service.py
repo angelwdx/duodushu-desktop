@@ -1,5 +1,4 @@
 import sqlite3
-import os
 import logging
 from pathlib import Path
 from typing import Optional
@@ -34,7 +33,7 @@ def _get_connection() -> Optional[sqlite3.Connection]:
     获取线程安全的数据库连接。
     """
     db_path = get_db_path()
-    if not os.path.exists(db_path):
+    if not Path(db_path).exists():
         logger.error(f"ECDICT database not found at {db_path}")
         return None
 

@@ -868,7 +868,7 @@ interface ReaderProps {
         setPageTextForTTSPage(pageNumber);
         if (onContentChange) {
           try {
-            onContentChange(normalizeText(backendText));
+            onContentChange(normalizePdfPageText(backendText));
           } catch (err) {
             // 静默处理
           }
@@ -935,7 +935,7 @@ interface ReaderProps {
       setPageTextForTTSPage(capturedPageNumber);
       if (onContentChange) {
         try {
-          onContentChange(normalizeText(resolvedText));
+          onContentChange(normalizePdfPageText(resolvedText));
         } catch (err) {
           // 静默处理
         }
@@ -992,7 +992,7 @@ interface ReaderProps {
     setPageTextForTTSPage(textContent ? pageNumber : null);
     // 当后端 textContent 就绪时通知父组件，解决 PDF.js 渲染早于 API 返回的时序问题
     if (textContent && onContentChange) {
-      onContentChange(normalizeText(textContent));
+      onContentChange(normalizePdfPageText(textContent));
     }
   }, [pageNumber, textContent]);
 
@@ -1125,6 +1125,7 @@ interface ReaderProps {
   // 鼠标按下：记录起始位置，准备判断点击或拖动
   const handlePageMouseDown = (e: React.MouseEvent) => {
     e.stopPropagation(); // 阻止冒泡，隔离外层手势
+    // eslint-disable-next-line react-hooks/immutability
     mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
     setHoveredWord(null);
   };
@@ -1174,6 +1175,7 @@ interface ReaderProps {
     const dist = dx * dx + dy * dy;
     
     // 清除起始点
+    // eslint-disable-next-line react-hooks/immutability
     mouseDownPosRef.current = null;
 
     // 3. 如果移动距离超过 25px² (5px)，视为拖拽选择，不触发查词
@@ -1337,6 +1339,7 @@ interface ReaderProps {
   );
 
   const handleContainerMouseDown = (e: React.MouseEvent) => {
+      // eslint-disable-next-line react-hooks/immutability
       mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
   };
 

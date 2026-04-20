@@ -668,6 +668,16 @@ app.whenReady().then(async () => {
 
   // 监听前端传来的在新窗口打开请求
   ipcMain.on('open-new-window', (event, targetUrl) => {
+    // 安全校验：只允许应用内部路径，拒绝外部 URL 和路径遍历
+    if (
+      typeof targetUrl !== 'string' ||
+      targetUrl.includes('..') ||
+      /^https?:\/\//i.test(targetUrl) ||
+      /^file:\/\//i.test(targetUrl)
+    ) {
+      logErrorToFile(`open-new-window 拒绝不合法路径: ${targetUrl}`);
+      return;
+    }
     createSecondaryWindow(targetUrl);
   });
 

@@ -44,7 +44,7 @@ def calculate_priority_score(word: dict) -> float:
             last_queried_dt = datetime.fromisoformat(last_queried)
             days_since_query = (now - last_queried_dt).days
             recency_factor = max(0, 1 - days_since_query / 30.0)
-        except:
+        except (ValueError, TypeError):
             # 如果转换失败，不使用此字段
             last_queried_dt = None
             recency_factor = 0.5

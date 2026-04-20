@@ -684,7 +684,7 @@ export default function EPUBReader({
                             
                             // Iterate spine to find match
                             let foundHref = '';
-                            // @ts-ignore - spine is iterable/has each
+                            // spine is iterable with each()
                             book.spine.each((item: any) => {
                                 if (!foundHref) {
                                     // Check if item.href ends with targetPath or vice versa
@@ -786,7 +786,7 @@ export default function EPUBReader({
                         const targetHash = target.includes('#') ? target.split('#')[1] : '';
                         
                         let foundHref = '';
-                        // @ts-ignore
+                        // spine is iterable with each()
                         book.spine.each((item: any) => {
                             if (!foundHref) {
                                 if (item.href.endsWith(targetPath) || targetPath.endsWith(item.href)) {

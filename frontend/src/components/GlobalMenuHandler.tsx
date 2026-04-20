@@ -5,6 +5,12 @@ import { useRouter } from 'next/navigation';
 import { useSettings } from '../contexts/SettingsContext';
 import { useGlobalDialogs } from '../contexts/GlobalDialogsContext';
 import { getApiUrl } from '../lib/api';
+import { createLogger } from '../lib/logger';
+
+const log = createLogger('GlobalMenuHandler');
+
+// 允许打开的文件扩展名白名单
+const ALLOWED_EXTENSIONS = new Set(['epub', 'pdf']);
 
 // 定义 electronAPI 类型（含文件关联与自动更新）
 declare global {
@@ -31,10 +37,26 @@ declare global {
 }
 
 /**
+ * 验证文件路径安全性：只允许 epub/pdf，拒绝路径遍历
+ */
+function validateFilePath(filePath: string): boolean {
+  // 拒绝路径遍历
+  if (filePath.includes('..')) return false;
+  const ext = filePath.split('.').pop()?.toLowerCase() || '';
+  return ALLOWED_EXTENSIONS.has(ext);
+}
+
+/**
  * 通过本地文件路径打开书籍：
  * 读取文件内容 → 上传到后端 → 跳转阅读页
  */
 async function openLocalFile(filePath: string, router: ReturnType<typeof useRouter>) {
+  // 安全校验：只允许 epub/pdf，拒绝路径遍历
+  if (!validateFilePath(filePath)) {
+    log.warn('拒绝打开不合法的文件路径:', filePath);
+    return;
+  }
+
   try {
     // 用 fetch 读取本地文件内容（Electron 的 webSecurity:false 允许 file:// 协议）
     const fileUrl = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
@@ -62,10 +84,10 @@ async function openLocalFile(filePath: string, router: ReturnType<typeof useRout
     }
 
     const { book_id } = await uploadRes.json();
-    console.log('[GlobalMenuHandler] 文件已上传，book_id:', book_id);
+    log.info('文件已上传，book_id:', book_id);
     router.push(`/read?id=${book_id}`);
   } catch (err) {
-    console.error('[GlobalMenuHandler] 打开本地文件失败:', err);
+    log.error('打开本地文件失败:', err);
   }
 }
 
@@ -84,7 +106,7 @@ export default function GlobalMenuHandler() {
 
     window.electronAPI.getOpenFilePath().then((filePath) => {
       if (filePath) {
-        console.log('[GlobalMenuHandler] 启动时有待打开文件:', filePath);
+        log.info('启动时有待打开文件:', filePath);
         openLocalFile(filePath, router);
       }
     });
@@ -95,7 +117,7 @@ export default function GlobalMenuHandler() {
     if (typeof window === 'undefined' || !window.electronAPI?.onOpenFile) return;
 
     window.electronAPI.onOpenFile((filePath: string) => {
-      console.log('[GlobalMenuHandler] 收到 open-file 事件:', filePath);
+      log.info('收到 open-file 事件:', filePath);
       openLocalFile(filePath, router);
     });
 
@@ -109,7 +131,7 @@ export default function GlobalMenuHandler() {
     if (typeof window === 'undefined' || !window.electronAPI) return;
 
     window.electronAPI.onNavigate((path: string) => {
-      console.log('[GlobalMenuHandler] Navigate to:', path);
+      log.debug('Navigate to:', path);
       router.push(path);
     });
 
@@ -123,7 +145,7 @@ export default function GlobalMenuHandler() {
     if (typeof window === 'undefined' || !window.electronAPI) return;
 
     window.electronAPI.onMenuAction((action: string) => {
-      console.log('[GlobalMenuHandler] Received IPC menu action:', action);
+      log.debug('Received IPC menu action:', action);
 
       if (action === 'open-settings') {
         openSettings();

@@ -9,6 +9,9 @@ const CONTENT_TYPE_JSON =
 const CONTENT_TYPE_SSML =
   "Content-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n";
 
+import { createLogger } from './logger';
+const log = createLogger('BingSpeech');
+
 export interface VoiceConfig {
   locale: string;
   voice: string;
@@ -66,7 +69,7 @@ class BingSpeechService {
 
       this.socket = new WebSocket(url);
       this.socket.onmessage = this.onSocketMessage.bind(this);
-      this.socket.onclose = () => console.warn("Bing TTS WebSocket closed.");
+      this.socket.onclose = () => log.warn('Bing TTS WebSocket closed.');
 
       // Attach error handler immediately to suppress browser's default error logging
       let errorHandled = false;
@@ -81,17 +84,13 @@ class BingSpeechService {
         }
 
         this.socket.onerror = (error) => {
-          console.debug("Bing TTS WebSocket error (will fallback to backend):", error);
+        log.debug('Bing TTS WebSocket error (will fallback to backend):', error);
           this.socket?.close();
           reject(new Error(`WebSocket error: ${error}`));
         };
 
         this.socket.onopen = () => {
-          console.log(
-            reopened
-              ? "Bing TTS WebSocket reopened."
-              : "Bing TTS WebSocket opened."
-          );
+          log.debug(reopened ? 'Bing TTS WebSocket reopened.' : 'Bing TTS WebSocket opened.');
           this.setAudioOutputFormat();
           resolve();
         };
@@ -125,7 +124,7 @@ class BingSpeechService {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(message);
     } else {
-      console.error("Socket not open even after ensureSocketReady");
+      log.error('Socket not open even after ensureSocketReady');
     }
   }
 

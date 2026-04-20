@@ -35,6 +35,10 @@ if (typeof window !== 'undefined' && API_URL === "http://127.0.0.1:8000" && !(wi
 
 log.debug('[API] Initial API URL configured:', API_URL);
 
+// 默认超时：普通请求 15s，TTS/上传类请求单独处理
+const DEFAULT_TIMEOUT = 15_000;
+const TTS_TIMEOUT = 60_000;
+
 // 带超时的 fetch 函数
 async function fetchWithTimeout(url: string, timeout: number, options?: RequestInit): Promise<Response> {
   const controller = new AbortController();
@@ -85,7 +89,7 @@ export async function uploadBook(
 }
 
 export async function deleteBook(id: string): Promise<void> {
-  const res = await fetch(`${API_URL}/api/books/${id}`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/books/${id}`, DEFAULT_TIMEOUT, {
     method: "DELETE",
   });
   if (!res.ok) throw new Error("Failed to delete book");
@@ -94,7 +98,7 @@ export async function deleteBook(id: string): Promise<void> {
 
 export async function getBooks(): Promise<Book[]> {
   const url = `${API_URL}/api/books/?_t=${Date.now()}`;
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetchWithTimeout(url, DEFAULT_TIMEOUT, { cache: "no-store" });
   if (!res.ok) throw new Error("Failed to fetch books");
   return res.json();
 }
@@ -103,7 +107,7 @@ export async function updateBookType(
   bookId: string,
   bookType: "normal" | "example_library",
 ): Promise<{ status: string; book_id: string; book_type: string }> {
-  const res = await fetch(`${API_URL}/api/books/${bookId}/type`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/books/${bookId}/type`, DEFAULT_TIMEOUT, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ book_type: bookType }),
@@ -125,7 +129,7 @@ export async function lookupWord(word: string, source?: string) {
   }
   log.debug(`Looking up word: ${word}${source ? ` (source: ${source})` : ""}`);
 
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetchWithTimeout(url, DEFAULT_TIMEOUT, { cache: "no-store" });
   if (!res.ok) {
     if (res.status === 404) return null;
     throw new Error("Lookup failed");
@@ -143,7 +147,7 @@ export async function lookupWordMultipleSources(word: string, sources: string[])
 
   // Parallel queries for all sources
   const promises = sources.map((source) =>
-    fetch(`${API_URL}/api/dict/${word}?source=${encodeURIComponent(source)}`, {
+    fetchWithTimeout(`${API_URL}/api/dict/${word}?source=${encodeURIComponent(source)}`, DEFAULT_TIMEOUT, {
       cache: "no-store",
     })
       .then((res) => {
@@ -190,7 +194,7 @@ export async function lookupWordMultipleSources(word: string, sources: string[])
 export async function checkWordSources(
   word: string,
 ): Promise<SourceAvailability> {
-  const res = await fetch(`${API_URL}/api/dict/${word}/sources`, { cache: "no-store" });
+  const res = await fetchWithTimeout(`${API_URL}/api/dict/${word}/sources`, DEFAULT_TIMEOUT, { cache: "no-store" });
   if (!res.ok) {
     log.error("Failed to check sources");
     return {};
@@ -206,7 +210,7 @@ export async function addVocabulary(data: {
   translation?: string;
   page_number?: number;
 }) {
-  const response = await fetch(`${API_URL}/api/vocabulary/`, {
+  const response = await fetchWithTimeout(`${API_URL}/api/vocabulary/`, DEFAULT_TIMEOUT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -242,7 +246,7 @@ export async function getVocabulary(
   if (search) query.append("search", search);
   query.append("_t", Date.now().toString()); // Add cache-busting parameter
 
-  const res = await fetch(`${API_URL}/api/vocabulary/?${query.toString()}`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/vocabulary/?${query.toString()}`, DEFAULT_TIMEOUT, {
     cache: "no-store", // Ensure fresh data
   });
   if (!res.ok) throw new Error("Failed to fetch vocabulary");
@@ -250,13 +254,13 @@ export async function getVocabulary(
 }
 
 export async function exportVocabulary() {
-  const res = await fetch(`${API_URL}/api/vocabulary/export/csv`, { method: "GET" });
+  const res = await fetchWithTimeout(`${API_URL}/api/vocabulary/export/csv`, DEFAULT_TIMEOUT, { method: "GET" });
   if (!res.ok) throw new Error("Failed to export vocabulary");
   await _downloadBlob(res, "vocabulary.csv");
 }
 
 export async function exportVocabularyAnki() {
-  const res = await fetch(`${API_URL}/api/vocabulary/export/anki`, { method: "GET" });
+  const res = await fetchWithTimeout(`${API_URL}/api/vocabulary/export/anki`, DEFAULT_TIMEOUT, { method: "GET" });
   if (!res.ok) throw new Error("Failed to export Anki vocabulary");
   await _downloadBlob(res, "vocabulary_anki.txt");
 }
@@ -277,7 +281,7 @@ function _downloadBlob(res: Response, defaultFilename: string) {
 }
 
 export async function getVocabularyDetail(id: number) {
-  const res = await fetch(`${API_URL}/api/vocabulary/${id}?_t=${Date.now()}`);
+  const res = await fetchWithTimeout(`${API_URL}/api/vocabulary/${id}?_t=${Date.now()}`, DEFAULT_TIMEOUT);
   if (!res.ok) throw new Error("Failed to fetch vocabulary detail");
   return res.json();
 }
@@ -293,7 +297,7 @@ export async function updateVocabularyMastery(
     quality?: 0 | 3 | 5;
   },
 ) {
-  const res = await fetch(`${API_URL}/api/vocabulary/${vocabId}/mastery`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/vocabulary/${vocabId}/mastery`, DEFAULT_TIMEOUT, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -304,7 +308,7 @@ export async function updateVocabularyMastery(
 
 /** 获取当前到期需要复习的生词（SRS 调度）*/
 export async function getDueVocabulary(limit: number = 20) {
-  const res = await fetch(`${API_URL}/api/vocabulary/due?limit=${limit}`);
+  const res = await fetchWithTimeout(`${API_URL}/api/vocabulary/due?limit=${limit}`, DEFAULT_TIMEOUT);
   if (!res.ok) throw new Error("Failed to fetch due vocabulary");
   return res.json() as Promise<{
     items: Array<{
@@ -327,7 +331,7 @@ export async function getDueVocabulary(limit: number = 20) {
 }
 
 export async function deleteVocabulary(id: number) {
-  const res = await fetch(`${API_URL}/api/vocabulary/${id}`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/vocabulary/${id}`, DEFAULT_TIMEOUT, {
     method: "DELETE",
   });
   if (!res.ok) throw new Error("Failed to delete vocabulary");
@@ -338,7 +342,7 @@ export async function generateSpeech(text: string, voice: string = "default") {
   // Sanitize text for TTS
   const sanitizedText = text.replace(/\//g, ", ");
 
-  const res = await fetch(`${API_URL}/api/tts/`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/tts/`, TTS_TIMEOUT, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: sanitizedText, voice }),
@@ -360,7 +364,7 @@ export async function streamSpeech(
   // Sanitize text for TTS: replace slashes with commas to avoid reading "slash"
   const sanitizedText = text.replace(/\//g, ", ");
 
-  const res = await fetch(`${API_URL}/api/tts/stream`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/tts/stream`, TTS_TIMEOUT, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: sanitizedText, voice }),

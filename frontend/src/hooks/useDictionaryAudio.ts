@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useCallback } from "react";
+import { createLogger } from "../lib/logger";
+
+const log = createLogger('DictionaryAudio');
 
 interface UseDictionaryAudioProps {
   source: string;
@@ -29,15 +32,13 @@ export function useDictionaryAudio({
         "en-US-RogerNeural",
       ];
       const randomVoice = usVoices[Math.floor(Math.random() * usVoices.length)];
-      console.log(
-        `[Webster TTS] Using Edge TTS (${randomVoice}) for word: ${word}`,
-      );
+      log.debug(`[Webster TTS] Using Edge TTS (${randomVoice}) for word: ${word}`);
       const blobUrl = await streamSpeech(word, randomVoice);
       const audio = new Audio(blobUrl);
       audio.onended = () => URL.revokeObjectURL(blobUrl);
       await audio.play();
     } catch (err) {
-      console.error("Word TTS failed:", err);
+      log.error('Word TTS failed:', err);
     }
   }, []);
 
@@ -53,7 +54,7 @@ export function useDictionaryAudio({
       // 移除翻译和音频按钮
       clone.querySelectorAll("unxt, a.sound, a.audio_play_button, .audio-icon").forEach((el) => el.remove());
       text = (clone.innerText || clone.textContent || "").trim();
-      console.log("[playTTSFallback] Oxford unx text:", text);
+      log.debug('[playTTSFallback] Oxford unx text:', text);
     }
 
     // 方法1: 查找普通例句文本
@@ -135,15 +136,15 @@ export function useDictionaryAudio({
         volume: "+0%",
       };
 
-      console.log(`Using Edge TTS (${randomVoice}) for:`, text);
+      log.debug(`Using Edge TTS (${randomVoice}) for:`, text);
       const blobUrl = await bingSpeechService.playText(text, config);
       const audio = new Audio(blobUrl);
       audio.onended = () => URL.revokeObjectURL(blobUrl);
       await audio.play();
     } catch (err) {
-      console.debug("Frontend TTS failed, falling back to backend:", err);
+      log.debug('Frontend TTS failed, falling back to backend:', err);
       try {
-        console.log("Falling back to backend TTS API for text:", text);
+        log.debug('Falling back to backend TTS API for text:', text);
         const { streamSpeech } = await import("../lib/api");
         const voice = "en-US-MichelleNeural";
         const blobUrl = await streamSpeech(text, voice);
@@ -151,7 +152,7 @@ export function useDictionaryAudio({
         audio.onended = () => URL.revokeObjectURL(blobUrl);
         await audio.play();
       } catch (backendErr) {
-        console.error("Backend TTS also failed:", backendErr);
+        log.error('Backend TTS also failed:', backendErr);
       }
     }
   }, []);
@@ -171,16 +172,14 @@ export function useDictionaryAudio({
 
           // 检查是否是音频文件（.mp3）
           if (!href.toLowerCase().endsWith(".mp3")) {
-            console.log("Skipping non-audio sound:// link:", href);
+            log.debug('Skipping non-audio sound:// link:', href);
             return;
           }
 
           // 提取单词（从 data-word 属性）
           const wordToPlay = link.getAttribute("data-word");
           if (wordToPlay) {
-            console.log(
-              `[Webster TTS] Playing word from data-word: ${wordToPlay}`,
-            );
+            log.debug(`[Webster TTS] Playing word from data-word: ${wordToPlay}`);
             await playWordTTS(wordToPlay);
             return;
           }
@@ -192,17 +191,12 @@ export function useDictionaryAudio({
           );
           if (match) {
             const wordFromPath = match[1].replace(/\d+$/, ""); // 移除后缀数字
-            console.log(
-              `[Webster TTS] Playing word from path: ${wordFromPath}`,
-            );
+            log.debug(`[Webster TTS] Playing word from path: ${wordFromPath}`);
             await playWordTTS(wordFromPath);
             return;
           }
 
-          console.warn(
-            "[Webster TTS] Cannot extract word from sound:// link:",
-            href,
-          );
+          log.warn('[Webster TTS] Cannot extract word from sound:// link:', href);
           return;
         }
       }
@@ -318,20 +312,20 @@ export function useDictionaryAudio({
             "maldpe-jquery",
           );
           await loadScript("/dictionaries/webster/maldpe.js", "maldpe-main");
-          console.log("[Webster] Scripts loaded successfully");
+          log.debug('[Webster] Scripts loaded successfully');
         } else if (source === "牛津") {
           await loadScript(
             "/dictionaries/oxford/oaldpe-jquery.js",
             "oaldpe-jquery",
           );
           await loadScript("/dictionaries/oxford/oaldpe.js", "oaldpe-main");
-          console.log("[Oxford] Scripts loaded successfully");
+          log.debug('[Oxford] Scripts loaded successfully');
         } else if (source === "朗文当代" || source === "朗文") {
           await loadScript("/dictionaries/longman/lm6.js", "lm6-main");
-          console.log("[Longman] Scripts loaded successfully");
+          log.debug('[Longman] Scripts loaded successfully');
         }
       } catch (error) {
-        console.error(`Failed to load ${source} scripts:`, error);
+        log.error(`Failed to load ${source} scripts:`, error);
       }
     };
 

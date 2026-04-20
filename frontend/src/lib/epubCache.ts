@@ -5,6 +5,10 @@
  * 用于缓存已下载的 EPUB 文件，避免重复下载
  */
 
+import { createLogger } from './logger';
+
+const log = createLogger('EPUBCache');
+
 const DB_NAME = "epub-cache";
 const DB_VERSION = 2; // Increment version to add new store
 const STORE_NAME = "epubFiles";
@@ -76,22 +80,16 @@ export async function getCachedEpub(url: string): Promise<ArrayBuffer | null> {
       request.onsuccess = () => {
         const entry = request.result as CacheEntry | undefined;
         if (entry) {
-          console.log(
-            `[EPUBCache] Cache hit for ${url}, size: ${(
-              entry.size /
-              1024 /
-              1024
-            ).toFixed(2)}MB`
-          );
+          log.debug(`Cache hit for ${url}, size: ${(entry.size / 1024 / 1024).toFixed(2)}MB`);
           resolve(entry.data);
         } else {
-          console.log(`[EPUBCache] Cache miss for ${url}`);
+          log.debug(`Cache miss for ${url}`);
           resolve(null);
         }
       };
     });
   } catch (error) {
-    console.warn("[EPUBCache] Failed to get from cache:", error);
+    log.warn('Failed to get from cache:', error);
     return null;
   }
 }
@@ -119,18 +117,12 @@ export async function cacheEpub(url: string, data: ArrayBuffer): Promise<void> {
 
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
-        console.log(
-          `[EPUBCache] Cached ${url}, size: ${(
-            data.byteLength /
-            1024 /
-            1024
-          ).toFixed(2)}MB`
-        );
+        log.debug(`Cached ${url}, size: ${(data.byteLength / 1024 / 1024).toFixed(2)}MB`);
         resolve();
       };
     });
   } catch (error) {
-    console.warn("[EPUBCache] Failed to cache:", error);
+    log.warn('Failed to cache:', error);
   }
 }
 
@@ -147,12 +139,12 @@ export async function clearEpubCache(): Promise<void> {
 
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
-        console.log("[EPUBCache] Cache cleared");
+        log.debug('Cache cleared');
         resolve();
       };
     });
   } catch (error) {
-    console.warn("[EPUBCache] Failed to clear cache:", error);
+    log.warn('Failed to clear cache:', error);
   }
 }
 
@@ -178,7 +170,7 @@ export async function getEpubCacheStats(): Promise<{
       };
     });
   } catch (error) {
-    console.warn("[EPUBCache] Failed to get stats:", error);
+    log.warn('Failed to get stats:', error);
     return { count: 0, totalSize: 0 };
   }
 }
@@ -230,7 +222,7 @@ export async function saveEpubState(
       };
     });
   } catch (error) {
-    console.warn("[EPUBCache] Failed to save state:", error);
+    log.warn('Failed to save state:', error);
   }
 }
 
@@ -253,18 +245,16 @@ export async function getEpubState(
       request.onsuccess = () => {
         const entry = request.result as ProgressEntry | undefined;
         if (entry) {
-          console.log(
-            `[EPUBCache] Progress found for ${bookId}: ${entry.percentage}%`
-          );
+          log.debug(`Progress found for ${bookId}: ${entry.percentage}%`);
           resolve(entry);
         } else {
-          console.log(`[EPUBCache] No progress found for ${bookId}`);
+          log.debug(`No progress found for ${bookId}`);
           resolve(null);
         }
       };
     });
   } catch (error) {
-    console.warn("[EPUBCache] Failed to get progress:", error);
+    log.warn('Failed to get progress:', error);
     return null;
   }
 }
@@ -283,11 +273,11 @@ export async function deleteEpubProgress(bookId: string): Promise<void> {
 
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
-        console.log(`[EPUBCache] Deleted progress for ${bookId}`);
+        log.debug(`Deleted progress for ${bookId}`);
         resolve();
       };
     });
   } catch (error) {
-    console.warn("[EPUBCache] Failed to delete progress:", error);
+    log.warn('Failed to delete progress:', error);
   }
 }
