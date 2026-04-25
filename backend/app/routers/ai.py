@@ -2,8 +2,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List, Literal
-from ..services import gemini_service
-from ..services import deepseek_service
+from ..services.deepseek_service import SYSTEM_PROMPT_TEACHER
+from ..services import supplier_factory
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from ..models.database import get_db
@@ -131,9 +131,6 @@ def classify_user_intent(
 # ========== 策略：单页英语学习（现有逻辑） ==========
 async def language_learning_chat(request: ChatRequest):
     """单页英语学习模式（复用现有逻辑）"""
-    from ..services import supplier_factory
-    from ..services.deepseek_service import SYSTEM_PROMPT_TEACHER
-
     # 检查是否已配置 AI 供应商
     factory = supplier_factory.get_supplier_factory()
     active_supplier = factory.get_active_supplier_config()
@@ -434,34 +431,24 @@ def knowledge_based_chat_fts5(request: ChatRequest, db: Session) -> dict:
 5. 保持回答简洁、准确（100-150 字）
 """
 
-        # 使用 DeepSeek 生成回答（避免 Gemini 配额限制）
-        # 使用 DeepSeek 生成回答
-        client = deepseek_service.get_client()
-        if not client:
-            logger.warning("DeepSeek service unavailable (no API key)")
+        # 使用当前活跃供应商生成回答
+        active_factory = supplier_factory.get_supplier_factory()
+        active_config = active_factory.get_active_supplier_config()
+        if not active_config or not active_config.enabled:
             return {
-                "reply": "抱歉，由于未配置 AI 服务密钥，暂时无法进行智能问答。请在设置中配置 API Key。",
+                "reply": "抱歉，由于未配置 AI 服务，暂时无法进行智能问答。请在设置中配置供应商。",
                 "role": "assistant",
                 "sources": [],
                 "intent": "error",
             }
 
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "你是一位英语学习助手和阅读助手。"},
-                {"role": "user", "content": prompt},
-            ],
+        reply = supplier_factory.chat_with_active_supplier(
+            message=prompt,
+            system_prompt="你是一位英语学习助手和阅读助手。",
             temperature=0.7,
             max_tokens=500,
         )
-
-        # 安全处理可能的空响应
-        reply = response.choices[0].message.content
-        if reply:
-            reply = reply.strip()
-        else:
-            reply = ""
+        reply = (reply or "").strip()
 
         # 提取引用
         citations = extract_citations(reply, len(context_chunks))

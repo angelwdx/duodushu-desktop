@@ -13,22 +13,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 配置 API Key
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
-
 # DeepSeek 客户端（单例）
 _deepseek_client = None
+_deepseek_api_key_used = None  # 记录上次创建客户端时使用的 key，用于失效检测
 
 
 def get_client():
-    """获取 DeepSeek 客户端（单例模式）"""
-    global _deepseek_client
-    if not DEEPSEEK_API_KEY:
+    """获取 DeepSeek 客户端（单例模式，key 变更时自动重建）"""
+    global _deepseek_client, _deepseek_api_key_used
+
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
         logging.warning("DeepSeek: 未配置 API Key")
         return None
 
-    if _deepseek_client is None:
-        _deepseek_client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+    # API key 变更时重建客户端
+    if _deepseek_client is None or api_key != _deepseek_api_key_used:
+        _deepseek_client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+        _deepseek_api_key_used = api_key
 
     return _deepseek_client
 

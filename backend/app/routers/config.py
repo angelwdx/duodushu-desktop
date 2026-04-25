@@ -50,6 +50,7 @@ class SupplierConfigRequest(BaseModel):
     model: str = Field(default="", description="选择的模型ID")
     custom_model: str = Field(default="", description="自定义模型名称")
     api_endpoint: str = Field(default="", description="API端点（仅自定义供应商需要）")
+    activate: bool = Field(default=False, description="保存后是否立即激活为当前活跃供应商")
 
 
 class TestConnectionRequest(BaseModel):
@@ -381,13 +382,14 @@ def save_supplier_config(request: SupplierConfigRequest):
 
     multi_config.add_or_update_supplier(supplier_config)
 
-    # 如果这是第一个配置的供应商，自动设为活跃
-    if not multi_config.active_supplier:
+    # 如果这是第一个配置的供应商，或者调用方明确要求激活，则设为活跃
+    should_activate = request.activate or not multi_config.active_supplier
+    if should_activate:
         multi_config.set_active_supplier(supplier_type)
 
     save_multi_supplier_config(multi_config)
 
-    logger.info(f"供应商配置已保存: {request.supplier_type}")
+    logger.info(f"供应商配置已保存: {request.supplier_type}，激活={should_activate}")
 
     # 刷新工厂单例配置，使配置立即生效
     from ..services import supplier_factory
@@ -399,6 +401,7 @@ def save_supplier_config(request: SupplierConfigRequest):
         "message": f"{preset.get('name', request.supplier_type)} 配置已保存",
         "supplier_type": request.supplier_type,
         "configured": True,
+        "activated": should_activate,
     }
 
 

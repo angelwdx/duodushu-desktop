@@ -376,6 +376,7 @@ def translate_with_active_supplier(text: str) -> Optional[str]:
             response = client.messages.create(
                 model=model,
                 max_tokens=1000,
+                system="You are a professional translator.",
                 messages=[{"role": "user", "content": prompt}],
             )
             return response.content[0].text.strip()
@@ -460,12 +461,19 @@ def chat_with_active_supplier(
             return response.choices[0].message.content
 
         elif supplier_type == SupplierType.CLAUDE:
-            # Anthropic接口
-            response = client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                messages=messages,
+            # Anthropic 接口：system prompt 必须单独传递，不能放在 messages 里
+            system_message = next(
+                (m["content"] for m in messages if m["role"] == "system"), None
             )
+            non_system_messages = [m for m in messages if m["role"] != "system"]
+            kwargs: Dict[str, Any] = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "messages": non_system_messages,
+            }
+            if system_message:
+                kwargs["system"] = system_message
+            response = client.messages.create(**kwargs)
             return response.content[0].text
 
         elif supplier_type == SupplierType.GEMINI:

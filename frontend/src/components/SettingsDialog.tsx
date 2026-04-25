@@ -54,37 +54,26 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Load data when dialog opens
+  // Load data when dialog opens, and reset selection state on each open
   useEffect(() => {
+    if (!isOpen) {
+      // 关闭时重置选中状态，以便下次打开时重新读取活跃供应商
+      setSelectedSupplierType('');
+      return;
+    }
     const init = async () => {
-      if (isOpen) {
-        const allSuppliers = await loadSuppliers();
-        await loadSupplierStatus(allSuppliers);
+      const allSuppliers = await loadSuppliers();
+      const activeType = await loadSupplierStatus(allSuppliers);
+      // 优先显示活跃供应商（避免因 loadSuppliers 先行而默认选 suppliers[0]）
+      if (activeType) {
+        setSelectedSupplierType(activeType);
+      } else if (allSuppliers.length > 0) {
+        setSelectedSupplierType(allSuppliers[0].type);
       }
     };
     init();
-    // loadSuppliers/loadSupplierStatus 是组件内函数，不会在 isOpen 变化间改变行为
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
-
-  // Set default selected supplier and initial endpoint if not set
-  useEffect(() => {
-    if (!selectedSupplierType && suppliers.length > 0) {
-      const active = suppliers.find(s => s.is_active) || suppliers[0];
-      setSelectedSupplierType(active.type);
-      
-      // Auto-fill initial endpoint
-      if (active.default_api_endpoint) {
-        setSupplierStates(prev => ({
-          ...prev,
-          [active.type]: {
-            ...prev[active.type],
-            apiEndpoint: prev[active.type]?.apiEndpoint || active.default_api_endpoint || ""
-          }
-        }));
-      }
-    }
-  }, [suppliers, selectedSupplierType]);
 
   const loadSuppliers = async () => {
     try {
@@ -115,7 +104,7 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
     return [];
   };
 
-  const loadSupplierStatus = async (allSuppliers?: Supplier[]) => {
+  const loadSupplierStatus = async (allSuppliers?: Supplier[]): Promise<string> => {
     try {
       const response = await fetch(`${getApiUrl()}/api/config/suppliers-status`);
       if (response.ok) {
@@ -139,10 +128,13 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
           };
         }
         setSupplierStates(states);
+        // 返回活跃供应商类型，供调用方设置默认选中
+        return data.active_supplier || '';
       }
     } catch (error) {
       log.error('Failed to load supplier status:', error);
     }
+    return '';
   };
 
   const handleTestConnection = async () => {
@@ -203,10 +195,13 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
           model: state.model,
           custom_model: state.customModel,
           api_endpoint: state.apiEndpoint,
+          activate: true,
         }),
       });
 
       if (response.ok) {
+        // 通知首页刷新活跃模型徽标
+        window.dispatchEvent(new Event('settings-saved'));
         onClose();
       } else {
         const errBody = await response.json();

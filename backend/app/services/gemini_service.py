@@ -28,27 +28,29 @@ GENERATION_CONFIG = {
 }
 
 _client = None
+_client_api_key_used = None  # 记录上次创建客户端时使用的 key，用于失效检测
 
 
 def _get_client():
-    """获取 Gemini 客户端（懒加载单例）"""
-    global _client
-    if _client is not None:
-        return _client
+    """获取 Gemini 客户端（懒加载，key 变更时自动重建）"""
+    global _client, _client_api_key_used
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         logger.warning("GEMINI_API_KEY 未设置，Gemini 功能将不可用")
         return None
 
-    try:
-        from google import genai
-        _client = genai.Client(api_key=api_key)
-        logger.info("Gemini API 客户端已创建")
-        return _client
-    except Exception as e:
-        logger.error(f"创建 Gemini 客户端失败: {e}")
-        return None
+    if _client is None or api_key != _client_api_key_used:
+        try:
+            from google import genai
+            _client = genai.Client(api_key=api_key)
+            _client_api_key_used = api_key
+            logger.info("Gemini API 客户端已创建")
+        except Exception as e:
+            logger.error(f"创建 Gemini 客户端失败: {e}")
+            return None
+
+    return _client
 
 
 def get_client_with_key(api_key: str):

@@ -22,6 +22,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getBooks, deleteBook, updateBookType, Book, getApiUrl, loadBookOrder, saveBookOrder } from '../lib/api';
+import { createLogger } from '../lib/logger';
 import MenuHandler from '../components/MenuHandler';
 import SearchDialog from '../components/SearchDialog';
 import Link from 'next/link';
@@ -204,6 +205,8 @@ function BookCardContent({
   );
 }
 
+const log = createLogger('Home');
+
 export default function Home() {
   const [books, setBooks] = useState<Book[]>([]);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -218,6 +221,25 @@ export default function Home() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 当前活跃模型信息 { name: "DeepSeek", model: "deepseek-chat" }
+  const [activeModelInfo, setActiveModelInfo] = useState<{ name: string; model: string } | null>(null);
+
+  const fetchActiveModelInfo = useCallback(async () => {
+    try {
+      const res = await fetch(`${getApiUrl()}/api/config/suppliers-status`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.active_supplier && data.suppliers) {
+        const active = data.suppliers.find((s: { type: string; name: string; model?: string }) => s.type === data.active_supplier);
+        if (active) {
+          setActiveModelInfo({ name: active.name, model: active.model || '' });
+        }
+      }
+    } catch (e) {
+      log.error('Failed to fetch active model info:', e);
+    }
+  }, []);
 
   // Cmd+F / Ctrl+F 打开全局搜索
   useEffect(() => {
@@ -266,7 +288,7 @@ export default function Home() {
         success = true;
       } catch (err) {
         attempt++;
-        console.error(`[Bookshelf] Load failed (attempt ${attempt}/${maxRetries}):`, err);
+        log.error(`[Bookshelf] Load failed (attempt ${attempt}/${maxRetries}):`, err);
         
         if (attempt >= maxRetries) {
           if (isPolling) {
@@ -342,18 +364,24 @@ export default function Home() {
 
   useEffect(() => {
     fetchBooks();
+    fetchActiveModelInfo();
     
     // Listen for global book uploaded event
     const handleBookUploaded = () => {
-        console.log('[Home] Received book-uploaded event, refreshing list...');
+        log.debug('Received book-uploaded event, refreshing list...');
         fetchBooks();
     };
     window.addEventListener('book-uploaded', handleBookUploaded);
     
+    // 监听设置关闭事件，刷新活跃模型信息
+    const handleSettingsSaved = () => fetchActiveModelInfo();
+    window.addEventListener('settings-saved', handleSettingsSaved);
+
     return () => {
         window.removeEventListener('book-uploaded', handleBookUploaded);
+        window.removeEventListener('settings-saved', handleSettingsSaved);
     };
-  }, [fetchBooks]);
+  }, [fetchBooks, fetchActiveModelInfo]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -476,6 +504,20 @@ export default function Home() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37a1.724 1.724 0 002.572-1.065z" />
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
+            </button>
+            {/* 当前活跃模型徽标，点击可快速打开设置 */}
+            <button
+              onClick={openSettings}
+              title="点击切换 AI 模型"
+              aria-label={activeModelInfo ? `当前模型：${activeModelInfo.name}` : '未配置 AI 模型'}
+              className="hidden sm:flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-gray-200 bg-gray-50 hover:bg-gray-100 hover:border-gray-300 transition-colors shrink-0 max-w-[180px]"
+            >
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeModelInfo ? 'bg-green-400' : 'bg-gray-300'}`} />
+              <span className="text-xs text-gray-600 truncate leading-none">
+                {activeModelInfo
+                  ? `${activeModelInfo.name}${activeModelInfo.model ? ' · ' + activeModelInfo.model : ''}`
+                  : '未配置'}
+              </span>
             </button>
           </div>
         </header>
