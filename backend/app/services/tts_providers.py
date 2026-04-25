@@ -10,6 +10,7 @@ TTS 多供应商 Provider 抽象层
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import AsyncGenerator, Tuple
+import re
 import httpx
 import edge_tts
 import logging
@@ -205,6 +206,68 @@ class Qwen3TTSProvider(OpenAIApiProvider):
             speech_path="/audio/speech",
             timeout=180.0,
         )
+
+    @staticmethod
+    def _numbers_to_english(text: str) -> str:
+        """将英文文本中的阿拉伯数字转为英文单词，防止 Qwen3 TTS 用中文读数字。
+        
+        处理优先级（从高到低）：
+        1. 序数词：1st/2nd/3rd/4th → first/second/third/fourth
+        2. 年份（1000-2099）：1984 → nineteen eighty-four（口语年份读法）
+        3. 带千分符的整数：1,000,000 → one million
+        4. 小数：3.14 → three point one four
+        5. 普通整数
+        """
+        try:
+            from num2words import num2words
+        except ImportError:
+            return text
+
+        # 序数词（1st / 2nd / 3rd / 4th ...）
+        ordinal_map = {"st": "first", "nd": "second", "rd": "third", "th": None}
+        def _ordinal(m: re.Match) -> str:
+            n, suffix = int(m.group(1)), m.group(2).lower()
+            if suffix == "th" or ordinal_map.get(suffix) is None:
+                return num2words(n, ordinal=True, lang="en")
+            return ordinal_map[suffix] if n == 1 and suffix == "st" else \
+                   ordinal_map[suffix] if n == 2 and suffix == "nd" else \
+                   ordinal_map[suffix] if n == 3 and suffix == "rd" else \
+                   num2words(n, ordinal=True, lang="en")
+        text = re.sub(r'\b(\d+)(st|nd|rd|th)\b', _ordinal, text, flags=re.IGNORECASE)
+
+        # 年份（口语读法：1984 → "nineteen eighty-four"）
+        def _year(m: re.Match) -> str:
+            n = int(m.group(0))
+            try:
+                return num2words(n, to="year", lang="en")
+            except Exception:
+                return num2words(n, lang="en")
+        text = re.sub(r'\b(1\d{3}|20\d{2})\b', _year, text)
+
+        # 带千分符的整数（如 1,000,000）
+        def _comma_num(m: re.Match) -> str:
+            n = int(m.group(0).replace(",", ""))
+            return num2words(n, lang="en")
+        text = re.sub(r'\b\d{1,3}(?:,\d{3})+\b', _comma_num, text)
+
+        # 小数
+        def _decimal(m: re.Match) -> str:
+            int_part = num2words(int(m.group(1)), lang="en")
+            frac_part = " ".join(num2words(int(d), lang="en") for d in m.group(2))
+            return f"{int_part} point {frac_part}"
+        text = re.sub(r'\b(\d+)\.(\d+)\b', _decimal, text)
+
+        # 普通整数
+        def _integer(m: re.Match) -> str:
+            return num2words(int(m.group(0)), lang="en")
+        text = re.sub(r'\b\d+\b', _integer, text)
+
+        return text
+
+    async def stream_with_content_type(
+        self, text: str, voice: str = ""
+    ) -> Tuple[str, AsyncGenerator[bytes, None]]:
+        return await super().stream_with_content_type(self._numbers_to_english(text), voice)
 
 
 # ─── 工厂函数 ──────────────────────────────────────────────────────────────

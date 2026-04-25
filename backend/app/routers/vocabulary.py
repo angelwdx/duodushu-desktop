@@ -420,7 +420,8 @@ def get_vocabulary_detail(vocab_id: int, db: Session = Depends(get_db)):
                 SELECT wc.id, wc.word, wc.book_id, wc.page_number, wc.context_sentence,
                        b.title as book_title, b.book_type as book_type, wc.is_primary,
                        {normalized_source_expr} as source_type,
-                       b.author as book_author
+                       b.author as book_author,
+                       wc.sentence_translation
                 FROM word_contexts wc
                 JOIN books b ON wc.book_id = b.id
                 WHERE lower(wc.word) = lower(:word)
@@ -458,17 +459,21 @@ def get_vocabulary_detail(vocab_id: int, db: Session = Depends(get_db)):
         primary_context_data = None
         if primary_ctx:
             primary_context_data = {
+                "context_id": primary_ctx[0],
                 "book_id": primary_ctx[2],
                 "book_title": primary_ctx[5],
                 "page_number": primary_ctx[3],
                 "context_sentence": primary_ctx[4],
+                "sentence_translation": primary_ctx[10],
             }
-        elif vocab_row[6]:  # v.context fallback
+        elif vocab_row[6]:  # v.context fallback（无 word_contexts 记录，不可持久化翻译）
             primary_context_data = {
+                "context_id": None,
                 "book_id": vocab_row[5],
                 "book_title": vocab_row[15],
                 "page_number": 0,
                 "context_sentence": vocab_row[6],
+                "sentence_translation": None,
             }
 
         return VocabularyResponse(
@@ -480,11 +485,13 @@ def get_vocabulary_detail(vocab_id: int, db: Session = Depends(get_db)):
             primary_context=primary_context_data,
             example_contexts=[
                 {
+                    "id": ctx[0],
                     "book_id": ctx[2],
                     "book_title": ctx[5],
                     "book_type": ctx[6],
                     "page_number": ctx[3],
                     "context_sentence": ctx[4],
+                    "sentence_translation": ctx[10],
                     "source_type": ctx[8],
                 }
                 for ctx in sorted_examples
@@ -1432,7 +1439,45 @@ def add_word_context(vocab_id: int, data: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{vocab_id}/extraction_status")
+@router.patch("/contexts/{context_id}/translation")
+def update_context_translation(context_id: int, data: dict, db: Session = Depends(get_db)):
+    """
+    持久化 AI 翻译结果到 word_contexts.sentence_translation
+
+    Args:
+        context_id: word_contexts 表的主键 ID
+        data: {"translation": "翻译内容"}
+
+    Returns:
+        {"status": "ok", "context_id": int}
+    """
+    translation = (data.get("translation") or "").strip()
+    if not translation:
+        raise HTTPException(status_code=400, detail="translation 不能为空")
+    if len(translation) > 2000:
+        raise HTTPException(status_code=400, detail="translation 超出最大长度限制")
+
+    try:
+        result = db.execute(
+            text("UPDATE word_contexts SET sentence_translation = :t WHERE id = :id"),
+            {"t": translation, "id": context_id},
+        )
+        if result.rowcount == 0:
+            db.rollback()
+            raise HTTPException(status_code=404, detail=f"word_context {context_id} 不存在")
+        db.commit()
+        logger.info(f"已持久化例句翻译: context_id={context_id}")
+        return {"status": "ok", "context_id": context_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"保存例句翻译失败: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 def check_extraction_status(vocab_id: int, db: Session = Depends(get_db)):
     """
     检查单词的例句提取状态

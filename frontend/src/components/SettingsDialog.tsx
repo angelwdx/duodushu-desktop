@@ -13,11 +13,12 @@ interface Supplier {
   name: string;
   description: string;
   configured: boolean;
-  is_active?: boolean; // Make optional if backend doesn't always send
+  is_active?: boolean;
   model?: string;
   custom_model?: string;
   api_endpoint?: string;
   requires_endpoint: boolean;
+  requires_api_key?: boolean;
   api_key_url?: string;
   default_api_endpoint?: string;
 }
@@ -150,8 +151,8 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
     const state = supplierStates[selectedSupplierType];
     const supplier = suppliers.find(s => s.type === selectedSupplierType);
     
-    // 未配置且没有输入 Key 时才阻止
-    if (!state.apiKey && !supplier?.configured) {
+    // 本地模型不需要 API Key，跳过检查
+    if (!state.apiKey && !supplier?.configured && supplier?.requires_api_key !== false) {
        setTestResult({ success: false, message: '请先输入 API Key' });
        return;
     }
@@ -333,7 +334,8 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
              />
            </div>
 
-           {/* API Key */}
+           {/* API Key - 本地模型不需要 */}
+           {currentSupplier?.requires_api_key !== false && (
            <div className="space-y-1">
              <label className="block text-sm font-bold text-gray-400 flex items-center gap-2">
                🔑 API密钥
@@ -357,6 +359,7 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
                )}
              </div>
            </div>
+           )}
 
              <div className="space-y-2">
                <label className="block text-sm font-bold text-gray-400 flex items-center gap-2">

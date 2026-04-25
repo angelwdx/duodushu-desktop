@@ -171,7 +171,36 @@ class SupplierFactory:
         logger.info(f"配置已保存到 {config_file}")
 
 
-# ========== 单例工厂实例 ==========
+def _call_local_api(endpoint: str, model: str, system_prompt: str, message: str) -> Optional[str]:
+    """调用本地 LLM 服务（LM Studio 格式）"""
+    import httpx
+
+    url = f"{endpoint.rstrip('/')}/api/v1/chat"
+    payload = {
+        "model": model,
+        "system_prompt": system_prompt,
+        "input": message,
+    }
+    try:
+        response = httpx.post(url, json=payload, timeout=60.0)
+        response.raise_for_status()
+        data = response.json()
+        output_list = data.get("output", [])
+        if output_list:
+            # 优先取 type=="message" 的条目（推理模型会额外返回 type=="reasoning"）
+            msg = next((o for o in output_list if o.get("type") == "message"), output_list[-1])
+            return msg.get("content", "").strip()
+        logger.warning(f"本地模型返回空 output: {data}")
+        return None
+    except httpx.ConnectError:
+        logger.error(f"无法连接到本地服务 {endpoint}")
+        return None
+    except Exception as e:
+        logger.error(f"本地模型调用失败: {e}")
+        return None
+
+
+
 
 _factory_instance: Optional[SupplierFactory] = None
 
@@ -292,13 +321,26 @@ def translate_with_active_supplier(text: str) -> Optional[str]:
     if not text or not text.strip():
         return None
 
+    factory = get_supplier_factory()
+    supplier_type = factory.get_active_supplier_type()
+    config = factory.get_active_supplier_config()
+
+    # 本地模型直接调用，不走 SDK client
+    if supplier_type == SupplierType.LOCAL and config:
+        endpoint = config.api_endpoint or "http://localhost:1234"
+        model = config.custom_model or config.model
+        if not model:
+            logger.error("本地模型未配置模型名称")
+            return None
+        prompt = f"Translate the following English text to Chinese (Simplified). Only provide the translation, no explanations:\n\n{text}"
+        return _call_local_api(endpoint, model, "You are a professional translator.", prompt)
+
     client = get_active_client()
     if not client:
         logger.error("无法获取客户端进行翻译")
         return None
 
     model = get_active_model()
-    supplier_type = get_supplier_factory().get_active_supplier_type()
 
     prompt = f"Translate the following English text to Chinese (Simplified). Only provide the translation, no explanations:\n\n{text}"
 
@@ -366,13 +408,33 @@ def chat_with_active_supplier(
     Returns:
         AI回复文本或 None
     """
+    factory = get_supplier_factory()
+    supplier_type = factory.get_active_supplier_type()
+    config = factory.get_active_supplier_config()
+
+    # 本地模型直接调用，不走 SDK client
+    if supplier_type == SupplierType.LOCAL and config:
+        endpoint = config.api_endpoint or "http://localhost:1234"
+        model = config.custom_model or config.model
+        if not model:
+            logger.error("本地模型未配置模型名称")
+            return None
+        # 将历史消息拼接到 input（本地 API 不支持多轮格式）
+        input_parts = []
+        if history:
+            for msg in history:
+                role_label = "用户" if msg.get("role") == "user" else "AI"
+                input_parts.append(f"{role_label}: {msg.get('content', '')}")
+        input_parts.append(f"用户: {message}")
+        full_input = "\n".join(input_parts)
+        return _call_local_api(endpoint, model, system_prompt or "", full_input)
+
     client = get_active_client()
     if not client:
         logger.error("无法获取客户端")
         return None
 
     model = get_active_model()
-    supplier_type = get_supplier_factory().get_active_supplier_type()
 
     try:
         # 构建消息列表

@@ -6,6 +6,7 @@ import { createLogger } from "../lib/logger";
 import {
   updateVocabularyMastery,
   translateText,
+  saveContextTranslation,
   lookupWord,
   checkExtractionStatus,
   extractExamplesManual,
@@ -24,17 +25,21 @@ interface VocabularyDetail {
   definition?: any;
   translation?: string;
   primary_context?: {
+    context_id?: number | null;
     book_id?: string;
     book_title?: string;
     page_number?: number;
     context_sentence?: string;
+    sentence_translation?: string | null;
   };
   example_contexts: Array<{
+    id: number;
     book_id: string;
     book_title?: string;
     book_type?: string;
     page_number: number;
     context_sentence: string;
+    sentence_translation?: string | null;
     source_type?: 'user_collected' | 'example_library';
   }>;
   review_count: number;
@@ -193,7 +198,7 @@ export default function VocabDetailContent({
     }
   }, [vocab]);
 
-  // 加载翻译缓存
+  // 加载翻译缓存（localStorage 作为 session 缓存）
   useEffect(() => {
     try {
       const cached = localStorage.getItem(TRANSLATION_CACHE_KEY);
@@ -222,9 +227,10 @@ export default function VocabDetailContent({
     }
   }, []);
 
-  // 自动翻译
+  // 自动翻译，接收完整 context 以便持久化
   const autoTranslate = useCallback(
-    async (sentence: string) => {
+    async (ctx: { id: number | null | undefined; context_sentence: string }) => {
+      const { id: contextId, context_sentence: sentence } = ctx;
       if (!sentence) return;
 
       setTranslatingSet((prev) => {
@@ -248,6 +254,13 @@ export default function VocabDetailContent({
             }
             return updated;
           });
+
+          // 持久化到数据库（仅有 contextId 时）
+          if (contextId != null) {
+            saveContextTranslation(contextId, trans).catch((e) => {
+              log.error(`持久化翻译失败 context_id=${contextId}:`, e);
+            });
+          }
         }
       } catch (e) {
         const errorMessage = e instanceof Error ? e.message : String(e);
@@ -271,6 +284,28 @@ export default function VocabDetailContent({
     [],
   );
 
+  const handleRetranslate = useCallback(
+    (ctx: { id: number | null | undefined; context_sentence: string }) => {
+      const sentence = ctx.context_sentence;
+      // 清除已有翻译和失败记录，让 autoTranslate 重新执行
+      setTranslationMap((prev) => {
+        const next = { ...prev };
+        delete next[sentence];
+        try {
+          localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify(next));
+        } catch (e) { /* ignore */ }
+        return next;
+      });
+      setFailedSet((prev) => {
+        const next = new Set(prev);
+        next.delete(sentence);
+        return next;
+      });
+      autoTranslate(ctx);
+    },
+    [autoTranslate],
+  );
+
   const [isTranslationConfigured, setIsTranslationConfigured] = useState<boolean>(false);
 
   // 检查翻译服务配置
@@ -282,26 +317,32 @@ export default function VocabDetailContent({
     checkConfig();
   }, []);
 
-  // 自动翻译所有句子
+  // 自动翻译所有例句
   useEffect(() => {
     // 只有在明确检测到已配置的情况下才进行自动翻译
     if (!vocab || loading || !isTranslationConfigured) return;
 
-    const sentences: string[] = [];
+    // 收集所有待翻译的 context 对象（含 id 用于持久化）
+    const contexts: Array<{ id: number | null | undefined; context_sentence: string }> = [];
     if (vocab.primary_context?.context_sentence) {
-      sentences.push(vocab.primary_context.context_sentence);
+      contexts.push({
+        id: vocab.primary_context.context_id,
+        context_sentence: vocab.primary_context.context_sentence,
+      });
     }
     vocab.example_contexts.forEach((ctx) => {
       if (ctx.context_sentence) {
-        sentences.push(ctx.context_sentence);
+        contexts.push({ id: ctx.id, context_sentence: ctx.context_sentence });
       }
     });
 
-    const nextToTranslate = sentences.find(s => !translationMap[s] && !translatingSet.has(s) && !failedSet.has(s));
+    const nextCtx = contexts.find(
+      (c) => !translationMap[c.context_sentence] && !translatingSet.has(c.context_sentence) && !failedSet.has(c.context_sentence)
+    );
 
-    if (nextToTranslate) {
+    if (nextCtx) {
       const timer = setTimeout(() => {
-        autoTranslate(nextToTranslate);
+        autoTranslate(nextCtx);
       }, 300);
       return () => clearTimeout(timer);
     }
@@ -325,6 +366,31 @@ export default function VocabDetailContent({
   useEffect(() => {
     loadVocab();
   }, [loadVocab]);
+
+  // vocab 加载完成后，用 DB 中已有的 sentence_translation 预填 translationMap（DB 优先于 localStorage）
+  useEffect(() => {
+    if (!vocab) return;
+    const dbTranslations: { [key: string]: string } = {};
+    if (vocab.primary_context?.context_sentence && vocab.primary_context.sentence_translation) {
+      dbTranslations[vocab.primary_context.context_sentence] = vocab.primary_context.sentence_translation;
+    }
+    vocab.example_contexts.forEach((ctx) => {
+      if (ctx.context_sentence && ctx.sentence_translation) {
+        dbTranslations[ctx.context_sentence] = ctx.sentence_translation;
+      }
+    });
+    if (Object.keys(dbTranslations).length > 0) {
+      setTranslationMap((prev) => {
+        const merged = { ...prev, ...dbTranslations }; // DB 翻译覆盖 localStorage 旧缓存
+        try {
+          localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify(merged));
+        } catch (e) {
+          log.error("Failed to sync DB translations to cache:", e);
+        }
+        return merged;
+      });
+    }
+  }, [vocab]);
 
   const handleMarkMastered = async () => {
     if (!vocab) return;
@@ -544,14 +610,36 @@ export default function VocabDetailContent({
 
             {vocab.primary_context.context_sentence &&
               (translationMap[vocab.primary_context.context_sentence] ? (
-                <p className="text-gray-500 text-base mb-4 leading-relaxed">
-                  {translationMap[vocab.primary_context.context_sentence]}
-                </p>
+                <div className="flex items-start gap-1 mb-4 group/trans">
+                  <p className="text-gray-500 text-base leading-relaxed flex-1">
+                    {translationMap[vocab.primary_context.context_sentence]}
+                  </p>
+                  <button
+                    onClick={() => handleRetranslate({ id: vocab.primary_context!.context_id, context_sentence: vocab.primary_context!.context_sentence! })}
+                    className="opacity-0 group-hover/trans:opacity-100 transition-opacity text-gray-300 hover:text-gray-500 mt-0.5 shrink-0 p-0.5 rounded"
+                    title="重新翻译"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </button>
+                </div>
               ) : translatingSet.has(vocab.primary_context.context_sentence) ? (
                 <p className="text-gray-400 text-sm mb-4 flex items-center gap-2">
                   <span className="animate-spin rounded-full h-3 w-3 border-b border-gray-400"></span>
                   翻译中...
                 </p>
+              ) : failedSet.has(vocab.primary_context.context_sentence) ? (
+                <button
+                  onClick={() => handleRetranslate({ id: vocab.primary_context!.context_id, context_sentence: vocab.primary_context!.context_sentence! })}
+                  className="text-gray-300 hover:text-gray-500 text-xs mb-4 flex items-center gap-1 transition-colors"
+                  title="重新翻译"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  重试翻译
+                </button>
               ) : null)}
 
             <div className="flex items-center gap-2 text-xs text-gray-400 font-medium pt-3 mt-4">
@@ -615,11 +703,33 @@ export default function VocabDetailContent({
 
                 {ctx.context_sentence &&
                   (translationMap[ctx.context_sentence] ? (
-                    <p className="text-gray-500 text-sm mb-3 leading-relaxed">
-                      {translationMap[ctx.context_sentence]}
-                    </p>
+                    <div className="flex items-start gap-1 mb-3 group/trans">
+                      <p className="text-gray-500 text-sm leading-relaxed flex-1">
+                        {translationMap[ctx.context_sentence]}
+                      </p>
+                      <button
+                        onClick={() => handleRetranslate({ id: ctx.id, context_sentence: ctx.context_sentence! })}
+                        className="opacity-0 group-hover/trans:opacity-100 transition-opacity text-gray-300 hover:text-gray-500 mt-0.5 shrink-0 p-0.5 rounded"
+                        title="重新翻译"
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                      </button>
+                    </div>
                   ) : translatingSet.has(ctx.context_sentence) ? (
                     <p className="text-gray-400 text-xs mb-3">翻译中...</p>
+                  ) : failedSet.has(ctx.context_sentence) ? (
+                    <button
+                      onClick={() => handleRetranslate({ id: ctx.id, context_sentence: ctx.context_sentence! })}
+                      className="text-gray-300 hover:text-gray-500 text-xs mb-3 flex items-center gap-1 transition-colors"
+                      title="重新翻译"
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      重试翻译
+                    </button>
                   ) : null)}
 
                 <div className="flex items-center justify-between text-xs text-gray-400 mt-2">

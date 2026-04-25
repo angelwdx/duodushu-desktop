@@ -348,9 +348,9 @@ def save_supplier_config(request: SupplierConfigRequest):
     except ValueError:
         raise HTTPException(status_code=400, detail=f"未知的供应商类型: {request.supplier_type}")
 
-    # 验证自定义供应商需要提供API端点
-    if supplier_type == SupplierType.CUSTOM and not request.api_endpoint:
-        raise HTTPException(status_code=400, detail="自定义供应商必须提供API端点")
+    # 验证需要端点的供应商必须提供 API 端点
+    if supplier_type in (SupplierType.CUSTOM, SupplierType.LOCAL) and not request.api_endpoint:
+        raise HTTPException(status_code=400, detail="该供应商必须提供 API 端点")
 
     multi_config = load_multi_supplier_config()
 
@@ -375,7 +375,7 @@ def save_supplier_config(request: SupplierConfigRequest):
         api_endpoint=request.api_endpoint or preset.get("default_api_endpoint", ""),
         model=request.model,
         custom_model=request.custom_model,
-        enabled=bool(effective_api_key),
+        enabled=bool(effective_api_key) or supplier_type == SupplierType.LOCAL,
         is_active=False,  # 新配置默认不是活跃的
     )
 
@@ -467,13 +467,15 @@ async def test_connection(request: TestConnectionRequest):
     # 如果前端未提供 api_key，从已保存配置（含 keyring）中取
     api_key = request.api_key or ""
     if not api_key:
-        multi_config = load_multi_supplier_config()
-        saved = multi_config.suppliers.get(supplier_type)
-        if saved and saved.api_key:
-            api_key = saved.api_key
-            logger.info(f"test-connection: 使用已保存的 API Key for {request.supplier_type}")
-        else:
-            raise HTTPException(status_code=400, detail="请先输入 API Key 或保存配置后再测试")
+        # 本地模型不需要 API Key，跳过检查
+        if supplier_type != SupplierType.LOCAL:
+            multi_config = load_multi_supplier_config()
+            saved = multi_config.suppliers.get(supplier_type)
+            if saved and saved.api_key:
+                api_key = saved.api_key
+                logger.info(f"test-connection: 使用已保存的 API Key for {request.supplier_type}")
+            else:
+                raise HTTPException(status_code=400, detail="请先输入 API Key 或保存配置后再测试")
 
     try:
         from app.services.supplier_test_service import test_supplier_connection

@@ -51,3 +51,5 @@ pytest-asyncio>=0.21.0
 # Packaging
 pyinstaller>=6.3.0
 mdict-utils>=1.0.0
+
+num2words>=0.5.13

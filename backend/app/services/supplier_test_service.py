@@ -373,6 +373,74 @@ async def test_qwen_connection(
         )
 
 
+async def test_local_connection(
+    api_endpoint: str,
+    model: str = "",
+) -> TestResult:
+    """测试本地 LLM 服务连接（如 LM Studio）"""
+    if not api_endpoint:
+        return TestResult(
+            success=False,
+            message="请提供本地服务地址（如 http://localhost:1234）",
+            supplier_type="local",
+        )
+
+    model_to_use = model or "default"
+    try:
+        url = f"{api_endpoint.rstrip('/')}/api/v1/chat"
+        payload = {
+            "model": model_to_use,
+            "system_prompt": "You are helpful.",
+            "input": "Hello",
+        }
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(url, json=payload)
+
+            if response.status_code == 200:
+                data = response.json()
+                output_list = data.get("output", [])
+                if output_list:
+                    msg = next((o for o in output_list if o.get("type") == "message"), output_list[-1])
+                    content = msg.get("content", "")
+                else:
+                    content = ""
+                return TestResult(
+                    success=True,
+                    message=f"连接成功！模型返回: {content[:60]}",
+                    supplier_type="local",
+                    details={"model": data.get("model_instance_id", model_to_use), "endpoint": api_endpoint},
+                )
+            else:
+                return TestResult(
+                    success=False,
+                    message=f"连接失败: HTTP {response.status_code}",
+                    supplier_type="local",
+                    details={"error": response.text[:200]},
+                )
+
+    except httpx.ConnectError:
+        return TestResult(
+            success=False,
+            message=f"无法连接到 {api_endpoint}，请确认本地服务已启动",
+            supplier_type="local",
+        )
+    except httpx.TimeoutException:
+        return TestResult(
+            success=False,
+            message="连接超时，请检查服务是否正常运行",
+            supplier_type="local",
+        )
+    except Exception as e:
+        logger.error(f"本地模型连接测试失败: {e}")
+        return TestResult(
+            success=False,
+            message=f"连接测试失败: {str(e)}",
+            supplier_type="local",
+        )
+
+
+
 async def test_custom_connection(
     api_key: str,
     api_endpoint: str,
@@ -454,13 +522,14 @@ async def test_supplier_connection(
     Args:
         supplier_type: 供应商类型
         api_key: API密钥
-        api_endpoint: API端点（仅自定义供应商需要）
+        api_endpoint: API端点（仅自定义/本地供应商需要）
         model: 要测试的模型（可选）
 
     Returns:
         测试结果字典
     """
-    if not api_key:
+    # 本地模型不需要 API Key
+    if supplier_type != SupplierType.LOCAL and not api_key:
         return TestResult(
             success=False,
             message="请提供API密钥",
@@ -475,6 +544,7 @@ async def test_supplier_connection(
         SupplierType.DEEPSEEK: lambda: test_deepseek_connection(api_key, api_endpoint, model or "deepseek-chat"),
         SupplierType.QWEN: lambda: test_qwen_connection(api_key, model or "qwen-plus"),
         SupplierType.CUSTOM: lambda: test_custom_connection(api_key, api_endpoint, model or "gpt-3.5-turbo"),
+        SupplierType.LOCAL: lambda: test_local_connection(api_endpoint or "http://localhost:1234", model),
     }
 
     test_func = test_functions.get(supplier_type)

@@ -496,9 +496,12 @@ export async function testTTSConfig(config?: TTSConfig): Promise<string> {
   return URL.createObjectURL(blob);
 }
 
-export async function translateText(text: string) {
+export async function translateText(text: string, signal?: AbortSignal) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s Timeout
+  const timeoutId = setTimeout(() => controller.abort(), 120000); // 120s 兼容本地大模型
+
+  // 如果外部传入 signal，外部取消时同步取消内部 controller
+  signal?.addEventListener("abort", () => controller.abort());
 
   try {
     const res = await fetch(`${API_URL}/api/dict/translate`, {
@@ -532,6 +535,19 @@ export async function translateText(text: string) {
       throw new Error("无法连接到服务器，请检查后端服务是否运行");
     }
     throw error;
+  }
+}
+
+/** 将 AI 翻译结果持久化到 word_contexts.sentence_translation */
+export async function saveContextTranslation(contextId: number, translation: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/vocabulary/contexts/${contextId}/translation`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ translation }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `保存翻译失败 (HTTP ${res.status})`);
   }
 }
 

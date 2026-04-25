@@ -17,6 +17,7 @@ class SupplierType(str, Enum):
     DEEPSEEK = "deepseek"
     QWEN = "qwen"
     CUSTOM = "custom"
+    LOCAL = "local"
 
 
 class ModelInfo(BaseModel):
@@ -59,6 +60,12 @@ SUPPLIER_PRESETS: Dict[SupplierType, Dict] = {
                 id="gemini-3-flash-preview",
                 name="Gemini 3 Flash",
                 description="Google最新一代快速且经济的模型",
+                context_length=1000000,
+            ),
+            ModelInfo(
+                id="gemini-3.1-flash-lite-preview",
+                name="Gemini 3.1 Flash Lite",
+                description="Google最新轻量级快速模型，低延迟高效率",
                 context_length=1000000,
             ),
             ModelInfo(
@@ -152,6 +159,40 @@ SUPPLIER_PRESETS: Dict[SupplierType, Dict] = {
         "api_key_url": "",
         "docs_url": "",
     },
+    SupplierType.LOCAL: {
+        "name": "本地模型 (Local LLM)",
+        "description": "本地运行的大语言模型服务（支持 LM Studio 等）",
+        "default_api_endpoint": "http://localhost:1234",
+        "models": [
+            ModelInfo(
+                id="google/gemma-4-e4b",
+                name="Gemma 4 (4B)",
+                description="Google Gemma 4 轻量模型",
+                context_length=32768,
+            ),
+            ModelInfo(
+                id="qwen/qwen3.6-27b",
+                name="Qwen3.6 (27B)",
+                description="阿里 Qwen3 推理模型（27B）",
+                context_length=32768,
+            ),
+            ModelInfo(
+                id="qwen/qwen3.5-9b",
+                name="Qwen3.5 (9B)",
+                description="阿里 Qwen3.5 轻量模型（9B）",
+                context_length=32768,
+            ),
+            ModelInfo(
+                id="zai-org/glm-4.7-flash",
+                name="GLM-4.7 Flash",
+                description="智谱 GLM-4.7 轻量快速模型",
+                context_length=32768,
+            ),
+        ],
+        "api_key_url": "",
+        "docs_url": "",
+        "requires_api_key": False,  # 本地服务不需要 API 密钥
+    },
 }
 
 
@@ -176,7 +217,8 @@ def get_all_suppliers() -> List[Dict]:
                 "name": config["name"],
                 "description": config["description"],
                 "model_count": len(config["models"]),
-                "requires_endpoint": supplier_type == SupplierType.CUSTOM,
+                "requires_endpoint": supplier_type in (SupplierType.CUSTOM, SupplierType.LOCAL),
+                "requires_api_key": config.get("requires_api_key", True),
                 "api_key_url": config.get("api_key_url", ""),
                 "default_api_endpoint": config.get("default_api_endpoint", ""),
             }

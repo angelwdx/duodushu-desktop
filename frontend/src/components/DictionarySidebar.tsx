@@ -59,6 +59,7 @@ function DictionarySidebar({
     [key: string]: string;
   }>({});
   const [isTranslating, setIsTranslating] = useState(false);
+  const [failedSet, setFailedSet] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const translateAbortControllerRef = useRef<AbortController | null>(null);
   const translateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -198,7 +199,7 @@ function DictionarySidebar({
 
         try {
           const { translateText } = await import("../lib/api");
-          const transResult = await translateText(sentence);
+          const transResult = await translateText(sentence, controller.signal);
           
           // transResult is { translation: string, source: string }
           const trans = transResult?.translation;
@@ -219,6 +220,7 @@ function DictionarySidebar({
             if (!msg.includes("500") && !msg.includes("Translation returned empty")) {
                  console.error("Translation failed:", e);
             }
+            setFailedSet((prev) => new Set(prev).add(sentence));
           }
         } finally {
           setIsTranslating(false);
@@ -227,6 +229,25 @@ function DictionarySidebar({
       }, 500);
     },
     [translationMap, saveTranslationCache, isTranslationConfigured],
+  );
+
+  // 重新翻译：清除缓存和失败记录后重新触发翻译
+  const handleRetranslate = useCallback(
+    (sentence: string) => {
+      setTranslationMap((prev) => {
+        const next = { ...prev };
+        delete next[sentence];
+        saveTranslationCache(next);
+        return next;
+      });
+      setFailedSet((prev) => {
+        const next = new Set(prev);
+        next.delete(sentence);
+        return next;
+      });
+      autoTranslateSentence(sentence);
+    },
+    [autoTranslateSentence, saveTranslationCache],
   );
 
   // 监听 context_sentence 变化，触发自动翻译
@@ -498,18 +519,38 @@ function DictionarySidebar({
                       &quot;{wordData.context_sentence}&quot;
                     </p>
                     {/* 翻译结果内嵌显示 */}
-                    {translationMap[wordData.context_sentence] && (
-                      <p className="text-gray-500 text-sm mt-1 leading-relaxed">
-                        {translationMap[wordData.context_sentence]}
-                      </p>
-                    )}
-                    {isTranslating &&
-                      !translationMap[wordData.context_sentence] && (
-                        <p className="text-gray-400 text-xs mt-1 flex items-center gap-1">
-                          <span className="animate-spin rounded-full h-2.5 w-2.5 border-b border-blue-400"></span>
-                          翻译中...
+                    {translationMap[wordData.context_sentence] ? (
+                      <div className="flex items-start gap-1 mt-1 group/trans">
+                        <p className="text-gray-500 text-sm leading-relaxed flex-1">
+                          {translationMap[wordData.context_sentence]}
                         </p>
-                      )}
+                        <button
+                          onClick={() => handleRetranslate(wordData.context_sentence!)}
+                          className="opacity-0 group-hover/trans:opacity-100 transition-opacity text-gray-300 hover:text-gray-500 mt-0.5 shrink-0 p-0.5 rounded"
+                          title="重新翻译"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </button>
+                      </div>
+                    ) : isTranslating ? (
+                      <p className="text-gray-400 text-xs mt-1 flex items-center gap-1">
+                        <span className="animate-spin rounded-full h-2.5 w-2.5 border-b border-blue-400"></span>
+                        翻译中...
+                      </p>
+                    ) : failedSet.has(wordData.context_sentence) ? (
+                      <button
+                        onClick={() => handleRetranslate(wordData.context_sentence!)}
+                        className="text-gray-300 hover:text-gray-500 text-xs mt-1 flex items-center gap-1 transition-colors"
+                        title="重新翻译"
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        重试翻译
+                      </button>
+                    ) : null}
                   </div>
                   {/* 朗读按钮 */}
                   <div className="shrink-0 opacity-40 group-hover:opacity-100 transition-opacity">

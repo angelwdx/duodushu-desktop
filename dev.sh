@@ -12,12 +12,11 @@ BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 
 # 2. 清理可能占用的端口 (后端 8000, 前端 3000)
-echo "🔍 检查并清理端口占用..."
-PIDS=$(lsof -ti:8000,3000)
-if [ -n "$PIDS" ]; then
-    echo "⚠️ 发现端口被占用，正在清理进程: $PIDS"
-    echo "$PIDS" | xargs kill -9
-fi
+echo "🔍 检查并清理旧进程..."
+pkill -f "uvicorn.*8000"
+pkill -f "run_backend.py"
+pkill -f "next dev"
+sleep 1
 
 # 3. 设置数据目录
 # 默认使用与安装版一致的数据目录
