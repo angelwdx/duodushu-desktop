@@ -470,15 +470,13 @@ async def test_connection(request: TestConnectionRequest):
     # 如果前端未提供 api_key，从已保存配置（含 keyring）中取
     api_key = request.api_key or ""
     if not api_key:
-        # 本地模型不需要 API Key，跳过检查
-        if supplier_type != SupplierType.LOCAL:
-            multi_config = load_multi_supplier_config()
-            saved = multi_config.suppliers.get(supplier_type)
-            if saved and saved.api_key:
-                api_key = saved.api_key
-                logger.info(f"test-connection: 使用已保存的 API Key for {request.supplier_type}")
-            else:
-                raise HTTPException(status_code=400, detail="请先输入 API Key 或保存配置后再测试")
+        multi_config = load_multi_supplier_config()
+        saved = multi_config.suppliers.get(supplier_type)
+        if saved and saved.api_key:
+            api_key = saved.api_key
+            logger.info(f"test-connection: 使用已保存的 API Key for {request.supplier_type}")
+        elif supplier_type != SupplierType.LOCAL:
+            raise HTTPException(status_code=400, detail="请先输入 API Key 或保存配置后再测试")
 
     try:
         from app.services.supplier_test_service import test_supplier_connection

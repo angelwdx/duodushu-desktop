@@ -161,9 +161,15 @@ SUPPLIER_PRESETS: Dict[SupplierType, Dict] = {
     },
     SupplierType.LOCAL: {
         "name": "本地模型 (Local LLM)",
-        "description": "本地运行的大语言模型服务（支持 LM Studio 等）",
-        "default_api_endpoint": "http://localhost:1234",
+        "description": "本地运行的大语言模型服务（支持 LM Studio、Ollama 等 OpenAI 兼容服务）",
+        "default_api_endpoint": "http://127.0.0.1:1234/v1",
         "models": [
+            ModelInfo(
+                id="Qwen3.6-35B-A3B-4bit",
+                name="Qwen3.6-35B-A3B (4bit)",
+                description="阿里 Qwen3.6 MoE 旗舰模型，35B 参数 4bit 量化",
+                context_length=32768,
+            ),
             ModelInfo(
                 id="google/gemma-4-e4b",
                 name="Gemma 4 (4B)",

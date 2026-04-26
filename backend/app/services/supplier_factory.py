@@ -266,6 +266,12 @@ def get_active_client():
             if OpenAI and api_endpoint:
                 return OpenAI(api_key=api_key, base_url=api_endpoint)
 
+        elif supplier_type == SupplierType.LOCAL:
+            OpenAI = get_openai_client()
+            if OpenAI and api_endpoint:
+                # 本地服务通常不需要真实 API Key，传占位符即可
+                return OpenAI(api_key=api_key or "local", base_url=api_endpoint)
+
         logger.warning(f"无法创建 {supplier_type.value} 客户端")
         return None
 
@@ -325,16 +331,6 @@ def translate_with_active_supplier(text: str) -> Optional[str]:
     supplier_type = factory.get_active_supplier_type()
     config = factory.get_active_supplier_config()
 
-    # 本地模型直接调用，不走 SDK client
-    if supplier_type == SupplierType.LOCAL and config:
-        endpoint = config.api_endpoint or "http://localhost:1234"
-        model = config.custom_model or config.model
-        if not model:
-            logger.error("本地模型未配置模型名称")
-            return None
-        prompt = f"Translate the following English text to Chinese (Simplified). Only provide the translation, no explanations:\n\n{text}"
-        return _call_local_api(endpoint, model, "You are a professional translator.", prompt)
-
     client = get_active_client()
     if not client:
         logger.error("无法获取客户端进行翻译")
@@ -345,9 +341,9 @@ def translate_with_active_supplier(text: str) -> Optional[str]:
     prompt = f"Translate the following English text to Chinese (Simplified). Only provide the translation, no explanations:\n\n{text}"
 
     try:
-        # 使用 OpenAI 兼容接口 (DeepSeek, Qwen, Custom, OpenAI)
-        if supplier_type in [SupplierType.OPENAI, SupplierType.DEEPSEEK, SupplierType.QWEN, SupplierType.CUSTOM]:
-            response = client.chat.completions.create(
+        # 使用 OpenAI 兼容接口 (DeepSeek, Qwen, Custom, OpenAI, Local)
+        if supplier_type in [SupplierType.OPENAI, SupplierType.DEEPSEEK, SupplierType.QWEN, SupplierType.CUSTOM, SupplierType.LOCAL]:
+            kwargs: Dict[str, Any] = dict(
                 model=model,
                 messages=[
                     {"role": "system", "content": "You are a professional translator."},
@@ -356,6 +352,10 @@ def translate_with_active_supplier(text: str) -> Optional[str]:
                 temperature=0.1,
                 max_tokens=1000,
             )
+            # Qwen3 本地模型默认开启思维链，通过 chat_template_kwargs 关闭
+            if supplier_type == SupplierType.LOCAL:
+                kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
+            response = client.chat.completions.create(**kwargs)
             result = response.choices[0].message.content
             if result:
                 result = result.strip()
@@ -413,23 +413,6 @@ def chat_with_active_supplier(
     supplier_type = factory.get_active_supplier_type()
     config = factory.get_active_supplier_config()
 
-    # 本地模型直接调用，不走 SDK client
-    if supplier_type == SupplierType.LOCAL and config:
-        endpoint = config.api_endpoint or "http://localhost:1234"
-        model = config.custom_model or config.model
-        if not model:
-            logger.error("本地模型未配置模型名称")
-            return None
-        # 将历史消息拼接到 input（本地 API 不支持多轮格式）
-        input_parts = []
-        if history:
-            for msg in history:
-                role_label = "用户" if msg.get("role") == "user" else "AI"
-                input_parts.append(f"{role_label}: {msg.get('content', '')}")
-        input_parts.append(f"用户: {message}")
-        full_input = "\n".join(input_parts)
-        return _call_local_api(endpoint, model, system_prompt or "", full_input)
-
     client = get_active_client()
     if not client:
         logger.error("无法获取客户端")
@@ -450,14 +433,18 @@ def chat_with_active_supplier(
         messages.append({"role": "user", "content": message})
 
         # 根据供应商类型调用不同的API
-        if supplier_type in [SupplierType.OPENAI, SupplierType.DEEPSEEK, SupplierType.QWEN, SupplierType.CUSTOM]:
+        if supplier_type in [SupplierType.OPENAI, SupplierType.DEEPSEEK, SupplierType.QWEN, SupplierType.CUSTOM, SupplierType.LOCAL]:
             # OpenAI兼容接口
-            response = client.chat.completions.create(
+            call_kwargs: Dict[str, Any] = dict(
                 model=model,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            # Qwen3 本地模型默认开启思维链，通过 chat_template_kwargs 关闭
+            if supplier_type == SupplierType.LOCAL:
+                call_kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
+            response = client.chat.completions.create(**call_kwargs)
             return response.choices[0].message.content
 
         elif supplier_type == SupplierType.CLAUDE:

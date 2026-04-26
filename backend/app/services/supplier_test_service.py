@@ -376,48 +376,78 @@ async def test_qwen_connection(
 async def test_local_connection(
     api_endpoint: str,
     model: str = "",
+    api_key: str = "",
 ) -> TestResult:
-    """测试本地 LLM 服务连接（如 LM Studio）"""
+    """测试本地 LLM 服务连接（OpenAI 兼容格式，如 LM Studio、Ollama）"""
     if not api_endpoint:
         return TestResult(
             success=False,
-            message="请提供本地服务地址（如 http://localhost:1234）",
+            message="请提供本地服务地址（如 http://127.0.0.1:1234/v1）",
             supplier_type="local",
         )
 
-    model_to_use = model or "default"
     try:
-        url = f"{api_endpoint.rstrip('/')}/api/v1/chat"
+        # 先查询可用模型列表，快速验证服务是否在线
+        models_url = f"{api_endpoint.rstrip('/')}/models"
+        bearer = api_key or "local"
+        headers = {"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            models_resp = await client.get(models_url, headers=headers)
+
+        if models_resp.status_code != 200:
+            return TestResult(
+                success=False,
+                message=f"连接失败: HTTP {models_resp.status_code}",
+                supplier_type="local",
+                details={"error": models_resp.text[:200]},
+            )
+
+        available_models = [m["id"] for m in models_resp.json().get("data", [])]
+
+        # 若指定了模型，校验是否已加载
+        if model and model not in available_models:
+            return TestResult(
+                success=False,
+                message=f"模型 {model} 未加载，当前可用: {', '.join(available_models) or '无'}",
+                supplier_type="local",
+                details={"available_models": available_models},
+            )
+
+        model_to_use = model or (available_models[0] if available_models else "")
+        if not model_to_use:
+            return TestResult(
+                success=False,
+                message="服务在线，但没有已加载的模型",
+                supplier_type="local",
+                details={"endpoint": api_endpoint},
+            )
+
+        # 发送一条简短对话验证推理能力
+        chat_url = f"{api_endpoint.rstrip('/')}/chat/completions"
         payload = {
             "model": model_to_use,
-            "system_prompt": "You are helpful.",
-            "input": "Hello",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 20,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            chat_resp = await client.post(chat_url, json=payload, headers=headers)
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(url, json=payload)
-
-            if response.status_code == 200:
-                data = response.json()
-                output_list = data.get("output", [])
-                if output_list:
-                    msg = next((o for o in output_list if o.get("type") == "message"), output_list[-1])
-                    content = msg.get("content", "")
-                else:
-                    content = ""
-                return TestResult(
-                    success=True,
-                    message=f"连接成功！模型返回: {content[:60]}",
-                    supplier_type="local",
-                    details={"model": data.get("model_instance_id", model_to_use), "endpoint": api_endpoint},
-                )
-            else:
-                return TestResult(
-                    success=False,
-                    message=f"连接失败: HTTP {response.status_code}",
-                    supplier_type="local",
-                    details={"error": response.text[:200]},
-                )
+        if chat_resp.status_code == 200:
+            content = chat_resp.json()["choices"][0]["message"]["content"].strip()[:60]
+            return TestResult(
+                success=True,
+                message=f"连接成功！模型返回: {content}",
+                supplier_type="local",
+                details={"model": model_to_use, "endpoint": api_endpoint, "available_models": available_models},
+            )
+        else:
+            return TestResult(
+                success=False,
+                message=f"模型推理失败: HTTP {chat_resp.status_code}",
+                supplier_type="local",
+                details={"error": chat_resp.text[:200]},
+            )
 
     except httpx.ConnectError:
         return TestResult(
@@ -544,7 +574,7 @@ async def test_supplier_connection(
         SupplierType.DEEPSEEK: lambda: test_deepseek_connection(api_key, api_endpoint, model or "deepseek-chat"),
         SupplierType.QWEN: lambda: test_qwen_connection(api_key, model or "qwen-plus"),
         SupplierType.CUSTOM: lambda: test_custom_connection(api_key, api_endpoint, model or "gpt-3.5-turbo"),
-        SupplierType.LOCAL: lambda: test_local_connection(api_endpoint or "http://localhost:1234", model),
+        SupplierType.LOCAL: lambda: test_local_connection(api_endpoint or "http://127.0.0.1:1234/v1", model, api_key),
     }
 
     test_func = test_functions.get(supplier_type)
