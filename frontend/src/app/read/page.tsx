@@ -88,29 +88,54 @@ function ReaderContent() {
   // 双页模式状态（PDF 专用）
   const [dualPageMode, setDualPageMode] = useState<boolean>(false);
   const [coverPageEnabled, setCoverPageEnabled] = useState<boolean>(true);
+  const loadedPdfLayoutPrefsKeyRef = useRef<string | null>(null);
+  const skipNextPdfLayoutSaveRef = useRef(false);
 
   // 从 localStorage 加载双页设置
   useEffect(() => {
-    if (id) {
-      try {
-        const saved = localStorage.getItem(`pdf-dual-page-${id}`);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          setDualPageMode(parsed.enabled ?? false);
-          setCoverPageEnabled(parsed.coverPage ?? true);
-        }
-      } catch { /* ignore */ }
+    if (typeof window === "undefined") return;
+
+    if (!id) {
+      loadedPdfLayoutPrefsKeyRef.current = null;
+      skipNextPdfLayoutSaveRef.current = true;
+      setDualPageMode(false);
+      setCoverPageEnabled(true);
+      return;
+    }
+
+    const prefsKey = `pdf-dual-page-${id}`;
+    loadedPdfLayoutPrefsKeyRef.current = prefsKey;
+    skipNextPdfLayoutSaveRef.current = true;
+    setDualPageMode(false);
+    setCoverPageEnabled(true);
+
+    try {
+      const saved = localStorage.getItem(prefsKey);
+      if (!saved) return;
+
+      const parsed = JSON.parse(saved);
+      setDualPageMode(parsed.enabled ?? false);
+      setCoverPageEnabled(parsed.coverPage ?? true);
+    } catch {
+      /* ignore */
     }
   }, [id]);
 
   // 保存双页设置到 localStorage
   useEffect(() => {
-    if (id) {
-      localStorage.setItem(`pdf-dual-page-${id}`, JSON.stringify({
-        enabled: dualPageMode,
-        coverPage: coverPageEnabled,
-      }));
+    if (typeof window === "undefined" || !id) return;
+
+    const prefsKey = `pdf-dual-page-${id}`;
+    if (loadedPdfLayoutPrefsKeyRef.current !== prefsKey) return;
+    if (skipNextPdfLayoutSaveRef.current) {
+      skipNextPdfLayoutSaveRef.current = false;
+      return;
     }
+
+    localStorage.setItem(prefsKey, JSON.stringify({
+      enabled: dualPageMode,
+      coverPage: coverPageEnabled,
+    }));
   }, [id, dualPageMode, coverPageEnabled]);
 
   // 追踪 visibleContent 的变化，用于调试

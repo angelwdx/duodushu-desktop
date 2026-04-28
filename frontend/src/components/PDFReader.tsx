@@ -35,6 +35,10 @@ interface WordData {
   width: number;
   height: number;
   block_id?: number;
+  _pageNumber?: number;
+  // 双页模式内部标记：标记单词来自第二页
+  _isSecondPage?: boolean;
+  _pageOffsetX?: number;
 }
 
 interface OutlineItem {
@@ -511,10 +515,14 @@ interface ReaderProps {
   const pageContainerRef = useRef<HTMLDivElement>(null);
   const zoomMenuRef = useRef<HTMLDivElement>(null);
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
+  const loadedReaderPrefsKeyRef = useRef<string | null>(null);
+  const skipNextReaderPrefsSaveRef = useRef(false);
 
   // 双页文本提取缓存
   const dualPageLoadData = useRef<Map<number, { viewport: any; text: string }>>(new Map());
   const dualPageSpreadRef = useRef<PageSpread>([]); // 追踪当前 spread 快照
+  const pageMetricsRef = useRef<Map<number, { width: number; height: number; offsetX: number; offsetY: number }>>(new Map());
+  const [secondPageWords, setSecondPageWords] = useState<WordData[] | null>(null); // 第二页单词数据
 
   const goToPage = useCallback((page: number) => {
     const validPage = Math.max(1, Math.min(page, numPages || totalPages || 1));
@@ -527,6 +535,61 @@ interface ReaderProps {
     word?: string;
   } | null>(null);
   const [shouldScrollToHighlight, setShouldScrollToHighlight] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if (!bookId) {
+      loadedReaderPrefsKeyRef.current = null;
+      skipNextReaderPrefsSaveRef.current = true;
+      setScale(1.0);
+      setFitMode("page");
+      setViewMode("pdf");
+      return;
+    }
+
+    const prefsKey = `pdf-reader-view-${bookId}`;
+    loadedReaderPrefsKeyRef.current = prefsKey;
+    skipNextReaderPrefsSaveRef.current = true;
+    setScale(1.0);
+    setFitMode("page");
+    setViewMode("pdf");
+
+    try {
+      const saved = localStorage.getItem(prefsKey);
+      if (!saved) return;
+
+      const parsed = JSON.parse(saved);
+      if (parsed.fitMode === "none" || parsed.fitMode === "width" || parsed.fitMode === "height" || parsed.fitMode === "page") {
+        setFitMode(parsed.fitMode);
+      }
+      if (typeof parsed.scale === "number" && Number.isFinite(parsed.scale)) {
+        setScale(Math.min(3, Math.max(0.25, parsed.scale)));
+      }
+      if (parsed.viewMode === "pdf" || parsed.viewMode === "text") {
+        setViewMode(parsed.viewMode);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [bookId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !bookId) return;
+
+    const prefsKey = `pdf-reader-view-${bookId}`;
+    if (loadedReaderPrefsKeyRef.current !== prefsKey) return;
+    if (skipNextReaderPrefsSaveRef.current) {
+      skipNextReaderPrefsSaveRef.current = false;
+      return;
+    }
+
+    localStorage.setItem(prefsKey, JSON.stringify({
+      fitMode,
+      scale,
+      viewMode,
+    }));
+  }, [bookId, fitMode, scale, viewMode]);
 
   // Handle jump requests (e.g. from TOC or View Original)
   useEffect(() => {
@@ -597,112 +660,161 @@ interface ReaderProps {
 
   const renderWidth = getActualWidth();
 
+  const getPageMetrics = useCallback((targetPage: number) => {
+    return pageMetricsRef.current.get(targetPage) ?? (
+      pageDimensions
+        ? {
+            width: pageDimensions.width,
+            height: pageDimensions.height,
+            offsetX: pageOffset.x,
+            offsetY: pageOffset.y,
+          }
+        : null
+    );
+  }, [pageDimensions, pageOffset.x, pageOffset.y]);
+
+  const getWordOverlayRect = useCallback((word: WordData) => {
+    const targetPage = word._pageNumber ?? pageNumber;
+    const metrics = getPageMetrics(targetPage);
+    if (!metrics) return null;
+
+    const scaleFactor = renderWidth / metrics.width;
+    const totalOffsetX = metrics.offsetX + manualOffset.x;
+    const totalOffsetY = metrics.offsetY + manualOffset.y;
+    const spreadOffsetX = word._isSecondPage
+      ? (word._pageOffsetX ?? (renderWidth + SPREAD_GAP))
+      : 0;
+
+    return {
+      left: (word.x - totalOffsetX) * scaleFactor + spreadOffsetX,
+      top: (word.y - totalOffsetY) * scaleFactor,
+      width: word.width * scaleFactor,
+      height: word.height * scaleFactor,
+    };
+  }, [getPageMetrics, manualOffset.x, manualOffset.y, pageNumber, renderWidth]);
+
   const processedWords = useMemo(() => {
     if (!words) return [];
+    const firstPageNumber = dualPageMode && currentSpread.length > 0 ? currentSpread[0] : pageNumber;
 
-    // Phase 1: Identify Drop Caps and find their matching words
-    const dropCapIndices = new Set<number>();
-    const matchedPairs: Map<number, number> = new Map(); // dropCapIndex -> matchIndex
-    const matchedTargets = new Set<number>();
+    const mergeDropCapWords = (pageWords: WordData[], targetPageNumber: number) => {
+      const dropCapIndices = new Set<number>();
+      const matchedPairs: Map<number, number> = new Map();
+      const matchedTargets = new Set<number>();
 
-    for (let i = 0; i < words.length; i++) {
-      const w = words[i];
-      if (!/^[A-Z]$/.test(w.text)) continue;
+      for (let i = 0; i < pageWords.length; i++) {
+        const w = pageWords[i];
+        if (!/^[A-Z]$/.test(w.text)) continue;
 
-      // A / I 很常见为独立单词，误并代价高，需要更严格。
-      const isAorI = /^[AI]$/.test(w.text);
-      let bestMatch = -1;
-      let bestDistance = Infinity;
-      // 不能只看相邻 index。
-      // 某些页（例如这本书第 23 页）下沉首字母与正文碎片之间会夹着图片说明/标题块，
-      // 但几何位置仍然是紧邻的，所以这里按坐标做全页搜索。
-      for (let j = 0; j < words.length; j++) {
-        if (i === j) continue;
-        const candidate = words[j];
-        if (matchedTargets.has(j)) continue;
-        if (!/^[a-z]/.test(candidate.text)) continue;
-        if (candidate.x < w.x) continue;
+        const isAorI = /^[AI]$/.test(w.text);
+        let bestMatch = -1;
+        let bestDistance = Infinity;
+        for (let j = 0; j < pageWords.length; j++) {
+          if (i === j) continue;
+          const candidate = pageWords[j];
+          if (matchedTargets.has(j)) continue;
+          if (!/^[a-z]/.test(candidate.text)) continue;
+          if (candidate.x < w.x) continue;
 
-        const dx = candidate.x - (w.x + w.width);
-        const dy = Math.abs(candidate.y - w.y);
-        const candidateHeight = Math.max(candidate.height, 1);
-        const heightRatio = w.height / candidateHeight;
-        const isLargeDropCap = heightRatio >= 1.35;
+          const dx = candidate.x - (w.x + w.width);
+          const dy = Math.abs(candidate.y - w.y);
+          const candidateHeight = Math.max(candidate.height, 1);
+          const heightRatio = w.height / candidateHeight;
+          const isLargeDropCap = heightRatio >= 1.35;
 
-        // 真正的下沉首字母允许更大的纵向错位；
-        // 若高度接近，则只允许极小间距的紧邻碎片（如 D + id, O + n）。
-        const maxDx = isLargeDropCap
-          ? Math.max(candidateHeight * 0.8, 18)
-          : Math.max(candidateHeight * 0.18, 2.5);
-        const maxDy = isLargeDropCap
-          ? Math.max(candidateHeight * 1.1, 20)
-          : Math.max(candidateHeight * 0.4, 8);
+          const maxDx = isLargeDropCap
+            ? Math.max(candidateHeight * 0.8, 18)
+            : Math.max(candidateHeight * 0.18, 2.5);
+          const maxDy = isLargeDropCap
+            ? Math.max(candidateHeight * 1.1, 20)
+            : Math.max(candidateHeight * 0.4, 8);
 
-        if (dx < -2 || dx > maxDx || dy > maxDy) continue;
-        if (!isLargeDropCap) {
-          if (isAorI) continue;
-          if (j !== i + 1) continue;
+          if (dx < -2 || dx > maxDx || dy > maxDy) continue;
+          if (!isLargeDropCap) {
+            if (isAorI) continue;
+            if (j !== i + 1) continue;
+          }
+
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < bestDistance) {
+            bestDistance = dist;
+            bestMatch = j;
+          }
         }
 
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < bestDistance) {
-          bestDistance = dist;
-          bestMatch = j;
-        }
-      }
-
-      if (bestMatch !== -1) {
-        dropCapIndices.add(i);
-        matchedPairs.set(i, bestMatch);
-        matchedTargets.add(bestMatch);
-      }
-    }
-
-    // Phase 2: Build merged word list
-    // Strategy: Keep original order, but replace matched words with merged versions
-    // and skip the drop cap letters
-    const merged: WordData[] = [];
-
-    for (let i = 0; i < words.length; i++) {
-      // Skip drop cap letters (they'll be merged into their matched words)
-      if (dropCapIndices.has(i)) continue;
-
-      const current = words[i];
-
-      // Check if this word is a match target - if so, merge with its drop cap
-      let foundDropCap = -1;
-      for (const [dropIdx, matchIdx] of matchedPairs.entries()) {
-        if (matchIdx === i) {
-          foundDropCap = dropIdx;
-          break;
+        if (bestMatch !== -1) {
+          dropCapIndices.add(i);
+          matchedPairs.set(i, bestMatch);
+          matchedTargets.add(bestMatch);
         }
       }
 
-      if (foundDropCap !== -1) {
-        const dropCapWord = words[foundDropCap];
-        const nextWord = words[i + 1];
-        merged.push({
-          text: dropCapWord.text + current.text,
-          x: Math.min(dropCapWord.x, current.x),
-          // Use body text y position for consistent context extraction
-          y: current.y,
-          width:
-            Math.max(
-              dropCapWord.x + dropCapWord.width,
-              current.x + current.width,
-            ) - Math.min(dropCapWord.x, current.x),
-          // Use body text height for consistent height ratio checks
-          height: current.height,
-          // Inherit block_id from the NEXT word if available (to match the rest of the sentence)
-          block_id: nextWord?.block_id ?? current.block_id,
-        });
-      } else {
-        merged.push(current);
+      const mergedPageWords: WordData[] = [];
+      for (let i = 0; i < pageWords.length; i++) {
+        if (dropCapIndices.has(i)) continue;
+
+        const current = pageWords[i];
+        let foundDropCap = -1;
+        for (const [dropIdx, matchIdx] of matchedPairs.entries()) {
+          if (matchIdx === i) {
+            foundDropCap = dropIdx;
+            break;
+          }
+        }
+
+        if (foundDropCap !== -1) {
+          const dropCapWord = pageWords[foundDropCap];
+          const nextWord = pageWords[i + 1];
+          mergedPageWords.push({
+            text: dropCapWord.text + current.text,
+            x: Math.min(dropCapWord.x, current.x),
+            y: current.y,
+            width:
+              Math.max(
+                dropCapWord.x + dropCapWord.width,
+                current.x + current.width,
+              ) - Math.min(dropCapWord.x, current.x),
+            height: current.height,
+            block_id: nextWord?.block_id ?? current.block_id,
+            _pageNumber: targetPageNumber,
+          });
+        } else {
+          mergedPageWords.push({
+            ...current,
+            _pageNumber: targetPageNumber,
+          });
+        }
       }
+
+      return mergedPageWords;
+    };
+
+    const merged: WordData[] = mergeDropCapWords(words, firstPageNumber);
+
+    // 双页模式：添加第二页的 words（保持原始 x 坐标，在命中检测时处理偏移）
+    if (dualPageMode && secondPageWords && pageDimensions) {
+      const pageOffsetX = renderWidth + SPREAD_GAP;
+      const secondPageProcessed = mergeDropCapWords(secondPageWords, currentSpread[1]).map((word) => ({
+        ...word,
+        _isSecondPage: true,
+        _pageOffsetX: pageOffsetX,
+      }));
+      merged.push(...secondPageProcessed);
+      logger.debug('[PDFReader] processedWords includes second page words:', {
+        firstPageCount: words?.length || 0,
+        secondPageCount: secondPageWords.length,
+        totalMerged: merged.length,
+        pageOffsetX,
+      });
     }
 
     return merged.flatMap((word) => splitWordDataForLookup(word));
-  }, [words]);
+  }, [words, dualPageMode, secondPageWords, pageDimensions, renderWidth, currentSpread, pageNumber]);
+
+  const getPageWordCandidates = useCallback((isSecondPage: boolean) => {
+    if (!dualPageMode) return processedWords;
+    return processedWords.filter((word) => Boolean(word._isSecondPage) === isSecondPage);
+  }, [dualPageMode, processedWords]);
 
   // Effect to perform scroll when words are loaded and we have a pending highlight
   useEffect(() => {
@@ -777,19 +889,12 @@ interface ReaderProps {
     }
 
     if (bestMatch) {
-      const totalOffsetX = pageOffset.x + manualOffset.x;
-      const totalOffsetY = pageOffset.y + manualOffset.y;
-      const scaleFactor = renderWidth / pageDimensions.width;
+      const rect = getWordOverlayRect(bestMatch);
+      if (!rect) return;
 
-      // Highlight the word visually
       setHoveredWord({
         data: bestMatch,
-        rect: {
-            left: (bestMatch.x - totalOffsetX) * scaleFactor,
-            top: (bestMatch.y - totalOffsetY) * scaleFactor,
-            width: bestMatch.width * scaleFactor,
-            height: bestMatch.height * scaleFactor,
-        },
+        rect,
       });
       
       // Trigger scroll on next render
@@ -803,6 +908,7 @@ interface ReaderProps {
     renderWidth,
     pageOffset,
     manualOffset,
+    getWordOverlayRect,
   ]);
 
   // Execute scroll when highlight is ready
@@ -907,6 +1013,12 @@ interface ReaderProps {
     // Use viewport's calculated offsets.
     // PDF.js calculates these to align with specific ViewBox to (0,0) of canvas.
     // This should handle negative cropbox coordinates correctly.
+    pageMetricsRef.current.set(pageNumber, {
+      width,
+      height,
+      offsetX: viewport.offsetX,
+      offsetY: viewport.offsetY,
+    });
     setPageOffset({ x: viewport.offsetX, y: viewport.offsetY });
     setPageDimensions({ width, height });
 
@@ -1020,6 +1132,12 @@ interface ReaderProps {
   // 优先使用后端已存储的正确文本，仅在后端文本为空时回退到 PDF.js 提取
   function handleDualPageLoad(pg: number, page: any) {
     const viewport = page.getViewport({ scale: 1 });
+    pageMetricsRef.current.set(pg, {
+      width: viewport.width,
+      height: viewport.height,
+      offsetX: viewport.offsetX,
+      offsetY: viewport.offsetY,
+    });
     // 用第一页的尺寸作为页面尺寸
     if (pg === currentSpread[0]) {
       setPageOffset({ x: viewport.offsetX, y: viewport.offsetY });
@@ -1116,6 +1234,37 @@ interface ReaderProps {
           onContentChange(normalizePdfPageText(combinedText));
         } catch (err) { /* 静默处理 */ }
       }
+    }
+
+    // 双页模式：获取第二页的 words 数据
+    if (spread.length > 1 && bookId) {
+      const secondPage = spread[1];
+      logger.debug('[PDFReader] Fetching second page words:', { secondPage, bookId });
+      (async () => {
+        try {
+          const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+          const res = await fetch(`${apiUrl}/api/books/${bookId}/pages/${secondPage}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.words_data && Array.isArray(data.words_data)) {
+              logger.debug('[PDFReader] Second page words loaded:', {
+                count: data.words_data.length,
+                sample: data.words_data.slice(0, 3).map((w: WordData) => w.text),
+              });
+              setSecondPageWords(data.words_data);
+            } else {
+              logger.debug('[PDFReader] No words_data in response:', data);
+            }
+          } else {
+            logger.warn('[PDFReader] Failed to fetch second page words:', res.status);
+          }
+        } catch (err) {
+          logger.error('[PDFReader] Error fetching second page words:', err);
+          setSecondPageWords(null); // 清理旧数据
+        }
+      })();
+    } else {
+      setSecondPageWords(null);
     }
 
     // 清理不属于当前 spread 的缓存
@@ -1311,38 +1460,72 @@ interface ReaderProps {
 
   // 这里不需要 MouseMove 来更新 isSelecting，因为我们通过物理隔离屏蔽了手势
   // 只需要处理 Hover 高亮
-  const handlePageMouseMove = (e: React.MouseEvent) => {
-    // 高亮逻辑保持不变
+  const handlePageMouseMove = (e: React.MouseEvent, targetPage = pageNumber, isSecondPage = false) => {
     if (e.buttons !== 0 || !processedWords || !pageDimensions) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const scaleFactor = renderWidth / pageDimensions.width;
-    const totalOffsetX = pageOffset.x + manualOffset.x;
-    const totalOffsetY = pageOffset.y + manualOffset.y;
+    const metrics = getPageMetrics(targetPage);
+    if (!metrics) return;
+    const scaleFactor = renderWidth / metrics.width;
+    const totalOffsetX = metrics.offsetX + manualOffset.x;
+    const totalOffsetY = metrics.offsetY + manualOffset.y;
+
+    // 计算鼠标相对于当前页 div 的 PDF 坐标
     const pdfX = (e.clientX - rect.left) / scaleFactor + totalOffsetX;
     const pdfY = (e.clientY - rect.top) / scaleFactor + totalOffsetY;
 
-    const hit = processedWords.find(
+    // 双页模式下仍然使用页内局部 PDF 坐标做命中；
+    // 右页只在 overlay 计算时加 spread 偏移，不能在命中阶段提前平移 pdfX。
+    const candidates = getPageWordCandidates(isSecondPage).filter((word) => (word._pageNumber ?? pageNumber) === targetPage);
+
+    const hit = candidates.find(
         (w) =>
         pdfX >= w.x &&
         pdfX <= w.x + w.width &&
         pdfY >= w.y &&
         pdfY <= w.y + w.height,
     );
+
     if (hit) {
-        setHoveredWord({
-        data: hit,
-        rect: {
-            left: (hit.x - totalOffsetX) * scaleFactor,
-            top: (hit.y - totalOffsetY) * scaleFactor,
-            width: hit.width * scaleFactor,
-            height: hit.height * scaleFactor,
-        },
+        logger.debug('[PDFReader] Word hover hit:', {
+          word: hit.text,
+          pdfX,
+          pdfY,
+          wordX: hit.x,
+          wordY: hit.y,
+          isSecondPage: hit._isSecondPage,
         });
-    } else setHoveredWord(null);
+
+        const overlayRect = getWordOverlayRect(hit);
+        if (!overlayRect) return;
+
+        logger.debug('[PDFReader] Overlay position:', {
+          hitX: hit.x,
+          overlayLeft: overlayRect.left,
+          overlayTop: overlayRect.top,
+          isSecondPage: hit._isSecondPage,
+        });
+
+        setHoveredWord({
+          data: hit,
+          rect: overlayRect,
+        });
+    } else {
+      setHoveredWord(null);
+      if (isSecondPage && processedWords.length > 0) {
+        const secondPageWords = processedWords.filter((w) => w._isSecondPage);
+        logger.debug('[PDFReader] No hit on page 2, info:', {
+          totalProcessed: processedWords.length,
+          secondPageCount: secondPageWords.length,
+          pdfX,
+          pdfY,
+          firstSecondWord: secondPageWords[0],
+        });
+      }
+    }
   };
 
   // 鼠标抬起：判断是点击还是选择
-  const handlePageMouseUp = (e: React.MouseEvent) => {
+  const handlePageMouseUp = (e: React.MouseEvent, targetPage = pageNumber, isSecondPage = false) => {
     e.stopPropagation(); // 阻止冒泡
 
     // 1. 如果没有起始点，忽略
@@ -1363,7 +1546,6 @@ interface ReaderProps {
     }
 
     // 4. 否则视为点击，执行查词逻辑
-    const selection = window.getSelection();
     // 如果此时有跨行选择存在，且用户只是点了一下（比如想取消选择），应该允许浏览器的默认行为（清除选择）
     // 但如果点击在了单词上，我们想查词。
     // 通常点击会清除 Selection，所以这里 selection.isCollapsed 可能是 true（如果浏览器先处理了）
@@ -1372,14 +1554,17 @@ interface ReaderProps {
     if (!processedWords || !pageDimensions) return;
     
     const rect = e.currentTarget.getBoundingClientRect();
-    const scaleFactor = renderWidth / pageDimensions.width;
-    const totalOffsetX = pageOffset.x + manualOffset.x;
-    const totalOffsetY = pageOffset.y + manualOffset.y;
+    const metrics = getPageMetrics(targetPage);
+    if (!metrics) return;
+    const scaleFactor = renderWidth / metrics.width;
+    const totalOffsetX = metrics.offsetX + manualOffset.x;
+    const totalOffsetY = metrics.offsetY + manualOffset.y;
 
     const pdfX = (e.clientX - rect.left) / scaleFactor + totalOffsetX;
     const pdfY = (e.clientY - rect.top) / scaleFactor + totalOffsetY;
 
-    const hitIndex = processedWords.findIndex(
+    const candidates = getPageWordCandidates(isSecondPage).filter((word) => (word._pageNumber ?? pageNumber) === targetPage);
+    const hitIndex = candidates.findIndex(
         (w) =>
         pdfX >= w.x &&
         pdfX <= w.x + w.width &&
@@ -1388,25 +1573,12 @@ interface ReaderProps {
     );
 
     if (hitIndex !== -1) {
-        const hit = processedWords[hitIndex];
+        const hit = candidates[hitIndex];
         const relativeX = hit.width > 0 ? (pdfX - hit.x) / hit.width : 0.5;
         const lookupWord = getLookupWordFromText(hit.text, relativeX);
         if (!lookupWord) return;
-        
-        // 简单的上下文获取逻辑（原逻辑的简化版，避免过长代码）
-        // 实际上可以直接复用原有的 getContextFromWords 如果它是解耦的
-        // 这里为了稳健，我们暂时只传 text，或者简单截取前后
-        // 重新内联核心上下文逻辑以确保功能完整：
-        const getContext = () => {
-             // ...简化的上下文获取...
-             // 为了代码简洁，只取当前句
-             return hit.text; // 暂时简化，重点是修复响应性
-        };
-        
-        // 恢复完整上下文逻辑，因为这是用户需要的功能
+
         const getContextFromWords = (allWords: WordData[], index: number): string => {
-             // ...完整代码复用...
-             // 由于篇幅限制，这里用之前的逻辑
             if (index < 0 || index >= allWords.length) return "";
             let start = index;
             let end = index;
@@ -1427,7 +1599,7 @@ interface ReaderProps {
             return allWords.slice(start, end + 1).map(w => w.text).join(" ").trim();
         }
 
-        onWordClick?.(lookupWord, getContextFromWords(processedWords, hitIndex));
+        onWordClick?.(lookupWord, getContextFromWords(candidates, hitIndex));
     }
   };
 
@@ -1463,15 +1635,17 @@ interface ReaderProps {
               } as React.CSSProperties
             }
           >
-            {currentSpread.map((pg) => (
+            {currentSpread.map((pg, spreadIndex) => {
+              const isSecondPage = spreadIndex === 1;
+              return (
               <div
                 key={pg}
                 className="relative"
                 style={{ width: renderWidth, height: renderHeight }}
                 onMouseDown={handlePageMouseDown}
-                onMouseUp={handlePageMouseUp}
+                onMouseUp={(e) => handlePageMouseUp(e, pg, isSecondPage)}
                 onPointerDown={handlePagePointerDown}
-                onMouseMove={handlePageMouseMove}
+                onMouseMove={(e) => handlePageMouseMove(e, pg, isSecondPage)}
                 onMouseLeave={handlePageMouseLeave}
               >
                 <PDFPage
@@ -1513,16 +1687,31 @@ interface ReaderProps {
                   </div>
                 )}
               </div>
-            ))}
+            )})}
+            {/* 双页模式：Hover Highlight Overlay (容器级，只渲染一次) */}
+            {hoveredWord && (
+              <div
+                id="pdf-curr-highlight"
+                className="absolute bg-yellow-200/50 rounded-sm transition-opacity pointer-events-none z-30"
+                style={
+                  {
+                    left: `${hoveredWord.rect.left}px`,
+                    top: `${hoveredWord.rect.top}px`,
+                    width: `${hoveredWord.rect.width}px`,
+                    height: `${hoveredWord.rect.height}px`,
+                  } as React.CSSProperties
+                }
+              />
+            )}
           </div>
         ) : (
           // 单页模式：原有渲染
           <div
             ref={pageContainerRef}
             onMouseDown={handlePageMouseDown}
-            onMouseUp={handlePageMouseUp}
+            onMouseUp={(e) => handlePageMouseUp(e, pageNumber)}
             onPointerDown={handlePagePointerDown}
-            onMouseMove={handlePageMouseMove}
+            onMouseMove={(e) => handlePageMouseMove(e, pageNumber)}
             onMouseLeave={handlePageMouseLeave}
             className="relative shadow-lg bg-white"
             style={
