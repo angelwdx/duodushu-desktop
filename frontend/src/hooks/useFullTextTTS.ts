@@ -68,6 +68,8 @@ export interface UseFullTextTTSOptions {
   onPageChange: (page: number) => void;
   /** 翻页后等待内容加载的时间（ms），PDF ≈ 400，EPUB ≈ 1000 */
   pageChangeDelay?: number;
+  /** 翻页步长（双页模式=2，单页模式=1） */
+  pageStep?: number;
 }
 
 export interface UseFullTextTTSReturn {
@@ -157,6 +159,7 @@ export function useFullTextTTS({
   currentPage,
   onPageChange,
   pageChangeDelay = 600,
+  pageStep = 1,
 }: UseFullTextTTSOptions): UseFullTextTTSReturn {
   const getInitialSpeed = () => {
     if (typeof window === 'undefined') return 1;
@@ -193,6 +196,7 @@ export function useFullTextTTS({
   const onPageChangeRef    = useRef(onPageChange);
   const voiceRef           = useRef(voice);
   const pageChangeDelayRef = useRef(pageChangeDelay);
+  const pageStepRef        = useRef(pageStep);
   const speedRef           = useRef(speed);
 
   useEffect(() => { getPageTextRef.current     = getPageText;     }, [getPageText]);
@@ -200,6 +204,7 @@ export function useFullTextTTS({
   useEffect(() => { onPageChangeRef.current    = onPageChange;    }, [onPageChange]);
   useEffect(() => { voiceRef.current           = voice;           }, [voice]);
   useEffect(() => { pageChangeDelayRef.current = pageChangeDelay; }, [pageChangeDelay]);
+  useEffect(() => { pageStepRef.current        = pageStep;        }, [pageStep]);
   useEffect(() => { providerRef.current        = provider;        }, [provider]);
   useEffect(() => {
     speedRef.current = speed;
@@ -433,7 +438,7 @@ export function useFullTextTTS({
           consecutiveEmpty = 0;
         }
 
-        page++;
+        page += pageStepRef.current;
         if (page > totalPagesRef.current) break;
 
         onPageChangeRef.current(page);

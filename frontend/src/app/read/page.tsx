@@ -85,6 +85,34 @@ function ReaderContent() {
   const [visibleContent, setVisibleContent] = useState<string>(""); // 新增：当前视窗可见文本
   const [isContentLoading, setIsContentLoading] = useState(true); // 初始为 true，等待首次内容加载完成
 
+  // 双页模式状态（PDF 专用）
+  const [dualPageMode, setDualPageMode] = useState<boolean>(false);
+  const [coverPageEnabled, setCoverPageEnabled] = useState<boolean>(true);
+
+  // 从 localStorage 加载双页设置
+  useEffect(() => {
+    if (id) {
+      try {
+        const saved = localStorage.getItem(`pdf-dual-page-${id}`);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          setDualPageMode(parsed.enabled ?? false);
+          setCoverPageEnabled(parsed.coverPage ?? true);
+        }
+      } catch { /* ignore */ }
+    }
+  }, [id]);
+
+  // 保存双页设置到 localStorage
+  useEffect(() => {
+    if (id) {
+      localStorage.setItem(`pdf-dual-page-${id}`, JSON.stringify({
+        enabled: dualPageMode,
+        coverPage: coverPageEnabled,
+      }));
+    }
+  }, [id, dualPageMode, coverPageEnabled]);
+
   // 追踪 visibleContent 的变化，用于调试
   useEffect(() => {
     log.debug('visibleContent changed', {
@@ -886,6 +914,10 @@ function ReaderContent() {
                   setIsContentLoading(false); // 内容加载完成
                 }}
                 jumpRequest={jumpRequest}
+                dualPageMode={dualPageMode}
+                coverPageEnabled={coverPageEnabled}
+                onDualPageModeChange={setDualPageMode}
+                onCoverPageChange={setCoverPageEnabled}
               />
             ) : book?.format?.toLowerCase() === "epub" ||
               book?.format?.toLowerCase() === "txt" ? (

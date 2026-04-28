@@ -305,6 +305,8 @@ async function resolveOutlinePageNumbers(
   return Promise.all(outline.map(resolveItem));
 }
 
+type PageSpread = number[];
+
 interface ReaderProps {
   fileUrl: string;
   bookId?: string;
@@ -319,8 +321,14 @@ interface ReaderProps {
   jumpRequest?: { dest: any; text?: string; word?: string; ts: number } | null;
   onAskAI?: (text: string) => void;
   onHighlight?: (text: string, pageNumber: number) => void;
-  onContentChange?: (content: string) => void; // 新增回调
+  onContentChange?: (content: string) => void;
+  dualPageMode?: boolean;
+  coverPageEnabled?: boolean;
+  onDualPageModeChange?: (enabled: boolean) => void;
+  onCoverPageChange?: (enabled: boolean) => void;
 }
+
+  const SPREAD_GAP = 4; // 双页间距（像素）
 
   export default function PDFReader({
     fileUrl,
@@ -336,7 +344,11 @@ interface ReaderProps {
     jumpRequest,
     onAskAI: _onAskAI,
     onHighlight: _onHighlight,
-    onContentChange, // 新增
+    onContentChange,
+    dualPageMode: dualPageModeProp,
+    coverPageEnabled: coverPageEnabledProp,
+    onDualPageModeChange,
+    onCoverPageChange,
   }: ReaderProps) {
   // Inject CSS to narrow the text layer selection blocks
   useEffect(() => {
@@ -433,6 +445,43 @@ interface ReaderProps {
   const [pageInputValue, setPageInputValue] = useState(String(pageNumber));
   const [outline, setOutline] = useState<OutlineItem[]>([]);
   const [showOutline] = useState(false);
+
+  // 双页模式状态（由父组件控制）
+  const dualPageMode = dualPageModeProp ?? false;
+  const coverPageEnabled = coverPageEnabledProp ?? true;
+
+  // 计算所有跨页（spreads）
+  const spreads = useMemo((): PageSpread[] => {
+    const total = numPages || totalPages || 0;
+    if (total === 0) return [];
+    const result: PageSpread[] = [];
+    let page = 1;
+    if (coverPageEnabled) {
+      result.push([page]); // 封面单独一页
+      page = 2;
+    }
+    while (page <= total) {
+      if (page + 1 <= total) {
+        result.push([page, page + 1]);
+        page += 2;
+      } else {
+        result.push([page]);
+        page += 1;
+      }
+    }
+    return result;
+  }, [numPages, totalPages, coverPageEnabled]);
+
+  const currentSpreadIndex = useMemo(() => {
+    if (!dualPageMode) return -1;
+    return spreads.findIndex(spread => spread.includes(pageNumber));
+  }, [dualPageMode, spreads, pageNumber]);
+
+  const currentSpread = useMemo((): PageSpread => {
+    if (!dualPageMode || currentSpreadIndex === -1) return [pageNumber];
+    return spreads[currentSpreadIndex];
+  }, [dualPageMode, currentSpreadIndex, spreads, pageNumber]);
+
   const [showZoomMenu, setShowZoomMenu] = useState(false);
   const [isEditingZoom, setIsEditingZoom] = useState(false);
   const [zoomInputValue, setZoomInputValue] = useState("100");
@@ -456,6 +505,10 @@ interface ReaderProps {
   const pageContainerRef = useRef<HTMLDivElement>(null);
   const zoomMenuRef = useRef<HTMLDivElement>(null);
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  // 双页文本提取缓存
+  const dualPageLoadData = useRef<Map<number, { viewport: any; text: string }>>(new Map());
+  const dualPageSpreadRef = useRef<PageSpread>([]); // 追踪当前 spread 快照
 
   const goToPage = useCallback((page: number) => {
     const validPage = Math.max(1, Math.min(page, numPages || totalPages || 1));
@@ -514,22 +567,27 @@ interface ReaderProps {
     if (!pageDimensions) return 600;
     const PADDING = 32;
     const SAFETY_MARGIN = 16;
-    const TOOLBAR_HEIGHT = 48; // Reserve space for the bottom toolbar
+    const TOOLBAR_HEIGHT = 48;
     const containerWidth = containerSize.width - PADDING - SAFETY_MARGIN;
     const containerHeight = containerSize.height - PADDING - SAFETY_MARGIN - TOOLBAR_HEIGHT;
 
-    if (fitMode === "width") return containerWidth;
+    // 双页模式下，每页可用宽度减半
+    const effectiveContainerWidth = dualPageMode
+      ? (containerWidth - SPREAD_GAP) / 2
+      : containerWidth;
+
+    if (fitMode === "width") return effectiveContainerWidth;
     if (fitMode === "height") {
       const heightScale = containerHeight / pageDimensions.height;
       return pageDimensions.width * heightScale;
     }
     if (fitMode === "page") {
-      const widthScale = containerWidth / pageDimensions.width;
+      const widthScale = effectiveContainerWidth / pageDimensions.width;
       const heightScale = containerHeight / pageDimensions.height;
       return pageDimensions.width * Math.min(widthScale, heightScale);
     }
     return pageDimensions.width * scale;
-  }, [fitMode, scale, pageDimensions, containerSize]);
+  }, [fitMode, scale, pageDimensions, containerSize, dualPageMode]);
 
   const renderWidth = getActualWidth();
 
@@ -791,8 +849,12 @@ interface ReaderProps {
   }, [showZoomMenu]);
 
   useEffect(() => {
-    setPageInputValue(String(pageNumber));
-  }, [pageNumber]);
+    if (dualPageMode && currentSpread.length > 1) {
+      setPageInputValue(`${currentSpread[0]}-${currentSpread[currentSpread.length - 1]}`);
+    } else {
+      setPageInputValue(String(pageNumber));
+    }
+  }, [pageNumber, dualPageMode, currentSpread]);
 
   useEffect(() => {
     const container = contentRef.current;
@@ -948,6 +1010,80 @@ interface ReaderProps {
     });
   }
 
+  // 双页模式文本提取：收集两页文本后合并传给 AI
+  function handleDualPageLoad(pg: number, page: any) {
+    const viewport = page.getViewport({ scale: 1 });
+    // 用第一页的尺寸作为页面尺寸
+    if (pg === currentSpread[0]) {
+      setPageOffset({ x: viewport.offsetX, y: viewport.offsetY });
+      setPageDimensions({ width: viewport.width, height: viewport.height });
+      if (!pendingHighlight) {
+        setTimeout(() => { contentRef.current?.scrollTo(0, 0); }, 0);
+      }
+    }
+
+    const capturedSpread = [...currentSpread];
+    dualPageSpreadRef.current = capturedSpread;
+
+    const extractAndStore = async () => {
+      let extractedText = "";
+      try {
+        const tc = await page.getTextContent();
+        if (tc?.items?.length > 0) {
+          const pageWidth = page.view?.[2] || 0;
+          const pageHeight = page.view?.[3] || 0;
+          const filtered = tc.items.filter((item: any) => {
+            const text = String(item?.str || "").trim();
+            if (!text) return false;
+            const x = Number(item?.transform?.[4] || 0);
+            const y = Number(item?.transform?.[5] || 0);
+            const textLength = text.length;
+            const isNearLeftOrRightEdge = pageWidth > 0 && (x <= pageWidth * 0.2 || x >= pageWidth * 0.8);
+            const isStandalonePageNumber = /^\d{1,4}$/.test(text);
+            const isNearBottomFooter = pageWidth > 0 && pageHeight > 0 && y <= pageHeight * 0.12;
+            if (isStandalonePageNumber && isNearBottomFooter && isNearLeftOrRightEdge) return false;
+            const isVeryNearEdge = pageWidth > 0 && (x <= pageWidth * 0.12 || x >= pageWidth * 0.88);
+            const isShortEdgeHeaderFooter = pageWidth > 0 && pageHeight > 0 && isVeryNearEdge && textLength <= 24 && (y <= pageHeight * 0.08 || y >= pageHeight * 0.93);
+            return !isShortEdgeHeaderFooter;
+          });
+          extractedText = buildStructuredTextFromPDFItems(filtered, pageWidth).trim();
+        }
+      } catch (error) {
+        logger.error(`[PDFReader] Dual page text extraction failed for page ${pg}:`, error);
+      }
+
+      dualPageLoadData.current.set(pg, { viewport, text: extractedText });
+
+      // 检查 spread 中所有页面是否都已加载
+      const allLoaded = capturedSpread.every(p => dualPageLoadData.current.has(p));
+      if (allLoaded) {
+        const combinedText = capturedSpread
+          .map(p => dualPageLoadData.current.get(p)?.text || "")
+          .filter(Boolean)
+          .join("\n\n");
+
+        if (combinedText) {
+          setPageTextForTTS(combinedText);
+          setPageTextForTTSPage(capturedSpread[0]);
+          if (onContentChange) {
+            try {
+              onContentChange(normalizePdfPageText(combinedText));
+            } catch (err) { /* 静默处理 */ }
+          }
+        }
+
+        // 清理不属于当前 spread 的缓存
+        for (const key of dualPageLoadData.current.keys()) {
+          if (!capturedSpread.includes(key)) {
+            dualPageLoadData.current.delete(key);
+          }
+        }
+      }
+    };
+
+    extractAndStore().catch(err => logger.error('[PDFReader] handleDualPageLoad failed:', err));
+  }
+
   const zoomIn = () => {
     setFitMode("none");
     setScale((s) => Math.min(s + 0.1, 3));
@@ -1018,6 +1154,7 @@ interface ReaderProps {
     currentPage: pageNumber,
     onPageChange: goToPage,
     pageChangeDelay: 400,
+    pageStep: dualPageMode ? 2 : 1,
   });
 
   const renderHeight = pageDimensions
@@ -1269,72 +1406,142 @@ interface ReaderProps {
           <div className="p-10 text-center text-gray-500">Loading PDF...</div>
         }
       >
-        <div
-          ref={pageContainerRef}
-          onMouseDown={handlePageMouseDown}
-          onMouseUp={handlePageMouseUp}
-          onPointerDown={handlePagePointerDown}
-          onMouseMove={handlePageMouseMove}
-          onMouseLeave={handlePageMouseLeave}
-          className="relative shadow-lg bg-white"
-          style={
-            {
-              "--render-width": `${renderWidth}px`,
-              "--render-height": `${renderHeight}px`,
-              width: "var(--render-width)",
-              height: "var(--render-height)",
-            } as React.CSSProperties
-          }
-        >
-          <PDFPage
-            key={pageNumber}
-            pageNumber={pageNumber}
-            width={renderWidth}
-            onLoadSuccess={handlePageLoad}
-            renderTextLayer={true}
-            renderAnnotationLayer={false}
-          />
-           {/* Debug / Calibration Layer */}
-           {words && pageDimensions && (
-                <div className="absolute inset-0 pointer-events-none z-10">
-                  {showDebug &&
-                    words.map((w, i) => {
-                      const totalOffsetX = pageOffset.x + manualOffset.x;
-                      const totalOffsetY = pageOffset.y + manualOffset.y;
-                      const scaleFactor = renderWidth / pageDimensions.width;
-                      return (
-                        <div
-                          key={i}
-                          className="absolute border border-red-500/50"
-                          style={
-                            {
-                              left: `${(w.x - totalOffsetX) * scaleFactor}px`,
-                              top: `${(w.y - totalOffsetY) * scaleFactor}px`,
-                              width: `${w.width * scaleFactor}px`,
-                              height: `${w.height * scaleFactor}px`,
-                            } as React.CSSProperties
-                          }
-                        />
-                      );
-                    })}
+        {dualPageMode ? (
+          // 双页模式：并排渲染
+          <div
+            ref={pageContainerRef}
+            className="relative shadow-lg bg-white flex"
+            style={
+              {
+                "--render-width": `${renderWidth * 2 + SPREAD_GAP}px`,
+                "--render-height": `${renderHeight}px`,
+                width: "var(--render-width)",
+                height: "var(--render-height)",
+                gap: `${SPREAD_GAP}px`,
+              } as React.CSSProperties
+            }
+          >
+            {currentSpread.map((pg) => (
+              <div
+                key={pg}
+                className="relative"
+                style={{ width: renderWidth, height: renderHeight }}
+                onMouseDown={handlePageMouseDown}
+                onMouseUp={handlePageMouseUp}
+                onPointerDown={handlePagePointerDown}
+                onMouseMove={handlePageMouseMove}
+                onMouseLeave={handlePageMouseLeave}
+              >
+                <PDFPage
+                  key={pg}
+                  pageNumber={pg}
+                  width={renderWidth}
+                  onLoadSuccess={(page: any) => handleDualPageLoad(pg, page)}
+                  renderTextLayer={true}
+                  renderAnnotationLayer={false}
+                />
+                {/* 双页模式下的 Debug / Calibration Layer */}
+                {words && pageDimensions && showDebug && (
+                  <div className="absolute inset-0 pointer-events-none z-10">
+                    {words
+                      .filter(w => {
+                        // 双页模式下，需要根据 word 的 block_id 或位置判断属于哪一页
+                        // 简化处理：显示所有 words（调试用）
+                        return true;
+                      })
+                      .map((w, i) => {
+                        const totalOffsetX = pageOffset.x + manualOffset.x;
+                        const totalOffsetY = pageOffset.y + manualOffset.y;
+                        const scaleFactor = renderWidth / pageDimensions.width;
+                        return (
+                          <div
+                            key={i}
+                            className="absolute border border-red-500/50"
+                            style={
+                              {
+                                left: `${(w.x - totalOffsetX) * scaleFactor}px`,
+                                top: `${(w.y - totalOffsetY) * scaleFactor}px`,
+                                width: `${w.width * scaleFactor}px`,
+                                height: `${w.height * scaleFactor}px`,
+                              } as React.CSSProperties
+                            }
+                          />
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          // 单页模式：原有渲染
+          <div
+            ref={pageContainerRef}
+            onMouseDown={handlePageMouseDown}
+            onMouseUp={handlePageMouseUp}
+            onPointerDown={handlePagePointerDown}
+            onMouseMove={handlePageMouseMove}
+            onMouseLeave={handlePageMouseLeave}
+            className="relative shadow-lg bg-white"
+            style={
+              {
+                "--render-width": `${renderWidth}px`,
+                "--render-height": `${renderHeight}px`,
+                width: "var(--render-width)",
+                height: "var(--render-height)",
+              } as React.CSSProperties
+            }
+          >
+            <PDFPage
+              key={pageNumber}
+              pageNumber={pageNumber}
+              width={renderWidth}
+              onLoadSuccess={handlePageLoad}
+              renderTextLayer={true}
+              renderAnnotationLayer={false}
+            />
+             {/* Debug / Calibration Layer */}
+             {words && pageDimensions && (
+                  <div className="absolute inset-0 pointer-events-none z-10">
+                    {showDebug &&
+                      words.map((w, i) => {
+                        const totalOffsetX = pageOffset.x + manualOffset.x;
+                        const totalOffsetY = pageOffset.y + manualOffset.y;
+                        const scaleFactor = renderWidth / pageDimensions.width;
+                        return (
+                          <div
+                            key={i}
+                            className="absolute border border-red-500/50"
+                            style={
+                              {
+                                left: `${(w.x - totalOffsetX) * scaleFactor}px`,
+                                top: `${(w.y - totalOffsetY) * scaleFactor}px`,
+                                width: `${w.width * scaleFactor}px`,
+                                height: `${w.height * scaleFactor}px`,
+                              } as React.CSSProperties
+                            }
+                          />
+                        );
+                      })}
 
-                  {hoveredWord && (
-                    <div
-                      id="pdf-curr-highlight"
-                      className="absolute bg-yellow-200/50 rounded-sm transition-opacity"
-                      style={
-                        {
-                          left: `${hoveredWord.rect.left}px`,
-                          top: `${hoveredWord.rect.top}px`,
-                          width: `${hoveredWord.rect.width}px`,
-                          height: `${hoveredWord.rect.height}px`,
-                        } as React.CSSProperties
-                      }
-                    />
-                  )}
-                </div>
-              )}
-        </div>
+                    {hoveredWord && (
+                      <div
+                        id="pdf-curr-highlight"
+                        className="absolute bg-yellow-200/50 rounded-sm transition-opacity"
+                        style={
+                          {
+                            left: `${hoveredWord.rect.left}px`,
+                            top: `${hoveredWord.rect.top}px`,
+                            width: `${hoveredWord.rect.width}px`,
+                            height: `${hoveredWord.rect.height}px`,
+                          } as React.CSSProperties
+                        }
+                      />
+                    )}
+                  </div>
+                )}
+          </div>
+        )}
       </Document>
   );
 
@@ -1356,16 +1563,20 @@ interface ReaderProps {
 
   // 手势翻页处理
   const handlePrevPage = useCallback(() => {
-    if (pageNumber > 1) {
+    if (dualPageMode && currentSpreadIndex > 0) {
+      goToPage(spreads[currentSpreadIndex - 1][0]);
+    } else if (!dualPageMode && pageNumber > 1) {
       goToPage(pageNumber - 1);
     }
-  }, [pageNumber, goToPage]);
+  }, [dualPageMode, currentSpreadIndex, spreads, pageNumber, goToPage]);
 
   const handleNextPage = useCallback(() => {
-    if (pageNumber < (numPages || totalPages || 1)) {
+    if (dualPageMode && currentSpreadIndex < spreads.length - 1) {
+      goToPage(spreads[currentSpreadIndex + 1][0]);
+    } else if (!dualPageMode && pageNumber < (numPages || totalPages || 1)) {
       goToPage(pageNumber + 1);
     }
-  }, [pageNumber, numPages, totalPages, goToPage]);
+  }, [dualPageMode, currentSpreadIndex, spreads, pageNumber, numPages, totalPages, goToPage]);
 
   // 绑定手势 (仅在非选择模式下启用)
   const gestureBind = useReaderGestures(handlePrevPage, handleNextPage, viewMode === "pdf" && !isSelecting);
@@ -1580,21 +1791,34 @@ interface ReaderProps {
         {/* Navigation */}
         <div className="flex items-center gap-4">
           <button
-            onClick={() => goToPage(pageNumber - 1)}
-            disabled={pageNumber <= 1}
+            onClick={handlePrevPage}
+            disabled={dualPageMode ? currentSpreadIndex <= 0 : pageNumber <= 1}
             className="p-1.5 hover:bg-black/5 rounded-full text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             title="上一页"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
           </button>
-          
+
           <div className="flex items-center gap-2 font-medium tabular-nums text-gray-700 cursor-text hover:bg-black/5 px-2 py-1 rounded-md transition-colors group relative">
              <input
               type="text"
               value={pageInputValue}
               onChange={(e) => setPageInputValue(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && goToPage(parseInt(pageInputValue))}
-              className="w-10 text-center bg-transparent border-none p-0 focus:ring-0 text-gray-900 font-semibold"
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                const val = pageInputValue.split("-")[0]; // 支持 "2-3" 格式，取第一个页码
+                const targetPage = parseInt(val);
+                if (!targetPage) return;
+                if (dualPageMode) {
+                  // 找到包含目标页的 spread，跳转到其起始页
+                  const spreadIdx = spreads.findIndex(s => s.includes(targetPage));
+                  if (spreadIdx !== -1) goToPage(spreads[spreadIdx][0]);
+                  else goToPage(targetPage);
+                } else {
+                  goToPage(targetPage);
+                }
+              }}
+              className={`${dualPageMode && currentSpread.length > 1 ? "w-14" : "w-10"} text-center bg-transparent border-none p-0 focus:ring-0 text-gray-900 font-semibold`}
               onClick={(e) => (e.target as HTMLInputElement).select()}
             />
             <span className="text-gray-400 select-none">/</span>
@@ -1602,8 +1826,8 @@ interface ReaderProps {
           </div>
 
           <button
-            onClick={() => goToPage(pageNumber + 1)}
-            disabled={pageNumber >= (numPages || totalPages || 9999)}
+            onClick={handleNextPage}
+            disabled={dualPageMode ? currentSpreadIndex >= spreads.length - 1 : pageNumber >= (numPages || totalPages || 9999)}
             className="p-1.5 hover:bg-black/5 rounded-full text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             title="下一页"
           >
@@ -1721,6 +1945,32 @@ interface ReaderProps {
                              </div>
                              <button onClick={zoomIn} className="w-8 h-8 flex items-center justify-center hover:bg-gray-100 rounded-full text-gray-600 transition-colors"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg></button>
                         </div>
+
+                        <div className="h-px bg-gray-100/80 my-2 scale-x-90"></div>
+
+                        <div className="px-3 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest">双页设置</div>
+                        <button
+                          onClick={() => {
+                            onDualPageModeChange?.(!dualPageMode);
+                            setShowZoomMenu(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 text-sm rounded-xl flex items-center justify-between transition-colors ${dualPageMode ? "bg-blue-50/80 text-blue-600" : "hover:bg-gray-100/80 text-gray-700"}`}
+                        >
+                          双页模式
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                          </svg>
+                        </button>
+                        {dualPageMode && (
+                          <button
+                            onClick={() => {
+                              onCoverPageChange?.(!coverPageEnabled);
+                            }}
+                            className={`w-full text-left px-3 py-2 text-sm rounded-xl flex items-center justify-between transition-colors ${coverPageEnabled ? "bg-blue-50/80 text-blue-600" : "hover:bg-gray-100/80 text-gray-700"}`}
+                          >
+                            首页为封面
+                          </button>
+                        )}
                     </div>
                  )}
              </div>
