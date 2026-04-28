@@ -1,6 +1,6 @@
 {
   "name": "duodushu-desktop",
-  "version": "1.0.9",
+  "version": "1.1.0",
   "description": "Immersive English Learning Workstation",
   "main": "dist/main.js",
   "scripts": {
