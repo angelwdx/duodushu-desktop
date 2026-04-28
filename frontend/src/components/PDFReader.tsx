@@ -67,7 +67,13 @@ function sortPDFTextItemsByReadingOrder(items: any[], pageWidth: number): any[] 
     // 因 y 坐标偏高而被排在数字（如"16"/"2"）之前，导致序数词顺序错误。
     const aHeight = Number(a?.height || 0);
     const bHeight = Number(b?.height || 0);
-    const lineThreshold = Math.max(4, Math.max(aHeight, bHeight) * 0.65);
+    // 当两个 item 高度差异很大时（如 drop cap 首字下沉 vs 正文），
+    // 用较小的高度计算阈值，避免超大阈值将不同行的文字误判为同一行。
+    const maxHeight = Math.max(aHeight, bHeight);
+    const minHeight = Math.min(aHeight, bHeight);
+    const heightRatio = maxHeight / Math.max(1, minHeight);
+    const referenceHeight = heightRatio > 1.5 ? minHeight : maxHeight;
+    const lineThreshold = Math.max(4, referenceHeight * 0.65);
     if (Math.abs(ay - by) > lineThreshold) return by - ay; // y desc（高处先读）
     return Number(a?.transform?.[4] || 0) - Number(b?.transform?.[4] || 0); // x asc
   };
@@ -1011,6 +1017,7 @@ interface ReaderProps {
   }
 
   // 双页模式文本提取：收集两页文本后合并传给 AI
+  // 优先使用后端已存储的正确文本，仅在后端文本为空时回退到 PDF.js 提取
   function handleDualPageLoad(pg: number, page: any) {
     const viewport = page.getViewport({ scale: 1 });
     // 用第一页的尺寸作为页面尺寸
@@ -1024,11 +1031,42 @@ interface ReaderProps {
 
     const capturedSpread = [...currentSpread];
     dualPageSpreadRef.current = capturedSpread;
+    const capturedPageNumber = pg;
 
     const extractAndStore = async () => {
+      // 第一页优先使用后端文本（textContent prop 来自父组件的 API 数据）
+      if (pg === capturedSpread[0] && typeof textContent === "string") {
+        const backendText = textContent.trim();
+        if (backendText) {
+          dualPageLoadData.current.set(pg, { viewport, text: backendText });
+          checkAndCombine(capturedSpread);
+          return;
+        }
+      }
+
+      // 第二页尝试从后端 API 获取，失败则回退到 PDF.js 提取
+      if (pg !== capturedSpread[0] && bookId) {
+        try {
+          const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+          const res = await fetch(`${apiUrl}/api/books/${bookId}/pages/${pg}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.text_content?.trim()) {
+              dualPageLoadData.current.set(pg, { viewport, text: data.text_content.trim() });
+              checkAndCombine(capturedSpread);
+              return;
+            }
+          }
+        } catch {
+          // API 获取失败，回退到 PDF.js
+        }
+      }
+
+      // PDF.js 提取（后端文本不可用时的回退方案）
       let extractedText = "";
       try {
         const tc = await page.getTextContent();
+        if (capturedPageNumber !== pageNumber) return; // 已翻页
         if (tc?.items?.length > 0) {
           const pageWidth = page.view?.[2] || 0;
           const pageHeight = page.view?.[3] || 0;
@@ -1052,36 +1090,40 @@ interface ReaderProps {
         logger.error(`[PDFReader] Dual page text extraction failed for page ${pg}:`, error);
       }
 
+      if (capturedPageNumber !== pageNumber) return; // 已翻页，丢弃
       dualPageLoadData.current.set(pg, { viewport, text: extractedText });
-
-      // 检查 spread 中所有页面是否都已加载
-      const allLoaded = capturedSpread.every(p => dualPageLoadData.current.has(p));
-      if (allLoaded) {
-        const combinedText = capturedSpread
-          .map(p => dualPageLoadData.current.get(p)?.text || "")
-          .filter(Boolean)
-          .join("\n\n");
-
-        if (combinedText) {
-          setPageTextForTTS(combinedText);
-          setPageTextForTTSPage(capturedSpread[0]);
-          if (onContentChange) {
-            try {
-              onContentChange(normalizePdfPageText(combinedText));
-            } catch (err) { /* 静默处理 */ }
-          }
-        }
-
-        // 清理不属于当前 spread 的缓存
-        for (const key of dualPageLoadData.current.keys()) {
-          if (!capturedSpread.includes(key)) {
-            dualPageLoadData.current.delete(key);
-          }
-        }
-      }
+      checkAndCombine(capturedSpread);
     };
 
     extractAndStore().catch(err => logger.error('[PDFReader] handleDualPageLoad failed:', err));
+  }
+
+  // 检查 spread 中所有页面是否都已加载，若完成则合并文本
+  function checkAndCombine(spread: PageSpread) {
+    const allLoaded = spread.every(p => dualPageLoadData.current.has(p));
+    if (!allLoaded) return;
+
+    const combinedText = spread
+      .map(p => dualPageLoadData.current.get(p)?.text || "")
+      .filter(Boolean)
+      .join("\n\n");
+
+    if (combinedText) {
+      setPageTextForTTS(combinedText);
+      setPageTextForTTSPage(spread[0]);
+      if (onContentChange) {
+        try {
+          onContentChange(normalizePdfPageText(combinedText));
+        } catch (err) { /* 静默处理 */ }
+      }
+    }
+
+    // 清理不属于当前 spread 的缓存
+    for (const key of dualPageLoadData.current.keys()) {
+      if (!spread.includes(key)) {
+        dualPageLoadData.current.delete(key);
+      }
+    }
   }
 
   const zoomIn = () => {
