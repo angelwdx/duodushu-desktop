@@ -1831,7 +1831,7 @@ export default function EPUBReader({
                          const startContainer = rangeStart.startContainer;
                          const endContainer = rangeEnd.endContainer;
                          const doc = startContainer.ownerDocument;
-                         
+
                          // Check if same document and nodes are still in DOM
                          if (doc && doc === endContainer.ownerDocument && doc.contains(startContainer) && doc.contains(endContainer)) {
                              const range = doc.createRange();
@@ -1840,14 +1840,22 @@ export default function EPUBReader({
                                  // Verify offset is within bounds to avoid IndexSizeError
                                  const endOffset = Math.min(rangeEnd.endOffset, endContainer.nodeType === 3 ? (endContainer.textContent?.length || 0) : endContainer.childNodes.length);
                                  range.setEnd(endContainer, endOffset);
-                                 
-                                 const text = range.toString().trim();
+
+                                 // 清理假名标注
+                                 let text = range.toString().trim();
+                                 const div = doc.createElement('div');
+                                 div.appendChild(range.cloneContents());
+                                 text = extractPlainTextFromBody(div);
                                  log.debug('INIT SYNC - Text length:', text.length);
                                  onContentChange(text);
                              } catch (rangeOpErr) {
                                  log.debug('INIT SYNC - Range operation failed (offsets may be stale):', rangeOpErr);
                                  // Fallback: Safe truncation
-                                 const startText = rangeStart.toString().trim();
+                                 let startText = rangeStart.toString().trim();
+                                 // 清理假名
+                                 const tempDiv = doc.createElement('div');
+                                 tempDiv.textContent = startText;
+                                 startText = extractPlainTextFromBody(tempDiv);
                                  if (startText.length > 2000) {
                                      onContentChange(startText.substring(0, 2000) + "\n...(truncated)");
                                  } else {
@@ -1856,9 +1864,12 @@ export default function EPUBReader({
                              }
                          } else {
                              // Fallback for cross-chapter or detached nodes
-                             const sText = rangeStart.toString().trim();
-                             const eText = rangeEnd.toString().trim();
-                             const combined = sText + "\n...\n" + eText;
+                             let sText = rangeStart.toString().trim();
+                             let eText = rangeEnd.toString().trim();
+                             // 清理假名
+                             const tempDiv1 = doc.createElement('div');
+                             tempDiv1.textContent = sText + "\n...\n" + eText;
+                             const combined = extractPlainTextFromBody(tempDiv1);
                              if (combined.length > 5000) {
                                  onContentChange(combined.substring(0, 5000) + "\n...(truncated)");
                              } else {
@@ -1868,7 +1879,12 @@ export default function EPUBReader({
                          }
                      } else if (rangeStart) {
                          // 只有 start 成功
-                         const startText = rangeStart.toString().trim();
+                         const doc = rangeStart.startContainer.ownerDocument;
+                         let startText = rangeStart.toString().trim();
+                         // 清理假名
+                         const tempDiv2 = doc.createElement('div');
+                         tempDiv2.textContent = startText;
+                         startText = extractPlainTextFromBody(tempDiv2);
                          if (startText.length > 3000) {
                              onContentChange(startText.substring(0, 2000) + "\n...(truncated)");
                          } else {
@@ -1880,7 +1896,17 @@ export default function EPUBReader({
                      // Simple fallback - 最后尝试
                      try {
                        const range = await book.getRange(start);
-                       if (range) onContentChange(range.toString());
+                       if (range) {
+                         // 清理假名
+                         let text = range.toString().trim();
+                         const doc = range.startContainer?.ownerDocument;
+                         if (doc) {
+                           const tempDiv = doc.createElement('div');
+                           tempDiv.textContent = text;
+                           text = extractPlainTextFromBody(tempDiv);
+                         }
+                         onContentChange(text);
+                       }
                      } catch (finalErr) {
                        log.debug('Final getRange fallback failed:', finalErr);
                      }
@@ -2002,11 +2028,17 @@ export default function EPUBReader({
                                  const maxEnd = endContainer.nodeType === 3 ? (endContainer.textContent?.length || 0) : endContainer.childNodes.length;
                                  const endOffset = Math.min(rangeEnd.endOffset, maxEnd);
                                  range.setEnd(endContainer, endOffset);
-                                 text = range.toString().trim();
+                                 // 清理假名
+                                 const div = doc.createElement('div');
+                                 div.appendChild(range.cloneContents());
+                                 text = extractPlainTextFromBody(div);
                              } catch (rangeOpErr) {
                                  log.debug('Relocated sync - Range operation failed:', rangeOpErr);
                                  // Fallback: Safe truncation if start range is too large (likely whole chapter/wrapper)
-                                 const startText = rangeStart.toString().trim();
+                                 let startText = rangeStart.toString().trim();
+                                 const tempDiv = doc.createElement('div');
+                                 tempDiv.textContent = startText;
+                                 startText = extractPlainTextFromBody(tempDiv);
                                  if (startText.length > 2000) {
                                      // Likely an element fallback, truncate
                                      text = startText.substring(0, 2000) + "\n...(truncated)";
@@ -2016,10 +2048,13 @@ export default function EPUBReader({
                              }
                         } else {
                              // Fallback for cross-document (unlikely in single-view) or disconnected nodes
-                             const sText = rangeStart.toString().trim();
-                             const eText = rangeEnd.toString().trim();
+                             let sText = rangeStart.toString().trim();
+                             let eText = rangeEnd.toString().trim();
+                             // 清理假名
+                             const tempDiv1 = doc.createElement('div');
+                             tempDiv1.textContent = sText + "\n...\n" + eText;
+                             const combined = extractPlainTextFromBody(tempDiv1);
                              // If fallback creates massive text, truncate
-                             const combined = sText + "\n...\n" + eText;
                              if (combined.length > 5000) {
                                  text = combined.substring(0, 5000) + "\n...(truncated)";
                              } else {
@@ -2028,9 +2063,14 @@ export default function EPUBReader({
                         }
                    } else if (rangeStart) {
                         // Only start range available (end failed)
-                        const startText = rangeStart.toString().trim();
+                        const doc = rangeStart.startContainer.ownerDocument;
+                        let startText = rangeStart.toString().trim();
+                        // 清理假名
+                        const tempDiv2 = doc.createElement('div');
+                        tempDiv2.textContent = startText;
+                        startText = extractPlainTextFromBody(tempDiv2);
                         // 关键修复: 如果只有 start 且内容极长，说明可能选中了整个章节容器
-                        if (startText.length > 3000) { 
+                        if (startText.length > 3000) {
                              log.warn('Fallback extraction used start-only which is very long, truncating.');
                              text = startText.substring(0, 2000) + "\n...(truncated)";
                         } else {
@@ -2040,16 +2080,28 @@ export default function EPUBReader({
                  } catch (rangeErr) {
                    log.debug('Range extraction failed, trying fallback...');
                  }
-                  
+
                   // 2. 如果主方式失败或结果为空，尝试兜底方式：单点提取
                   if (!text) {
                     try {
-                      text = rendition.getRange(start).toString().trim();
+                      const range = rendition.getRange(start);
+                      if (range) {
+                        // 清理假名
+                        const doc = range.startContainer?.ownerDocument;
+                        let rawText = range.toString().trim();
+                        if (doc) {
+                          const tempDiv = doc.createElement('div');
+                          tempDiv.textContent = rawText;
+                          text = extractPlainTextFromBody(tempDiv);
+                        } else {
+                          text = rawText;
+                        }
+                      }
                     } catch (fallbackErr) {
                       log.debug('Fallback extraction failed');
                     }
                   }
-                  
+
                   if (text) {
                     log.debug('Extracted visible text:', { length: text.length, preview: text.substring(0, 50) + '...' });
                     onContentChange(text);

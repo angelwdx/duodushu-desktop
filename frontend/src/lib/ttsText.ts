@@ -404,9 +404,121 @@ export function stripMarkdownForTTS(text: string): string {
   return plainText.trim();
 }
 
+function removeInvisibleCharactersForTTS(text: string): string {
+  return text
+    .replace(/\u00A0/g, " ")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, " ");
+}
+
+function isMarkdownSeparatorLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+
+  if (/^(?:[-*_]\s*){3,}$/.test(trimmed)) return true;
+  if (/^\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?$/.test(trimmed)) return true;
+
+  return false;
+}
+
+function normalizeMarkdownLineForTTS(text: string, fallbackLanguage?: string | null): string {
+  let normalized = text.trim();
+  if (!normalized || isMarkdownSeparatorLine(normalized)) return "";
+
+  const isCJKLine = containsCJK(normalized) || /^(?:zh|ja)/i.test((fallbackLanguage || "").trim());
+
+  if (normalized.includes("|")) {
+    const cells = normalized
+      .split("|")
+      .map((cell) => cell.trim())
+      .filter(Boolean);
+
+    if (cells.length >= 2) {
+      normalized = cells.join(isCJKLine ? "，" : ", ");
+    }
+  }
+
+  // AI 回答常见的中文编号、任务列表和复选框在 stripMarkdownForTTS 后仍可能保留。
+  normalized = normalized.replace(/^\[(?: |x|X)\]\s+/, "");
+  normalized = normalized.replace(/^[（(]\d+[)）]\s*/, "");
+  normalized = normalized.replace(/^\d+[)）]\s*/, "");
+  normalized = normalized.replace(/^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]\s*/, "");
+
+  if (isCJKLine) {
+    normalized = normalized.replace(/\s*\/\s*/g, "、");
+    normalized = normalized.replace(/\s*[|｜]\s*/g, "，");
+    normalized = normalized.replace(/\s*[—–-]{2,}\s*/g, "，");
+  }
+
+  normalized = normalized.replace(/[ \t]{2,}/g, " ").trim();
+
+  return normalized;
+}
+
+function normalizeAIResponseLineForTTS(text: string): string {
+  let normalized = text.trim();
+  if (!normalized || isMarkdownSeparatorLine(normalized)) return "";
+
+  normalized = normalized.replace(/^\[(?: |x|X)\]\s+/, "");
+  normalized = normalized.replace(/^[-*+•]\s+/, "");
+  normalized = normalized.replace(/^[（(]\d+[)）]\s*/, "");
+  normalized = normalized.replace(/^\d+[.、]\s+/, "");
+  normalized = normalized.replace(/^\d+[)）]\s*/, "");
+  normalized = normalized.replace(/^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]\s*/, "");
+  normalized = normalized.replace(/[ \t]{2,}/g, " ").trim();
+
+  return normalized;
+}
+
+function ensureSentenceEndingForTTS(text: string): string {
+  if (!text) return "";
+  return endsWithSentencePunctuation(text) || /[：:]$/.test(text) ? text : `${text}。`;
+}
+
+export function preprocessAIResponseEdgeChineseTTS(text: string): string {
+  if (!text) return "";
+
+  const stripped = stripMarkdownForTTS(removeInvisibleCharactersForTTS(text));
+  const rawParagraphs = stripped
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split(/\n\s*\n/);
+
+  const paragraphs = rawParagraphs
+    .map((paragraph) =>
+      paragraph
+        .split("\n")
+        .map(normalizeAIResponseLineForTTS)
+        .filter(Boolean)
+        .join(" ")
+        .replace(/[ \t]{2,}/g, " ")
+        .trim(),
+    )
+    .filter(Boolean)
+    .map(ensureSentenceEndingForTTS);
+
+  return preprocessTTSPlainText(paragraphs.join(" "), "zh");
+}
+
+export function preprocessMarkdownTTSPlainText(text: string, language?: string | null): string {
+  if (!text) return "";
+
+  const stripped = stripMarkdownForTTS(removeInvisibleCharactersForTTS(text));
+  const normalized = stripped
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => normalizeMarkdownLineForTTS(line, language))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return preprocessTTSPlainText(normalized, language);
+}
+
 export function preprocessTTSPlainText(text: string, language?: string | null): string {
   if (!text) return "";
-  let processed = text;
+  let processed = removeInvisibleCharactersForTTS(text);
   const isJapanese = typeof language === "string" && language.toLowerCase().startsWith("ja");
 
   // 过滤常见的纯页码页脚，避免 PDF 朗读把页码念出来。

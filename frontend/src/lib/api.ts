@@ -339,14 +339,18 @@ export async function deleteVocabulary(id: number) {
   return res.json();
 }
 
-export async function generateSpeech(text: string, voice: string = "default") {
+export async function generateSpeech(
+  text: string,
+  voice: string = "default",
+  provider?: TTSConfig["provider"],
+) {
   // Sanitize text for TTS
   const sanitizedText = text.replace(/\//g, ", ");
 
   const res = await fetchWithTimeout(`${API_URL}/api/tts/`, TTS_TIMEOUT, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: sanitizedText, voice }),
+    body: JSON.stringify({ text: sanitizedText, voice, provider }),
   });
   if (!res.ok) throw new Error("Failed to generate speech");
   const data = await res.json();
@@ -361,6 +365,7 @@ export async function generateSpeech(text: string, voice: string = "default") {
 export async function streamSpeech(
   text: string,
   voice: string = "default",
+  provider?: TTSConfig["provider"],
 ): Promise<string> {
   // Sanitize text for TTS: replace slashes with commas to avoid reading "slash"
   const sanitizedText = text.replace(/\//g, ", ");
@@ -368,7 +373,7 @@ export async function streamSpeech(
   const res = await fetchWithTimeout(`${API_URL}/api/tts/stream`, TTS_TIMEOUT, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: sanitizedText, voice }),
+    body: JSON.stringify({ text: sanitizedText, voice, provider }),
   });
   if (!res.ok) {
     let detail = "Failed to stream speech";

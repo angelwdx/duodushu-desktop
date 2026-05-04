@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from fastapi.responses import FileResponse, Response
 from fastapi import HTTPException
-from typing import AsyncGenerator, Dict, List, Optional, Tuple
+from typing import AsyncGenerator, Dict, List, Literal, Optional, Tuple
 from app.config import UPLOADS_DIR
 from app.services.japanese_text_service import JAPANESE_READING_VERSION, normalize_japanese_text_for_tts
 from app.services.tts_providers import (
@@ -32,6 +32,7 @@ CONTENT_TYPE_EXTENSIONS = {
 MAX_CACHE_FILES = 50000
 MAX_CACHE_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
 TTS_CACHE_VERSION = f"tts-v2:{JAPANESE_READING_VERSION}"
+TTSProvider = Literal["edge", "openai_api", "qwen3"]
 
 
 def _get_tts_config() -> dict:
@@ -43,14 +44,25 @@ def _get_tts_config() -> dict:
         return {}
 
 
-def get_active_tts_provider() -> BaseTTSProvider:
-    """根据当前配置实例化 TTS Provider"""
-    return build_provider_from_config(_get_tts_config())
-
-
-def _build_cache_key(text: str, voice: str) -> str:
+def _get_effective_tts_config(provider_override: Optional[TTSProvider] = None) -> dict:
     tts_config = _get_tts_config()
-    normalized_config = json.dumps(tts_config, ensure_ascii=False, sort_keys=True)
+    if provider_override is None:
+        return tts_config
+
+    return {
+        **tts_config,
+        "provider": provider_override,
+    }
+
+
+def get_active_tts_provider(provider_override: Optional[TTSProvider] = None) -> BaseTTSProvider:
+    """根据当前配置实例化 TTS Provider"""
+    return build_provider_from_config(_get_effective_tts_config(provider_override))
+
+
+def _build_cache_key(text: str, voice: str, provider_override: Optional[TTSProvider] = None) -> str:
+    effective_tts_config = _get_effective_tts_config(provider_override)
+    normalized_config = json.dumps(effective_tts_config, ensure_ascii=False, sort_keys=True)
     normalized_text = normalize_japanese_text_for_tts(text)
     return hashlib.md5(
         f"{TTS_CACHE_VERSION}-{normalized_text}-{voice}-{normalized_config}".encode("utf-8")
@@ -152,13 +164,17 @@ async def _get_lock(cache_key: str) -> asyncio.Lock:
         return _generation_locks[cache_key]
 
 
-async def get_or_generate_audio(text: str, voice: str = "default") -> tuple[str, bytes]:
+async def get_or_generate_audio(
+    text: str,
+    voice: str = "default",
+    provider_override: Optional[TTSProvider] = None,
+) -> tuple[str, bytes]:
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text is empty")
 
-    provider = get_active_tts_provider()
+    provider = get_active_tts_provider(provider_override)
     normalized_text = normalize_japanese_text_for_tts(text)
-    cache_key = _build_cache_key(text, voice)
+    cache_key = _build_cache_key(text, voice, provider_override)
 
     cached = _load_cached_audio(cache_key)
     if cached is not None:
@@ -183,7 +199,11 @@ async def get_or_generate_audio(text: str, voice: str = "default") -> tuple[str,
             raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
 
 
-async def generate_speech_file(text: str, voice: str = "default") -> str:
+async def generate_speech_file(
+    text: str,
+    voice: str = "default",
+    provider_override: Optional[TTSProvider] = None,
+) -> str:
     """
     生成语音并缓存到磁盘，返回音频文件的绝对路径。
     使用锁防止重复生成。
@@ -191,31 +211,39 @@ async def generate_speech_file(text: str, voice: str = "default") -> str:
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text is empty")
 
-    cache_key = _build_cache_key(text, voice)
+    cache_key = _build_cache_key(text, voice, provider_override)
     cached_path = _find_cached_audio_path(cache_key)
     if cached_path:
         return str(cached_path)
 
-    await get_or_generate_audio(text, voice)
+    await get_or_generate_audio(text, voice, provider_override)
     file_path = _find_cached_audio_path(cache_key)
     if file_path:
         return str(file_path)
     raise HTTPException(status_code=500, detail="TTS generation failed: cache file missing")
 
 
-async def stream_speech(text: str, voice: str = "default") -> AsyncGenerator[bytes, None]:
+async def stream_speech(
+    text: str,
+    voice: str = "default",
+    provider_override: Optional[TTSProvider] = None,
+) -> AsyncGenerator[bytes, None]:
     """
     流式生成语音字节块。适合长文本，音频可以更快开始播放。
     """
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text is empty")
 
-    _, audio_bytes = await get_or_generate_audio(text, voice)
+    _, audio_bytes = await get_or_generate_audio(text, voice, provider_override)
     yield audio_bytes
 
 
-async def get_stream_response(text: str, voice: str = "default") -> Response:
-    content_type, audio_bytes = await get_or_generate_audio(text, voice)
+async def get_stream_response(
+    text: str,
+    voice: str = "default",
+    provider_override: Optional[TTSProvider] = None,
+) -> Response:
+    content_type, audio_bytes = await get_or_generate_audio(text, voice, provider_override)
     return Response(content=audio_bytes, media_type=content_type)
 
 
