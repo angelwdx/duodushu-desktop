@@ -27,6 +27,7 @@ class Book(Base):
     total_pages = Column(Integer)
     status = Column(String, default="processing")
     book_type = Column(String, default="normal")  # 'normal' | 'webnovel'
+    language = Column(String, default="unknown")
     created_at = Column(SADateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -92,6 +93,16 @@ class CacheAudio(Base):
 
     text_hash = Column(String, primary_key=True, index=True)
     audio_data = Column(LargeBinary, nullable=False)
+    created_at = Column(SADateTime(timezone=True), server_default=func.now())
+
+
+class CacheFurigana(Base):
+    __tablename__ = "cache_furigana"
+
+    text_hash = Column(String, primary_key=True, index=True)
+    text = Column(Text, nullable=False)
+    segments = Column(JSON, nullable=False)
+    has_furigana = Column(Integer, default=0)
     created_at = Column(SADateTime(timezone=True), server_default=func.now())
 
 

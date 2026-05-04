@@ -1,15 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useReaderGestures } from '../hooks/useReaderGestures';
 import { useFullTextTTS } from '../hooks/useFullTextTTS';
 import TTSLoadingDots from './TTSLoadingDots';
 import { saveEpubState, getEpubState } from '../lib/epubCache';
 import { createLogger } from '../lib/logger';
-import { getApiUrl } from '../lib/api';
+import { generateJapaneseFurigana, getApiUrl, type FuriganaAnnotation } from '../lib/api';
+import { containsJapaneseText, isJapaneseBookLanguage } from '../lib/japaneseText';
 import { preprocessTTSPlainText } from '../lib/ttsText';
 
 const log = createLogger('EPUBReader');
+const FURIGANA_PREFERENCE_KEY = 'reader_japanese_furigana_enabled';
+
+function getEffectiveFuriganaLineHeight(lineHeight: number, enabled: boolean): number {
+  if (!enabled) return lineHeight;
+  return Math.max(lineHeight, 2.05);
+}
 
 const TTS_SPEED_OPTIONS = [
   { value: 1, label: '1.0x' },
@@ -27,11 +34,25 @@ interface OutlineItem {
   level?: number;
 }
 
+interface EpubLayoutState {
+  writingMode: string;
+  isVertical: boolean;
+  pageProgression: 'ltr' | 'rtl';
+}
+
+const LOOKUP_WORD_CHAR_PATTERN = /[\w\u00C0-\u024F\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヵヶー'-]/;
+const LOOKUP_WORD_EDGE_PATTERN = /^[^A-Za-z0-9\u00C0-\u024F\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヵヶー'-]+|[^A-Za-z0-9\u00C0-\u024F\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヵヶー'-]+$/g;
+const LOOKUP_WORD_EDGE_QUOTES_PATTERN = /^['-]+|['-]+$/g;
+const SENTENCE_SPLIT_PATTERN = /[^。！？.!?\n]+[。！？.!?]*/g;
+const FORCE_HORIZONTAL_LAYOUT_STYLE_ID = 'duodushu-force-horizontal-layout';
+const EPUB_STAGE_OVERRIDE_STYLE_ID = 'duodushu-epub-stage-overrides';
+
 interface EPUBReaderProps {
   initialProgress?: number;
   initialChapter?: number;
   fileUrl: string;
   bookId?: string;
+  bookLanguage?: string | null;
   onWordClick?: (word: string, context?: string) => void;
   onOutlineChange?: (outline: OutlineItem[]) => void;
   onPageChange?: (progress: number) => void;
@@ -44,6 +65,7 @@ interface EPUBReaderProps {
 export default function EPUBReader({
   fileUrl,
   bookId,
+  bookLanguage,
   initialProgress,
   initialChapter, // 新增
   onWordClick,
@@ -58,6 +80,13 @@ export default function EPUBReader({
   const renditionRef = useRef<any>(null);
   const saveProgressTimeout = useRef<NodeJS.Timeout | null>(null);
   const currentCfiRef = useRef<string | null>(null);
+  const contentLayoutRef = useRef<EpubLayoutState>({
+    writingMode: 'horizontal-tb',
+    isVertical: false,
+    pageProgression: 'ltr',
+  });
+  const bookDirectionRef = useRef<'ltr' | 'rtl'>('ltr');
+  const forceHorizontalLayoutRef = useRef(false);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +106,14 @@ export default function EPUBReader({
   const appearanceMenuRef = useRef<HTMLDivElement>(null);
   const lastProcessedJumpTs = useRef<number>(0);
   const jumpRequestedBeforeReadyRef = useRef<{ dest: string | number; text?: string; word?: string; ts: number } | null>(null);
+  const isJapaneseBook = useMemo(() => isJapaneseBookLanguage(bookLanguage), [bookLanguage]);
+  const [showFurigana, setShowFurigana] = useState(false);
+  const furiganaCacheRef = useRef<Map<string, FuriganaAnnotation>>(new Map());
+  const furiganaEnabledRef = useRef(false);
+  // 用于检测外观设置的实际变化（区分"初次挂载"和"值真的改变了"）
+  const prevShowFuriganaRef = useRef<boolean | undefined>(undefined);
+  const prevFontFamilyRef = useRef<string | undefined>(undefined);
+  const prevLineHeightRef = useRef<number | undefined>(undefined);
   
   // Ref to hold latest settings for hooks to avoid stale closures
   const settingsRef = useRef({
@@ -89,6 +126,457 @@ export default function EPUBReader({
   useEffect(() => {
     settingsRef.current = { fontFamily, lineHeight, fontSize };
   }, [fontFamily, lineHeight, fontSize]);
+
+  useEffect(() => {
+    if (!isJapaneseBook) {
+      setShowFurigana(false);
+      return;
+    }
+
+    const saved = window.localStorage.getItem(FURIGANA_PREFERENCE_KEY);
+    setShowFurigana(saved === null ? true : saved === 'true');
+  }, [isJapaneseBook]);
+
+  useEffect(() => {
+    if (!isJapaneseBook) return;
+    window.localStorage.setItem(FURIGANA_PREFERENCE_KEY, String(showFurigana));
+  }, [isJapaneseBook, showFurigana]);
+
+  useEffect(() => {
+    furiganaEnabledRef.current = isJapaneseBook && showFurigana;
+  }, [isJapaneseBook, showFurigana]);
+
+  useEffect(() => {
+    forceHorizontalLayoutRef.current = isJapaneseBook;
+  }, [isJapaneseBook]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    let style = document.getElementById(EPUB_STAGE_OVERRIDE_STYLE_ID) as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement('style');
+      style.id = EPUB_STAGE_OVERRIDE_STYLE_ID;
+      document.head.appendChild(style);
+    }
+
+    style.textContent = `
+      .epub-container {
+        scrollbar-width: none !important;
+        -ms-overflow-style: none !important;
+      }
+      .epub-container::-webkit-scrollbar {
+        display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+      }
+      .epub-container .epub-view,
+      .epub-container .epub-view iframe {
+        scrollbar-width: none !important;
+        -ms-overflow-style: none !important;
+      }
+      .epub-container .epub-view iframe::-webkit-scrollbar {
+        display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+      }
+    `;
+  }, []);
+
+  const normalizeWritingMode = useCallback((mode: string): string => {
+    const normalized = mode.trim().toLowerCase();
+    if (!normalized) return '';
+    if (normalized === 'tb-rl') return 'vertical-rl';
+    if (normalized === 'tb-lr') return 'vertical-lr';
+    if (normalized === 'lr-tb') return 'horizontal-tb';
+    return normalized;
+  }, []);
+
+  const getDocumentWritingMode = useCallback((doc: Document | null | undefined): string => {
+    if (!doc?.documentElement || !doc.defaultView) return '';
+    const readWritingMode = (element: Element | null | undefined) => {
+      if (!element) return '';
+      const style = doc.defaultView!.getComputedStyle(element) as CSSStyleDeclaration & {
+        webkitWritingMode?: string;
+      };
+      return normalizeWritingMode(style.writingMode || style.webkitWritingMode || '');
+    };
+
+    const htmlMode = readWritingMode(doc.documentElement);
+    if (htmlMode && htmlMode !== 'horizontal-tb') return htmlMode;
+    return readWritingMode(doc.body) || htmlMode || '';
+  }, [normalizeWritingMode]);
+
+  const ensureDocumentHead = useCallback((doc: Document): HTMLHeadElement | null => {
+    if (doc.head) return doc.head;
+
+    const html = doc.documentElement;
+    if (!html) return null;
+
+    let head = doc.querySelector('head');
+    if (!head) {
+      head = doc.createElement('head');
+      html.insertBefore(head, html.firstChild);
+    }
+
+    return head as HTMLHeadElement;
+  }, []);
+
+  const forceHorizontalWritingModeInDocument = useCallback((doc: Document | null | undefined) => {
+    if (!doc?.documentElement) return;
+
+    const head = ensureDocumentHead(doc);
+    if (!head) return;
+
+    const html = doc.documentElement as HTMLElement;
+    const body = doc.body ?? doc.querySelector('body');
+
+    html.setAttribute('dir', 'ltr');
+    html.style.setProperty('writing-mode', 'horizontal-tb');
+    html.style.setProperty('-webkit-writing-mode', 'horizontal-tb');
+    html.style.setProperty('text-orientation', 'mixed');
+
+    if (body instanceof HTMLElement) {
+      body.setAttribute('dir', 'ltr');
+      body.style.setProperty('writing-mode', 'horizontal-tb');
+      body.style.setProperty('-webkit-writing-mode', 'horizontal-tb');
+      body.style.setProperty('text-orientation', 'mixed');
+    }
+
+    let style = doc.getElementById(FORCE_HORIZONTAL_LAYOUT_STYLE_ID) as HTMLStyleElement | null;
+    if (!style) {
+      style = doc.createElement('style');
+      style.id = FORCE_HORIZONTAL_LAYOUT_STYLE_ID;
+      head.appendChild(style);
+    }
+
+    style.textContent = `
+      html, body, body *:not(svg):not(svg *):not(math):not(math *) {
+        writing-mode: horizontal-tb !important;
+        -webkit-writing-mode: horizontal-tb !important;
+        text-orientation: mixed !important;
+      }
+      html, body {
+        direction: ltr !important;
+      }
+      ruby, ruby * {
+        writing-mode: horizontal-tb !important;
+        -webkit-writing-mode: horizontal-tb !important;
+      }
+      ruby rt {
+        text-orientation: mixed !important;
+      }
+    `;
+  }, [ensureDocumentHead]);
+
+  const getDocumentDirection = useCallback((doc: Document | null | undefined): '' | 'ltr' | 'rtl' => {
+    if (!doc?.documentElement || !doc.defaultView) return '';
+
+    const readDirection = (element: Element | null | undefined): '' | 'ltr' | 'rtl' => {
+      if (!element) return '';
+      const style = doc.defaultView!.getComputedStyle(element);
+      const direction = (style.direction || '').trim().toLowerCase();
+      if (direction === 'ltr' || direction === 'rtl') {
+        return direction;
+      }
+
+      const attrDirection = element.getAttribute('dir')?.trim().toLowerCase();
+      if (attrDirection === 'ltr' || attrDirection === 'rtl') {
+        return attrDirection;
+      }
+
+      return '';
+    };
+
+    return readDirection(doc.documentElement) || readDirection(doc.body);
+  }, []);
+
+  const resolveContentLayoutState = useCallback((doc: Document | null | undefined): EpubLayoutState => {
+    if (forceHorizontalLayoutRef.current) {
+      return {
+        writingMode: 'horizontal-tb',
+        isVertical: false,
+        pageProgression: 'ltr',
+      };
+    }
+
+    const writingMode = getDocumentWritingMode(doc) || 'horizontal-tb';
+    const explicitDirection = getDocumentDirection(doc);
+    const inferredProgression =
+      explicitDirection ||
+      (writingMode === 'vertical-rl' ? 'rtl' : writingMode === 'vertical-lr' ? 'ltr' : bookDirectionRef.current);
+
+    return {
+      writingMode,
+      isVertical: writingMode.startsWith('vertical'),
+      pageProgression: inferredProgression === 'rtl' ? 'rtl' : 'ltr',
+    };
+  }, [getDocumentDirection, getDocumentWritingMode]);
+
+  const syncContentLayoutState = useCallback((doc: Document | null | undefined): EpubLayoutState => {
+    const layoutState = resolveContentLayoutState(doc);
+    contentLayoutRef.current = layoutState;
+    return layoutState;
+  }, [resolveContentLayoutState]);
+
+  const restoreFuriganaInDocument = useCallback((doc: Document | null | undefined) => {
+    if (!doc) return;
+    doc.querySelectorAll<HTMLElement>('[data-duodushu-furigana="true"]').forEach((wrapper) => {
+      const originalText = wrapper.dataset.originalText ?? wrapper.textContent ?? '';
+      wrapper.replaceWith(doc.createTextNode(originalText));
+    });
+  }, []);
+
+  const createFuriganaWrapper = useCallback((
+    doc: Document,
+    annotation: FuriganaAnnotation,
+    originalText: string,
+  ) => {
+    const wrapper = doc.createElement('span');
+    wrapper.dataset.duodushuFurigana = 'true';
+    wrapper.dataset.originalText = originalText;
+
+    annotation.segments.forEach((segment) => {
+      if (segment.type === 'text') {
+        wrapper.appendChild(doc.createTextNode(segment.text));
+        return;
+      }
+
+      const ruby = doc.createElement('ruby');
+      ruby.className = 'duodushu-ruby';
+      ruby.appendChild(doc.createTextNode(segment.base));
+
+      const rt = doc.createElement('rt');
+      rt.className = 'duodushu-ruby-rt';
+      rt.textContent = segment.reading;
+      ruby.appendChild(rt);
+      wrapper.appendChild(ruby);
+    });
+
+    return wrapper;
+  }, []);
+
+  // 注意：此函数通过 furiganaEnabledRef.current（而非闭包中的 showFurigana）读取假名开关，
+  // 保证被 epub.js hooks 注册的旧引用也能拿到最新状态。
+  const applyFuriganaToDocument = useCallback(async (doc: Document | null | undefined) => {
+    if (!doc?.body) return;
+
+    restoreFuriganaInDocument(doc);
+    // 使用 ref 而非闭包中的 showFurigana，避免 hook 注册时捕获旧闭包导致假名不持久
+    if (!furiganaEnabledRef.current) return;
+
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    const candidates: Text[] = [];
+    let currentNode = walker.nextNode();
+
+    while (currentNode) {
+      const textNode = currentNode as Text;
+      const text = textNode.nodeValue ?? '';
+      const parent = textNode.parentElement;
+      const parentTag = parent?.tagName ?? '';
+      const blockedParent =
+        parentTag === 'SCRIPT' ||
+        parentTag === 'STYLE' ||
+        parentTag === 'NOSCRIPT' ||
+        parentTag === 'RT' ||
+        parentTag === 'RP' ||
+        parentTag === 'RUBY' ||
+        // epub 自带 ruby 可能有 <rb> 等中间层，用 closest 检测任意祖先
+        parent?.closest('ruby') != null ||
+        parent?.closest('[data-duodushu-furigana="true"]') != null;
+
+      if (!blockedParent && text.trim() && containsJapaneseText(text)) {
+        candidates.push(textNode);
+      }
+
+      currentNode = walker.nextNode();
+    }
+
+    if (candidates.length === 0) return;
+
+    const missingTexts = Array.from(
+      new Set(
+        candidates
+          .map((node) => node.nodeValue ?? '')
+          .filter((text) => text.trim() && !furiganaCacheRef.current.has(text)),
+      ),
+    );
+
+    let index = 0;
+    while (index < missingTexts.length) {
+      const batch: string[] = [];
+      let charCount = 0;
+
+      while (
+        index < missingTexts.length &&
+        batch.length < 120 &&
+        charCount + missingTexts[index].length <= 24000
+      ) {
+        batch.push(missingTexts[index]);
+        charCount += missingTexts[index].length;
+        index += 1;
+      }
+
+      const items = await generateJapaneseFurigana(batch);
+      items.forEach((item) => {
+        furiganaCacheRef.current.set(item.text, item);
+      });
+    }
+
+    candidates.forEach((node) => {
+      const originalText = node.nodeValue ?? '';
+      const annotation = furiganaCacheRef.current.get(originalText);
+      if (!annotation?.has_furigana || !node.parentNode) return;
+      node.parentNode.replaceChild(createFuriganaWrapper(doc, annotation, originalText), node);
+    });
+  }, [createFuriganaWrapper, restoreFuriganaInDocument]);
+
+  // Ref 始终指向最新的 applyFuriganaToDocument，供 epub.js hook（旧闭包中）调用
+  const applyFuriganaToDocumentRef = useRef(applyFuriganaToDocument);
+  useEffect(() => {
+    applyFuriganaToDocumentRef.current = applyFuriganaToDocument;
+  }, [applyFuriganaToDocument]);
+
+  const extractPlainTextFromBody = useCallback((body: HTMLElement | null | undefined) => {
+    if (!body) return '';
+    const clone = body.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll<HTMLElement>('[data-duodushu-furigana="true"]').forEach((wrapper) => {
+      const originalText = wrapper.dataset.originalText ?? wrapper.textContent ?? '';
+      wrapper.replaceWith(clone.ownerDocument.createTextNode(originalText));
+    });
+
+    clone.querySelectorAll('ruby').forEach((ruby) => {
+      const baseText = Array.from(ruby.childNodes)
+        .filter((node) => {
+          const parentElement = node.parentElement;
+          return !(parentElement && ['RT', 'RP'].includes(parentElement.tagName));
+        })
+        .map((node) => {
+          // 不能用 instanceof HTMLElement — 来自 epub.js iframe 的节点
+          // 使用的是 iframe 内部的构造函数，与主窗口的 HTMLElement 不同，
+          // 导致 instanceof 检查始终返回 false，RT/RP 的假名文本会泄漏到结果中。
+          if (node.nodeType === 1 && ['RT', 'RP'].includes((node as Element).tagName)) {
+            return '';
+          }
+          return node.textContent ?? '';
+        })
+        .join('');
+
+      ruby.replaceWith(clone.ownerDocument.createTextNode(baseText));
+    });
+
+    clone.querySelectorAll('rt, rp').forEach((node) => node.remove());
+    return clone.innerText || clone.textContent || '';
+  }, []);
+
+  const applyReaderStylesToContents = useCallback((contents: any) => {
+    const doc = contents?.document as Document | undefined;
+    if (!doc?.documentElement || !doc.head) return;
+
+    const currentSettings = settingsRef.current;
+    const currentFont = currentSettings.fontFamily;
+    const effectiveLineHeight = getEffectiveFuriganaLineHeight(
+      currentSettings.lineHeight,
+      furiganaEnabledRef.current,
+    );
+    const { writingMode, pageProgression } = syncContentLayoutState(doc);
+    doc.documentElement.dataset.duodushuWritingMode = writingMode;
+    doc.documentElement.dataset.duodushuPageProgression = pageProgression;
+
+    let style = doc.getElementById('user-appearance-overrides');
+    if (!style) {
+      style = doc.createElement('style');
+      style.id = 'user-appearance-overrides';
+      doc.head.appendChild(style);
+    }
+
+    const fontStack = currentFont === 'serif'
+      ? 'Georgia, "Times New Roman", serif'
+      : 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+
+    style.innerHTML = `
+      /* epub.js 自行管理 html/body 的 overflow、height、width，
+         此处仅隐藏滚动条（视觉层面），不干涉布局属性。
+         如果覆盖了 overflow: hidden 或 height: 100%，会导致
+         epub.js 的 textWidth()（通过 range.getBoundingClientRect()）
+         返回被截断的宽度，iframe 无法被正确扩展到多列内容的
+         完整宽度，翻页后显示空白。 */
+       html {
+           scrollbar-width: none !important;
+           -ms-overflow-style: none !important;
+       }
+       body {
+           scrollbar-width: none !important;
+           -ms-overflow-style: none !important;
+       }
+       html::-webkit-scrollbar,
+       body::-webkit-scrollbar {
+           display: none !important;
+           width: 0 !important;
+           height: 0 !important;
+       }
+        body, p, div, span, li, blockquote {
+            font-family: ${fontStack} !important;
+            line-height: ${effectiveLineHeight} !important;
+        }
+       html[data-duodushu-writing-mode^="vertical"],
+       html[data-duodushu-writing-mode^="vertical"] body {
+           width: 100% !important;
+           height: 100% !important;
+           text-align: start !important;
+           vertical-align: top !important;
+       }
+       html[data-duodushu-writing-mode^="vertical"] body > * {
+           vertical-align: top !important;
+       }
+       html[data-duodushu-writing-mode^="vertical"] span[data-duodushu-furigana="true"] {
+           text-orientation: mixed !important;
+       }
+       span[data-duodushu-furigana="true"] {
+           display: inline !important;
+           white-space: inherit !important;
+           overflow-wrap: normal !important;
+           word-break: keep-all !important;
+      }
+      ruby.duodushu-ruby {
+          ruby-position: over;
+          ruby-align: center;
+          ruby-overhang: auto;
+          writing-mode: inherit;
+          line-height: inherit;
+      }
+       ruby.duodushu-ruby rt.duodushu-ruby-rt {
+           font-size: 0.55em;
+           line-height: 1;
+           color: #0369a1;
+           user-select: none;
+           white-space: nowrap;
+       }
+       html[data-duodushu-writing-mode^="vertical"] ruby.duodushu-ruby {
+           ruby-position: inter-character;
+       }
+       html[data-duodushu-writing-mode^="vertical"] ruby.duodushu-ruby rt.duodushu-ruby-rt {
+           font-size: 0.45em;
+           writing-mode: inherit;
+           text-orientation: upright;
+           white-space: nowrap;
+           letter-spacing: 0;
+       }
+     `;
+  }, [syncContentLayoutState]);
+
+  const remeasureCurrentEpubViews = useCallback(() => {
+    const manager = renditionRef.current?.manager;
+    const displayedViews = manager?.views?.displayed?.() ?? [];
+
+    displayedViews.forEach((view: any) => {
+      try {
+        view.expand?.();
+      } catch (error) {
+        log.debug('EPUB view remeasure failed:', error);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -133,6 +621,120 @@ export default function EPUBReader({
           log.debug('safeSetRangeEnd failed:', e);
       }
   };
+
+  const getRangeVisualRect = useCallback((range: Range | null | undefined): DOMRect | null => {
+      if (!range) return null;
+      const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 || rect.height > 0);
+      return rects[0] ?? range.getBoundingClientRect();
+  }, []);
+
+  const positionOverlayElement = useCallback((overlay: HTMLElement | null | undefined, rect: DOMRect | null | undefined) => {
+      if (!overlay || !rect || (!rect.width && !rect.height)) {
+          if (overlay) {
+              overlay.style.display = 'none';
+          }
+          return;
+      }
+
+      overlay.style.width = `${Math.max(rect.width + 4, 4)}px`;
+      overlay.style.height = `${Math.max(rect.height + 4, 4)}px`;
+      overlay.style.top = `${rect.top - 2}px`;
+      overlay.style.left = `${rect.left - 2}px`;
+      overlay.style.display = 'block';
+  }, []);
+
+  const normalizeLookupWord = useCallback((rawWord: string): string => {
+      const trimmed = rawWord
+          .trim()
+          .replace(LOOKUP_WORD_EDGE_PATTERN, '')
+          .replace(LOOKUP_WORD_EDGE_QUOTES_PATTERN, '');
+
+      if (!trimmed) return '';
+      return containsJapaneseText(trimmed) ? trimmed : trimmed.toLowerCase();
+  }, []);
+
+  const extractContextSentence = useCallback((rawText: string, target: string): string => {
+      const fullText = rawText.replace(/\s+/g, ' ').trim();
+      if (!fullText) return '';
+
+      const sentences = fullText.match(SENTENCE_SPLIT_PATTERN) || [];
+      const normalizedTarget = containsJapaneseText(target) ? target : target.toLowerCase();
+
+      for (const sentence of sentences) {
+          const candidate = sentence.trim();
+          if (!candidate) continue;
+
+          const haystack = containsJapaneseText(normalizedTarget) ? candidate : candidate.toLowerCase();
+          if (haystack.includes(normalizedTarget)) {
+              return candidate;
+          }
+      }
+
+      return fullText.length > 200 ? `${fullText.substring(0, 200).trim()}...` : fullText;
+  }, []);
+
+  const getContentsViewportPoint = useCallback((contents: any, event: MouseEvent) => {
+      const doc = contents?.document as Document | undefined;
+      const win = contents?.window as Window | undefined;
+
+      if (!doc || !win) {
+          return { x: event.clientX, y: event.clientY };
+      }
+
+      const targetDoc = (event.target as Node | null)?.ownerDocument;
+      if (event.view === win || targetDoc === doc) {
+          return { x: event.clientX, y: event.clientY };
+      }
+
+      const frameElement = win.frameElement as HTMLElement | null;
+      if (!frameElement) {
+          return { x: event.clientX, y: event.clientY };
+      }
+
+      const frameRect = frameElement.getBoundingClientRect();
+      return {
+          x: event.clientX - frameRect.left,
+          y: event.clientY - frameRect.top,
+      };
+  }, []);
+
+  const expandRangeToWord = useCallback((doc: Document, sourceRange: Range | null | undefined): Range | null => {
+      if (!sourceRange || sourceRange.startContainer.nodeType !== Node.TEXT_NODE) {
+          return null;
+      }
+
+      const textNode = sourceRange.startContainer as Text;
+      const text = textNode.textContent ?? '';
+      if (!text) return null;
+
+      const offset = Math.min(Math.max(0, sourceRange.startOffset), text.length);
+      const anchorIndex =
+          offset < text.length && LOOKUP_WORD_CHAR_PATTERN.test(text[offset])
+              ? offset
+              : offset > 0 && LOOKUP_WORD_CHAR_PATTERN.test(text[offset - 1])
+                  ? offset - 1
+                  : -1;
+
+      if (anchorIndex === -1) {
+          return null;
+      }
+
+      let start = anchorIndex;
+      let end = anchorIndex + 1;
+
+      while (start > 0 && LOOKUP_WORD_CHAR_PATTERN.test(text[start - 1])) {
+          start -= 1;
+      }
+
+      while (end < text.length && LOOKUP_WORD_CHAR_PATTERN.test(text[end])) {
+          end += 1;
+      }
+
+      const expandedRange = doc.createRange();
+      safeSetRangeStart(expandedRange, textNode, start);
+      safeSetRangeEnd(expandedRange, textNode, end);
+      return expandedRange;
+  }, []);
 
   // 辅助函数：处理文本搜索和高亮
   const handleTextSearch = useCallback(async (text: string, word?: string, maxAttempts = 15, pageOffset = 0, retryLevel = 0) => {
@@ -391,13 +993,13 @@ export default function EPUBReader({
                   }
 
                   // --- 关键修复：使用 Overlay 而非修改 DOM 节点 ---
-                  const searchOverlay = doc.getElementById('search-highlight-overlay');
-                  if (searchOverlay && word) {
-                      const rect = range.getBoundingClientRect();
+                      const searchOverlay = doc.getElementById('search-highlight-overlay') as HTMLElement | null;
+                   if (searchOverlay && word) {
+                      const rect = getRangeVisualRect(range);
 
-                      // 在找到的范围内二次搜索单词位置
-                      const foundText = range.toString();
-                      const wordIndex = foundText.toLowerCase().indexOf(word.toLowerCase());
+                       // 在找到的范围内二次搜索单词位置
+                       const foundText = range.toString();
+                       const wordIndex = foundText.toLowerCase().indexOf(word.toLowerCase());
 
                       if (wordIndex !== -1) {
                           // 尝试精确定位单词
@@ -411,58 +1013,38 @@ export default function EPUBReader({
                                   const wordEnd = wordStart + word.length;
                                   const maxLen = textContent.length;
 
-                                  safeSetRangeStart(wordRange, startNode, Math.min(wordStart, maxLen));
-                                  safeSetRangeEnd(wordRange, startNode, Math.min(wordEnd, maxLen));
+                                   safeSetRangeStart(wordRange, startNode, Math.min(wordStart, maxLen));
+                                   safeSetRangeEnd(wordRange, startNode, Math.min(wordEnd, maxLen));
 
-                                  const wordRect = wordRange.getBoundingClientRect();
-                                  searchOverlay.style.width = `${wordRect.width + 4}px`;
-                                  searchOverlay.style.height = `${wordRect.height + 4}px`;
-                                  searchOverlay.style.top = `${wordRect.top + win.scrollY - 2}px`;
-                                  searchOverlay.style.left = `${wordRect.left + win.scrollX - 2}px`;
-                                  searchOverlay.style.display = 'block';
-                                  log.info('Overlay displayed for word');
-                              } catch (wordRangeErr) {
-                                  // 降级：使用完整范围
-                                  searchOverlay.style.width = `${rect.width + 4}px`;
-                                  searchOverlay.style.height = `${rect.height + 4}px`;
-                                  searchOverlay.style.top = `${rect.top + win.scrollY - 2}px`;
-                                  searchOverlay.style.left = `${rect.left + win.scrollX - 2}px`;
-                                  searchOverlay.style.display = 'block';
-                              }
-                          } else {
-                              // 非文本节点，使用完整范围
-                              searchOverlay.style.width = `${rect.width + 4}px`;
-                              searchOverlay.style.height = `${rect.height + 4}px`;
-                              searchOverlay.style.top = `${rect.top + win.scrollY - 2}px`;
-                              searchOverlay.style.left = `${rect.left + win.scrollX - 2}px`;
-                              searchOverlay.style.display = 'block';
-                          }
-                      } else {
-                          // 单词不在范围内，使用完整范围
-                          searchOverlay.style.width = `${rect.width + 4}px`;
-                          searchOverlay.style.height = `${rect.height + 4}px`;
-                          searchOverlay.style.top = `${rect.top + win.scrollY - 2}px`;
-                          searchOverlay.style.left = `${rect.left + win.scrollX - 2}px`;
-                          searchOverlay.style.display = 'block';
-                      }
+                                   const wordRect = getRangeVisualRect(wordRange);
+                                   positionOverlayElement(searchOverlay, wordRect ?? rect);
+                                   log.info('Overlay displayed for word');
+                               } catch (wordRangeErr) {
+                                   // 降级：使用完整范围
+                                   log.debug('Word range overlay fallback:', wordRangeErr);
+                                   positionOverlayElement(searchOverlay, rect);
+                               }
+                           } else {
+                               // 非文本节点，使用完整范围
+                               positionOverlayElement(searchOverlay, rect);
+                           }
+                       } else {
+                           // 单词不在范围内，使用完整范围
+                           positionOverlayElement(searchOverlay, rect);
+                       }
 
-                      // 3秒后自动隐藏
-                      setTimeout(() => {
-                          searchOverlay.style.display = 'none';
-                      }, 3000);
-                  } else if (searchOverlay) {
-                      // 没有指定 word，使用完整范围
-                      const rect = range.getBoundingClientRect();
-                      searchOverlay.style.width = `${rect.width + 4}px`;
-                      searchOverlay.style.height = `${rect.height + 4}px`;
-                      searchOverlay.style.top = `${rect.top + win.scrollY - 2}px`;
-                      searchOverlay.style.left = `${rect.left + win.scrollX - 2}px`;
-                      searchOverlay.style.display = 'block';
+                       // 3秒后自动隐藏
+                       setTimeout(() => {
+                           searchOverlay.style.display = 'none';
+                       }, 3000);
+                   } else if (searchOverlay) {
+                       // 没有指定 word，使用完整范围
+                       positionOverlayElement(searchOverlay, getRangeVisualRect(range));
 
-                      setTimeout(() => {
-                          searchOverlay.style.display = 'none';
-                      }, 3000);
-                  }
+                       setTimeout(() => {
+                           searchOverlay.style.display = 'none';
+                       }, 3000);
+                   }
 
                   lastHighlightRef.current = { text, word, ts: Date.now() };
                   setIsSearching(false);
@@ -505,7 +1087,7 @@ export default function EPUBReader({
           setIsSearching(false);
       }
       return false;
-  }, []);
+  }, [getRangeVisualRect, positionOverlayElement]);
 
   // Ensure client-side only
   useEffect(() => {
@@ -863,6 +1445,8 @@ export default function EPUBReader({
     let stableTimeout: NodeJS.Timeout;
 
     const initBook = async () => {
+      setLoading(true);
+      setError(null);
       setIsReadyToSave(false);
       setRenditionReady(false);
       log.debug('Starting init', { fileUrl });
@@ -889,53 +1473,57 @@ export default function EPUBReader({
       bookRef.current = book;
       await book.ready;
       if (isCancelled) return;
+      if (isJapaneseBook) {
+        book.package.metadata.direction = 'ltr';
+        bookDirectionRef.current = 'ltr';
+        contentLayoutRef.current = {
+          writingMode: 'horizontal-tb',
+          isVertical: false,
+          pageProgression: 'ltr',
+        };
+        book.spine.hooks.content.register((doc: Document) => {
+          forceHorizontalWritingModeInDocument(doc);
+        });
+      } else {
+        bookDirectionRef.current = book.package?.metadata?.direction === 'rtl' ? 'rtl' : 'ltr';
+      }
 
       rendition = book.renderTo(containerRef.current!, {
         width: '100%',
         height: '100%',
+        manager: 'default',
         spread: 'none',
         flow: 'paginated',
       });
       renditionRef.current = rendition;
+      if (isJapaneseBook) {
+        rendition.direction('ltr');
+      }
       rendition.themes.fontSize(`${fontSize}%`);
-      
 
+      // Inject on new content — 使用 ref 访问最新函数，避免旧闭包导致假名失效
+      rendition.hooks.content.register((contents: any) => {
+        applyReaderStylesToContents(contents);
+        void applyFuriganaToDocumentRef.current(contents.document)
+          .catch((error) => {
+            log.warn('EPUB furigana injection failed:', error);
+          })
+          .finally(() => {
+            remeasureCurrentEpubViews();
+          });
+      });
 
-  // ... (inside initBook)
-      const applyUserStyles = (contents: any) => {
-         const doc = contents.document;
-         if (!doc) return;
-         
-         // Use ref to get latest settings
-         const currentSettings = settingsRef.current;
-         const currentFont = currentSettings.fontFamily;
-         const currentLineHeight = currentSettings.lineHeight;
-
-         let style = doc.getElementById('user-appearance-overrides');
-         if (!style) {
-             style = doc.createElement('style');
-             style.id = 'user-appearance-overrides';
-             doc.head.appendChild(style);
-         }
-         
-         const fontStack = currentFont === 'serif' 
-            ? 'Georgia, "Times New Roman", serif' 
-            : 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
-
-         style.innerHTML = `
-            body, p, div, span, li, blockquote {
-                font-family: ${fontStack} !important;
-                line-height: ${currentLineHeight} !important;
-            }
-         `;
-      };
-      
-      // Inject on new content
-      rendition.hooks.content.register(applyUserStyles);
-      
       // Apply to existing content immediately
-      rendition.getContents().forEach(applyUserStyles);
-
+      rendition.getContents().forEach((contents: any) => {
+        applyReaderStylesToContents(contents);
+        void applyFuriganaToDocumentRef.current(contents.document)
+          .catch((error) => {
+            log.warn('EPUB furigana injection failed:', error);
+          })
+          .finally(() => {
+            remeasureCurrentEpubViews();
+          });
+      });
 
       // Inject global styles for selection state
       rendition.hooks.content.register((contents: any) => {
@@ -998,7 +1586,7 @@ export default function EPUBReader({
           // Create Highlight Overlay
           const overlay = doc.createElement('div');
           overlay.id = 'word-highlight-overlay';
-          overlay.style.position = 'absolute';
+          overlay.style.position = 'fixed';
           overlay.style.backgroundColor = 'rgba(255, 235, 100, 0.4)'; // Slightly warmer yellow
           overlay.style.pointerEvents = 'none'; // Click-through
           overlay.style.zIndex = '0'; // Behind text if possible, but standard flow puts it on top usually unless z-index managed. 
@@ -1012,7 +1600,7 @@ export default function EPUBReader({
           // Create Search Highlight Overlay (Solid underline or box)
           const searchOverlay = doc.createElement('div');
           searchOverlay.id = 'search-highlight-overlay';
-          searchOverlay.style.position = 'absolute';
+          searchOverlay.style.position = 'fixed';
           searchOverlay.style.backgroundColor = 'rgba(255, 150, 0, 0.2)';
           searchOverlay.style.borderBottom = '2px solid #ff9800';
           searchOverlay.style.pointerEvents = 'none';
@@ -1032,85 +1620,49 @@ export default function EPUBReader({
              }
           });
 
-          doc.addEventListener('mousemove', (e: MouseEvent) => {
-              if (isDragging) {
-                  doc.body.classList.add('selecting');
-                  return;
-              }
-
-              // Word Highlighting Logic
-              // Use standard browser API to get range at point
-              let range;
-              if (doc.caretRangeFromPoint) {
-                  range = doc.caretRangeFromPoint(e.clientX, e.clientY);
-              } else if (doc.caretPositionFromPoint) {
-                  const pos = doc.caretPositionFromPoint(e.clientX, e.clientY);
-                  range = doc.createRange();
-                  try {
-                      const maxOff = pos.offsetNode.nodeType === 3 ? (pos.offsetNode.textContent?.length || 0) : pos.offsetNode.childNodes.length;
-                      range.setStart(pos.offsetNode, Math.min(pos.offset, maxOff));
-                      range.collapse(true);
-                  } catch (reErr) {
-                      log.debug('Caret position range failed:', reErr);
-                  }
-              }
-
-              if (range && range.startContainer && range.startContainer.nodeType === 3) { // Ensure it's a text node
-                  // Expand to word
-                  try {
-                       // Custom expansion since range.expand('word') is non-standard/flaky
-                       const textNode = range.startContainer;
-                       const offset = range.startOffset;
-                       const text = textNode.textContent || '';
-                       
-                       // Find word boundaries
-                       let start = offset;
-                       let end = offset;
-                       
-                       // Search backward
-                       while (start > 0 && /[\w\u00C0-\u024F\u4e00-\u9fa5'-]/.test(text[start - 1])) {
-                           start--;
-                       }
-                       // Search forward
-                       while (end < text.length && /[\w\u00C0-\u024F\u4e00-\u9fa5'-]/.test(text[end])) {
-                           end++;
-                       }
-
-                       if (end > start) {
-                           try {
-                               const maxOffset = textNode.textContent?.length || 0;
-                               range.setStart(textNode, Math.min(start, maxOffset));
-                               range.setEnd(textNode, Math.min(end, maxOffset));
-                           } catch (reErr) {
-                               log.debug('MouseMove expansion range failed:', reErr);
-                           }
-                           
-                           const word = range.toString();
-                           // Only highlight if it looks like a real word (skip empty or just punctuation)
-                           if (word.trim().length > 0) {
-                               const rect = range.getBoundingClientRect();
-                               
-                               // Convert rect to document coordinates (since overlay is absolute in body)
-                               // Note: getBoundingClientRect is relative to viewport. 
-                               // If iframe scrolls, we usually need window.scrollX/Y, but epub.js might handle flow differently.
-                               // In 'paginated' flow, body usually doesn't scroll standardly, but pages are swapped.
-                               // We'll trust absolute positioning relative to viewport for now or check scroll.
-                               
-                               overlay.style.width = `${rect.width}px`;
-                               overlay.style.height = `${rect.height}px`;
-                               overlay.style.top = `${rect.top + win.scrollY}px`;
-                               overlay.style.left = `${rect.left + win.scrollX}px`;
-                               overlay.style.display = 'block';
-                               return;
-                           }
-                        }
-                   } catch {
-                       // processing error, ignore
-                   }
+           doc.addEventListener('mousemove', (e: MouseEvent) => {
+               if (isDragging) {
+                   doc.body.classList.add('selecting');
+                   return;
                }
-               // If we didn't return above, hide overlay
-               overlay.style.display = 'none';
-           });
+
+               // Word Highlighting Logic
+               // Use standard browser API to get range at point
+               let range: Range | null = null;
+               const point = getContentsViewportPoint(contents, e);
+                if (doc.caretRangeFromPoint) {
+                    range = doc.caretRangeFromPoint(point.x, point.y);
+                } else if (doc.caretPositionFromPoint) {
+                    const pos = doc.caretPositionFromPoint(point.x, point.y);
+                    if (pos) {
+                        const caretRange = doc.createRange();
+                        range = caretRange;
+                        try {
+                            const maxOff = pos.offsetNode.nodeType === 3 ? (pos.offsetNode.textContent?.length || 0) : pos.offsetNode.childNodes.length;
+                            caretRange.setStart(pos.offsetNode, Math.min(pos.offset, maxOff));
+                            caretRange.collapse(true);
+                       } catch (reErr) {
+                           log.debug('Caret position range failed:', reErr);
+                       }
+                    }
+               }
+
+               if (range) {
+                   try {
+                        const wordRange = expandRangeToWord(doc, range);
+                        const word = normalizeLookupWord(wordRange?.toString() ?? '');
+
+                        if (wordRange && word) {
+                            positionOverlayElement(overlay, getRangeVisualRect(wordRange));
+                            return;
+                        }
+                    } catch (error) {
+                        log.debug('MouseMove word highlight failed:', error);
+                    }
+                }
+                // If we didn't return above, hide overlay
+                overlay.style.display = 'none';
+            });
 
           doc.addEventListener('mouseup', () => {
               isDragging = false;
@@ -1122,16 +1674,16 @@ export default function EPUBReader({
                   if (selection && !selection.isCollapsed) {
                       const text = selection.toString().trim();
                       if (text.length > 0) {
-                          try {
-                              const range = selection.getRangeAt(0);
-                              const rect = range.getBoundingClientRect();
-                              
-                              // We need to translate iframe-relative coordinates to viewport coordinates
-                              const iframe = containerRef.current?.querySelector('iframe');
-                              if (iframe) {
-                                  const iframeRect = iframe.getBoundingClientRect();
-                                  const x = iframeRect.left + rect.left + rect.width / 2;
-                                  const y = iframeRect.top + rect.top;
+                           try {
+                               const range = selection.getRangeAt(0);
+                               const rect = getRangeVisualRect(range);
+                               
+                               // We need to translate iframe-relative coordinates to viewport coordinates
+                               const iframe = containerRef.current?.querySelector('iframe');
+                               if (iframe && rect) {
+                                   const iframeRect = iframe.getBoundingClientRect();
+                                   const x = iframeRect.left + rect.left + rect.width / 2;
+                                   const y = iframeRect.top + rect.top;
                                   
                                   // --- 关键修复：计算精确的章节索引 ---
                                   let pageNum = undefined;
@@ -1188,36 +1740,30 @@ export default function EPUBReader({
       if (bookId) {
         try {
           const cached = await getEpubState(bookId);
-          if (cached) {
-            if (cached.settings?.fontSize) {
-                setFontSize(cached.settings.fontSize);
-                rendition.themes.fontSize(`${cached.settings.fontSize}%`);
-            }
-            if (cached.settings?.fontFamily) setFontFamily(cached.settings.fontFamily);
-            if (cached.settings?.lineHeight) setLineHeight(cached.settings.lineHeight);
-            if (cached.settings?.fitMode) setFitMode(cached.settings.fitMode);
-            
-            // Re-apply theme with loaded settings
-             rendition.themes.default({
-              body: {
-                'font-family': (cached.settings?.fontFamily || fontFamily) === 'serif' 
-                  ? 'Georgia, "Times New Roman", serif' 
-                  : 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-                'line-height': `${cached.settings?.lineHeight || lineHeight}`,
-                'padding': '20px 40px',
-                'color': '#333',
-                'cursor': 'default !important',
-              },
-              'p': { 'margin-bottom': '1em' },
-            });
-            
-            // 只有当没有指定 jumpRequest 时，才使用缓存的 CFI
-            // 注意：UniversalReader 现在将 pageNumber 转换为 jumpRequest
-            if (cached.cfi && (!jumpRequest || !jumpRequest.dest)) {
-                startLocation = cached.cfi;
-                if (cached.percentage) setProgress(cached.percentage);
-            }
-          }
+            if (cached) {
+             const nextFontSize = cached.settings?.fontSize || fontSize;
+             const nextFontFamily = cached.settings?.fontFamily || fontFamily;
+             const nextLineHeight = cached.settings?.lineHeight || lineHeight;
+             settingsRef.current = {
+               fontSize: nextFontSize,
+               fontFamily: nextFontFamily,
+               lineHeight: nextLineHeight,
+             };
+              if (cached.settings?.fontSize) {
+                 setFontSize(nextFontSize);
+                 rendition.themes.fontSize(`${nextFontSize}%`);
+              }
+              if (cached.settings?.fontFamily) setFontFamily(nextFontFamily);
+              if (cached.settings?.lineHeight) setLineHeight(nextLineHeight);
+              if (cached.settings?.fitMode) setFitMode(cached.settings.fitMode);
+              
+              // 只有当没有指定 jumpRequest 时，才使用缓存的 CFI
+              // 注意：UniversalReader 现在将 pageNumber 转换为 jumpRequest
+              if (cached.cfi && (!jumpRequest || !jumpRequest.dest)) {
+                  startLocation = cached.cfi;
+                 if (cached.percentage) setProgress(cached.percentage);
+             }
+           }
         } catch (e) { log.warn('Failed to load cached state:', e); }
       }
 
@@ -1389,12 +1935,15 @@ export default function EPUBReader({
             setForceSave(prev => prev + 1);
 
             // Sync page number: Prioritize virtual page location, fallback to chapter index
-            if (onPageChange) {
+             if (onPageChange) {
                 let pageNum = 0;
                 // Try to get precise page number from locations
                 if (locationsReady && book.locations.length() > 0) {
                     try {
-                        pageNum = book.locations.locationFromCfi(cfi);
+                        const virtualLocation = book.locations.locationFromCfi(cfi);
+                        if (virtualLocation >= 0) {
+                          pageNum = virtualLocation + 1;
+                        }
                     } catch (e) {
                          // ignore
                     }
@@ -1526,64 +2075,52 @@ export default function EPUBReader({
                 // Note: We access the document inside the iframe
                 const doc = contents.document;
                 // Use standard browser caretRangeFromPoint or caretPositionFromPoint
-                let range;
+                let range: Range | null = null;
+                const point = getContentsViewportPoint(contents, e);
                 if (doc.caretRangeFromPoint) {
-                    range = doc.caretRangeFromPoint(e.clientX, e.clientY);
+                    range = doc.caretRangeFromPoint(point.x, point.y);
                 } else if (doc.caretPositionFromPoint) {
-                    const pos = doc.caretPositionFromPoint(e.clientX, e.clientY);
-                    range = doc.createRange();
-                    range.setStart(pos.offsetNode, Math.min(pos.offset, pos.offsetNode.nodeType === 3 ? (pos.offsetNode.textContent?.length || 0) : pos.offsetNode.childNodes.length));
-                    range.collapse(true);
+                    const pos = doc.caretPositionFromPoint(point.x, point.y);
+                    if (pos) {
+                        const caretRange = doc.createRange();
+                        caretRange.setStart(pos.offsetNode, Math.min(pos.offset, pos.offsetNode.nodeType === 3 ? (pos.offsetNode.textContent?.length || 0) : pos.offsetNode.childNodes.length));
+                        caretRange.collapse(true);
+                        range = caretRange;
+                    }
                 }
 
                 if (range) {
-                    // Expand to word
-                    // Some browsers/epub.js contexts might handle this differently
-                    // Simple heuristic: expand until whitespace
-                    // But range.expand('word') is non-standard / experimental
-                    // We'll try to use a safer heuristic if range.expand throws or fails
+                    let lookupRange = expandRangeToWord(doc, range);
+
                     try {
-                        // Check if range.expand exists (it's non-standard but often available in this context)
-                        if ((range as any).expand) {
+                        if (!lookupRange && (range as any).expand) {
                             (range as any).expand('word');
-                            const word = range.toString().trim();
-                             // Simple regex to clean the word
-                            const cleanWord = word.replace(/[^a-zA-Z\u00C0-\u024F'-]/g, '').toLowerCase();
-                            if (cleanWord && cleanWord.length > 1) {
+                            lookupRange = range;
+                        }
+
+                        const cleanWord = normalizeLookupWord(lookupRange?.toString() ?? '');
+                        const minLookupLength = containsJapaneseText(cleanWord) ? 1 : 2;
+
+                        if (cleanWord && cleanWord.length >= minLookupLength) {
                                 log.debug('Looked up word:', cleanWord);
                                 
                                 // Extract context sentence from iframe
                                 let contextSentence = '';
                                 try {
                                     // Get text content around the clicked word
-                                    const node = range.commonAncestorContainer;
+                                    const node = lookupRange?.commonAncestorContainer ?? range.commonAncestorContainer;
                                     // Walk up to find a paragraph or div
                                     let contextNode: Element | null = node.nodeType === 3 ? node.parentElement : node as Element;
                                     while (contextNode && !['P', 'DIV', 'SECTION', 'ARTICLE', 'BODY'].includes(contextNode.tagName)) {
                                         contextNode = contextNode.parentElement;
                                     }
                                     if (contextNode) {
-                                        const target = cleanWord.toLowerCase();
-
                                         // 优先用父容器的 textContent，确保跨段落句子（如句首在上一个 <p>）能被完整捕获
                                         const widerNode: Element | null =
                                             contextNode.tagName === 'P'
                                                 ? (contextNode.parentElement ?? contextNode)
                                                 : contextNode;
-                                        const fullText = (widerNode.textContent || '').replace(/\s+/g, ' ').trim();
-
-                                        // Try to extract the sentence containing the word
-                                        const sentences = fullText.match(/[^.!?]+[.!?]*/g) || [];
-                                        for (const s of sentences) {
-                                            if (s.toLowerCase().includes(target)) {
-                                                contextSentence = s.trim();
-                                                break;
-                                            }
-                                        }
-                                        // Fallback: use first 200 chars if no sentence found
-                                        if (!contextSentence && fullText) {
-                                            contextSentence = fullText.substring(0, 200).trim() + '...';
-                                        }
+                                        contextSentence = extractContextSentence(widerNode.textContent || '', cleanWord);
                                     }
                                 } catch (e) { 
                                     log.warn('Context extraction failed:', e); 
@@ -1591,7 +2128,6 @@ export default function EPUBReader({
                                 
                                 onWordClick(cleanWord, contextSentence || undefined);
                                 return; // Success
-                            }
                         }
                     } catch(e) { log.warn('Word expansion failed', e); }
                 }
@@ -1626,8 +2162,7 @@ export default function EPUBReader({
         renditionRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isClient, fileUrl]); 
+  }, [fileUrl, forceHorizontalWritingModeInDocument, isClient, isJapaneseBook]);
 
 
   const flattenToc = (toc: any[], level: number): OutlineItem[] => {
@@ -1639,8 +2174,12 @@ export default function EPUBReader({
     return result;
   };
 
-  const goNext = useCallback(() => { renditionRef.current?.next(); }, []);
-  const goPrev = useCallback(() => { renditionRef.current?.prev(); }, []);
+  const goNext = useCallback(() => {
+    void renditionRef.current?.next();
+  }, []);
+  const goPrev = useCallback(() => {
+    void renditionRef.current?.prev();
+  }, []);
   const changeFontSize = useCallback((delta: number) => {
     const newSize = Math.max(80, Math.min(150, fontSize + delta));
     setFontSize(newSize);
@@ -1656,18 +2195,17 @@ export default function EPUBReader({
     try {
       const contents = renditionRef.current?.getContents();
       const body = contents?.[0]?.document?.body;
-      // 优先使用 innerText（按块状元素加换行），避免 textContent 把相邻 p 标签内容粘连成一个词
-      const rawText = body?.innerText || body?.textContent || '';
-      return preprocessTTSPlainText(rawText.trim());
+      const rawText = extractPlainTextFromBody(body);
+      return preprocessTTSPlainText(rawText.trim(), bookLanguage);
     } catch {
       return '';
     }
-  }, []);
+  }, [bookLanguage, extractPlainTextFromBody]);
 
   const handleEpubTTSPageChange = useCallback((page: number) => {
     // 第 1 页是当前章节，不需要翻页；后续页都调用 next()
     if (page > 1) {
-      renditionRef.current?.next();
+      void renditionRef.current?.next();
     }
     epubPageRef.current = page;
   }, []);
@@ -1678,40 +2216,112 @@ export default function EPUBReader({
     currentPage: 1,   // 始终从当前章节开始
     onPageChange: handleEpubTTSPageChange,
     pageChangeDelay: 1200, // epub.js 加载新章节需约 1s
+    bookLanguage,
   });
 
   useEffect(() => {
-    if (renditionReady && renditionRef.current) {
-        const applyUserStyles = (contents: any) => {
-             const doc = contents.document;
-             if (!doc) return;
-             
-             let style = doc.getElementById('user-appearance-overrides');
-             if (!style) {
-                 style = doc.createElement('style');
-                 style.id = 'user-appearance-overrides';
-                 doc.head.appendChild(style);
-             }
-             
-             const fontStack = fontFamily === 'serif' 
-                ? 'Georgia, "Times New Roman", serif' 
-                : 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+    if (!renditionReady || !renditionRef.current) return;
 
-             style.innerHTML = `
-                body, p, div, span, li, blockquote {
-                    font-family: ${fontStack} !important;
-                    line-height: ${lineHeight} !important;
-                }
-             `;
-        };
-        renditionRef.current.getContents().forEach(applyUserStyles);
-    }
-  }, [fontFamily, lineHeight, renditionReady]);
+    // 检测本次 effect 触发时，哪些值实际上发生了变化
+    const furiganaChanged = prevShowFuriganaRef.current !== undefined &&
+      prevShowFuriganaRef.current !== showFurigana;
+    const fontChanged = prevFontFamilyRef.current !== undefined &&
+      prevFontFamilyRef.current !== fontFamily;
+    const lineHeightChanged = prevLineHeightRef.current !== undefined &&
+      prevLineHeightRef.current !== lineHeight;
+    const needsReflow = furiganaChanged || fontChanged || lineHeightChanged;
+
+    // 记录本次值，供下次 effect 比对
+    prevShowFuriganaRef.current = showFurigana;
+    prevFontFamilyRef.current = fontFamily;
+    prevLineHeightRef.current = lineHeight;
+
+    let cancelled = false;
+
+    const refreshCurrentContents = async () => {
+      const contentsList = renditionRef.current?.getContents() ?? [];
+      await Promise.all(
+        contentsList.map(async (contents: any) => {
+          applyReaderStylesToContents(contents);
+          try {
+            await applyFuriganaToDocument(contents.document);
+          } catch (error) {
+            log.warn('EPUB furigana refresh failed:', error);
+          }
+        }),
+      );
+      remeasureCurrentEpubViews();
+
+      if (cancelled) return;
+
+      // 仅在外观设置真正改变时才触发 reflow（resize + display），
+      // 避免 renditionReady 首次变为 true 时的多余 resize+display 干扰 epub.js 初始布局
+      if (!needsReflow || !containerRef.current || !renditionRef.current) return;
+
+      const currentLocation = renditionRef.current.currentLocation?.();
+      const currentCfi = currentLocation?.start?.cfi || currentCfiRef.current;
+
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+
+      if (cancelled) return;
+
+      const { width, height } = containerRef.current.getBoundingClientRect();
+      renditionRef.current.resize(width, height);
+      remeasureCurrentEpubViews();
+
+      if (currentCfi) {
+        try {
+          await renditionRef.current.display(currentCfi);
+        } catch (error) {
+          log.debug('假名 reflow display 失败:', error);
+        }
+      }
+    };
+
+    void refreshCurrentContents();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applyFuriganaToDocument, applyReaderStylesToContents, fontFamily, lineHeight, remeasureCurrentEpubViews, renditionReady, showFurigana]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') goPrev();
-      else if (e.key === 'ArrowRight') goNext();
+      const { isVertical, pageProgression } = contentLayoutRef.current;
+
+      if (isVertical) {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          goPrev();
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          goNext();
+          return;
+        }
+      }
+
+      if (pageProgression === 'rtl') {
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          goNext();
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          goPrev();
+        }
+        return;
+      }
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        goPrev();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        goNext();
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -1839,6 +2449,23 @@ export default function EPUBReader({
       >
         {/* ── 朗读控制区 ── */}
         <div className="flex items-center gap-2 shrink-0">
+          {isJapaneseBook && (
+            <>
+              <button
+                onClick={() => setShowFurigana((prev) => !prev)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors border ${
+                  showFurigana
+                    ? 'bg-sky-50 text-sky-700 border-sky-200/70'
+                    : 'bg-white/80 text-gray-600 border-gray-200/60 hover:bg-gray-100/80'
+                }`}
+                title={showFurigana ? '关闭假名标注' : '显示假名标注'}
+              >
+                假名
+              </button>
+              <div className="w-px h-4 bg-gray-300/50"></div>
+            </>
+          )}
+
           {/* 音色选择：始终可见 */}
           <select
             value={tts.voice}

@@ -52,6 +52,7 @@ class PDFParser(BaseParser):
                 "title": pdf_meta.get("title") or Path(file_path).name,  # type: ignore
                 "author": pdf_meta.get("author") or "Unknown",  # type: ignore
                 "total_pages": len(doc),
+                "language": None,
             }
 
             # 提取封面图片（首页）

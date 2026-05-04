@@ -14,7 +14,7 @@ import {
 } from '../lib/api';
 
 // ─── Edge TTS 内置音色 ────────────────────────────────────────────────────
-const EDGE_VOICES = [
+const EDGE_VOICES_EN = [
   // en-US
   { id: 'aria',        label: 'Aria（美式女声）' },
   { id: 'jenny',       label: 'Jenny（美式女声）' },
@@ -47,6 +47,16 @@ const EDGE_VOICES = [
   // en-IE
   { id: 'emily',       label: 'Emily（爱尔兰女声）' },
   { id: 'connor',      label: 'Connor（爱尔兰男声）' },
+];
+
+const EDGE_VOICES_JA = [
+  { id: 'nanami', label: 'Nanami（日语女声）' },
+  { id: 'keita', label: 'Keita（日语男声）' },
+];
+
+const EDGE_VOICES_ZH = [
+  { id: 'xiaoxiao', label: 'Xiaoxiao（中文女声）' },
+  { id: 'yunxi', label: 'Yunxi（中文男声）' },
 ];
 
 const TTS_SPEED_OPTIONS = [
@@ -92,9 +102,9 @@ export default function TTSConfigPanel() {
   const resetToDefaults = () => {
     setConfig({
       provider: 'edge',
-      edge: { voice: 'aria', speed: 1 },
+      edge: { voice: 'aria', voice_japanese: 'nanami', voice_chinese: 'xiaoxiao', speed: 1 },
       openai_api: { base_url: 'https://api.openai.com/v1', api_key: '', model: 'tts-1', voice: 'alloy', speed: 1 },
-      qwen3: { base_url: 'http://127.0.0.1:18790/v1', model: 'tts-1', voice: '塔塔', speed: 1 },
+      qwen3: { base_url: 'http://127.0.0.1:18790/v1', model: 'tts-1', voice: '塔塔', voice_japanese: '', speed: 1 },
     });
     setMessage({ type: 'success', text: '已恢复默认 TTS 配置，记得点击保存配置' });
   };
@@ -201,10 +211,22 @@ export default function TTSConfigPanel() {
       {config.provider === 'edge' && (
         <Section title="Edge TTS 音色">
           <SelectField
-            label="音色"
+            label="英语默认音色"
             value={config.edge.voice}
             onChange={v => updateEdge({ voice: v })}
-            options={EDGE_VOICES.map(v => ({ value: v.id, label: v.label }))}
+            options={EDGE_VOICES_EN.map(v => ({ value: v.id, label: v.label }))}
+          />
+          <SelectField
+            label="日语默认音色"
+            value={config.edge.voice_japanese}
+            onChange={v => updateEdge({ voice_japanese: v })}
+            options={EDGE_VOICES_JA.map(v => ({ value: v.id, label: v.label }))}
+          />
+          <SelectField
+            label="中文默认音色"
+            value={config.edge.voice_chinese}
+            onChange={v => updateEdge({ voice_chinese: v })}
+            options={EDGE_VOICES_ZH.map(v => ({ value: v.id, label: v.label }))}
           />
           <SelectField
             label="默认速度"
@@ -251,16 +273,32 @@ export default function TTSConfigPanel() {
             placeholder="tts-1"
             onChange={v => updateQwen3({ model: v })} />
           {qwen3Voices.length > 0 ? (
-            <SelectField
-              label="音色"
-              value={config.qwen3.voice}
-              onChange={v => updateQwen3({ voice: v })}
-              options={qwen3Voices.map(v => ({ value: v.voice, label: v.name || v.voice }))}
-            />
+            <>
+              <SelectField
+                label="默认音色"
+                value={config.qwen3.voice}
+                onChange={v => updateQwen3({ voice: v })}
+                options={qwen3Voices.map(v => ({ value: v.voice, label: v.name || v.voice }))}
+              />
+              <SelectField
+                label="日语默认音色"
+                value={config.qwen3.voice_japanese}
+                onChange={v => updateQwen3({ voice_japanese: v })}
+                options={[
+                  { value: '', label: '跟随默认音色' },
+                  ...qwen3Voices.map(v => ({ value: v.voice, label: v.name || v.voice })),
+                ]}
+              />
+            </>
           ) : (
-            <InputField label="音色 (Voice)" value={config.qwen3.voice}
-              placeholder="塔塔"
-              onChange={v => updateQwen3({ voice: v })} />
+            <>
+              <InputField label="默认音色 (Voice)" value={config.qwen3.voice}
+                placeholder="塔塔"
+                onChange={v => updateQwen3({ voice: v })} />
+              <InputField label="日语默认音色" value={config.qwen3.voice_japanese}
+                placeholder="素子（留空则跟随默认音色）"
+                onChange={v => updateQwen3({ voice_japanese: v })} />
+            </>
           )}
           <SelectField
             label="默认速度"
@@ -269,7 +307,7 @@ export default function TTSConfigPanel() {
             options={TTS_SPEED_OPTIONS}
           />
           <HintBox>
-            建议使用稳定版本地 Qwen3 TTS 服务。默认地址 <code>http://127.0.0.1:18790/v1</code>，模型 <code>tts-1</code>，音色 <code>塔塔</code>。
+            建议使用稳定版本地 Qwen3 TTS 服务。默认地址 <code>http://127.0.0.1:18790/v1</code>，模型 <code>tts-1</code>。如果要朗读日语，建议把“日语默认音色”设置为日语参考音色（如素子）；留空时会继续沿用默认音色。
           </HintBox>
         </Section>
       )}

@@ -16,6 +16,7 @@ class BaseParser(ABC):
             - title: str
             - author: str
             - total_pages: int
+            - language: str
             - pages: List[Dict] (page_number, text_content, words_data, images)
             - cover_image: str (path)
         """

@@ -13,6 +13,7 @@ const DB_NAME = "epub-cache";
 const DB_VERSION = 2; // Increment version to add new store
 const STORE_NAME = "epubFiles";
 const PROGRESS_STORE_NAME = "epubProgress";
+const EPUB_PROGRESS_LAYOUT_VERSION = 2;
 
 interface CacheEntry {
   url: string;
@@ -34,6 +35,7 @@ interface ProgressEntry {
   cfi?: string; // Optional now because we might save only settings
   percentage?: number;
   settings?: EpubSettings;
+  layoutVersion?: number;
   timestamp: number;
 }
 
@@ -209,6 +211,7 @@ export async function saveEpubState(
         const entry: ProgressEntry = {
           bookId,
           timestamp: Date.now(),
+          layoutVersion: EPUB_PROGRESS_LAYOUT_VERSION,
           ...existing, // Keep existing data
           ...state, // Overwrite with new data
           settings: newSettings, // Merged settings
@@ -245,6 +248,19 @@ export async function getEpubState(
       request.onsuccess = () => {
         const entry = request.result as ProgressEntry | undefined;
         if (entry) {
+          if (entry.layoutVersion !== EPUB_PROGRESS_LAYOUT_VERSION) {
+            log.info(`Ignoring stale EPUB layout state for ${bookId}`);
+            resolve({
+              ...entry,
+              cfi: undefined,
+              settings: {
+                ...entry.settings,
+                fitMode: undefined,
+              },
+              layoutVersion: EPUB_PROGRESS_LAYOUT_VERSION,
+            });
+            return;
+          }
           log.debug(`Progress found for ${bookId}: ${entry.percentage}%`);
           resolve(entry);
         } else {

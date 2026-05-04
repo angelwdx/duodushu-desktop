@@ -51,6 +51,12 @@ EDGE_VOICE_MAP: dict[str, str] = {
     # en-IE
     "emily":         "en-IE-EmilyNeural",
     "connor":        "en-IE-ConnorNeural",
+    # zh-CN
+    "xiaoxiao":      "zh-CN-XiaoxiaoNeural",
+    "yunxi":         "zh-CN-YunxiNeural",
+    # ja-JP
+    "nanami":        "ja-JP-NanamiNeural",
+    "keita":         "ja-JP-KeitaNeural",
 }
 
 
@@ -264,10 +270,21 @@ class Qwen3TTSProvider(OpenAIApiProvider):
 
         return text
 
+    @staticmethod
+    def _contains_cjk_text(text: str) -> bool:
+        return bool(re.search(r"[\u3040-\u30FF\u3400-\u9FFF\uF900-\uFAFF]", text))
+
+    @classmethod
+    def _prepare_text(cls, text: str) -> str:
+        # 日文 / 中文内容保留原文，避免把局部数字或混排文本错误转成英文读法。
+        if cls._contains_cjk_text(text):
+            return text
+        return cls._numbers_to_english(text)
+
     async def stream_with_content_type(
         self, text: str, voice: str = ""
     ) -> Tuple[str, AsyncGenerator[bytes, None]]:
-        return await super().stream_with_content_type(self._numbers_to_english(text), voice)
+        return await super().stream_with_content_type(self._prepare_text(text), voice)
 
 
 # ─── 工厂函数 ──────────────────────────────────────────────────────────────

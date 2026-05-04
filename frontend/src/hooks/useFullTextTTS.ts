@@ -14,6 +14,7 @@
  */
 
 import { useRef, useState, useCallback, useEffect } from 'react';
+import { isJapaneseBookLanguage } from '../lib/japaneseText';
 
 // ─── 常量 ──────────────────────────────────────────────────────────────────
 const MAX_CHUNK = 9800;
@@ -22,7 +23,7 @@ const MAX_CONSECUTIVE_EMPTY = 3;
 const PREFETCH_DEPTH_DEFAULT = 1;
 const PREFETCH_DEPTH_QWEN3 = 2;
 
-const EDGE_VOICES = [
+const EDGE_VOICES_EN = [
   // en-US
   { id: 'aria',        label: 'Aria (美式女声)' },
   { id: 'jenny',       label: 'Jenny (美式女声)' },
@@ -57,6 +58,11 @@ const EDGE_VOICES = [
   { id: 'connor',      label: 'Connor (爱尔兰男声)' },
 ] as const;
 
+const EDGE_VOICES_JA = [
+  { id: 'nanami', label: 'Nanami（日语女声）' },
+  { id: 'keita', label: 'Keita（日语男声）' },
+] as const;
+
 export type TTSVoice = string;
 export type TTSVoiceOption = { id: string; label: string };
 
@@ -66,6 +72,7 @@ export interface UseFullTextTTSOptions {
   totalPages: number;
   currentPage: number;
   onPageChange: (page: number) => void;
+  bookLanguage?: string | null;
   /** 翻页后等待内容加载的时间（ms），PDF ≈ 400，EPUB ≈ 1000 */
   pageChangeDelay?: number;
   /** 翻页步长（双页模式=2，单页模式=1） */
@@ -158,9 +165,11 @@ export function useFullTextTTS({
   totalPages,
   currentPage,
   onPageChange,
+  bookLanguage,
   pageChangeDelay = 600,
   pageStep = 1,
 }: UseFullTextTTSOptions): UseFullTextTTSReturn {
+  const isJapaneseTTSLanguage = isJapaneseBookLanguage(bookLanguage);
   const getInitialSpeed = () => {
     if (typeof window === 'undefined') return 1;
     const raw = window.localStorage.getItem('reader_tts_speed');
@@ -175,7 +184,9 @@ export function useFullTextTTS({
   const [currentReadingPage, setCurrentReadingPage] = useState<number | null>(null);
   const [currentChunkText, setCurrentChunkText]     = useState<string | null>(null);
   const [voice, setVoice] = useState<TTSVoice>('default');
-  const [voices, setVoices] = useState<TTSVoiceOption[]>([...EDGE_VOICES]);
+  const [voices, setVoices] = useState<TTSVoiceOption[]>(
+    isJapaneseTTSLanguage ? [...EDGE_VOICES_JA] : [...EDGE_VOICES_EN],
+  );
   const [provider, setProvider] = useState<'edge' | 'openai_api' | 'qwen3'>('edge');
   const [speed, setSpeedState] = useState<number>(getInitialSpeed);
 
@@ -233,7 +244,9 @@ export function useFullTextTTS({
         setProvider(config.provider);
 
         if (config.provider === 'qwen3') {
-          const configuredVoice = config.qwen3.voice?.trim() || '塔塔';
+          const configuredVoice = isJapaneseTTSLanguage
+            ? config.qwen3.voice_japanese?.trim() || config.qwen3.voice?.trim() || '塔塔'
+            : config.qwen3.voice?.trim() || '塔塔';
           setSpeed(config.qwen3.speed || 1);
           const availableVoices = await getTTSVoices();
           if (cancelled) return;
@@ -255,15 +268,19 @@ export function useFullTextTTS({
           return;
         }
 
-        setVoices([...EDGE_VOICES]);
-        setVoice(config.edge.voice || 'aria');
+        const edgeVoices = isJapaneseTTSLanguage ? [...EDGE_VOICES_JA] : [...EDGE_VOICES_EN];
+        const configuredVoice = isJapaneseTTSLanguage
+          ? config.edge.voice_japanese?.trim() || 'nanami'
+          : config.edge.voice?.trim() || 'aria';
+        setVoices(edgeVoices);
+        setVoice(configuredVoice);
         setSpeed(config.edge.speed || 1);
         persistReadyRef.current = true;
       } catch {
         if (!cancelled) {
           setProvider('edge');
-          setVoices([...EDGE_VOICES]);
-          setVoice('default');
+          setVoices(isJapaneseTTSLanguage ? [...EDGE_VOICES_JA] : [...EDGE_VOICES_EN]);
+          setVoice(isJapaneseTTSLanguage ? 'nanami' : 'aria');
           setSpeed(1);
           persistReadyRef.current = true;
         }
@@ -272,7 +289,7 @@ export function useFullTextTTS({
 
     loadActiveTTSConfig();
     return () => { cancelled = true; };
-  }, []);
+  }, [isJapaneseTTSLanguage]);
 
   useEffect(() => {
     if (!persistReadyRef.current) return;
@@ -289,13 +306,21 @@ export function useFullTextTTS({
         };
 
         if (providerRef.current === 'qwen3') {
-          nextConfig.qwen3.voice = voiceRef.current;
+          if (isJapaneseTTSLanguage) {
+            nextConfig.qwen3.voice_japanese = voiceRef.current;
+          } else {
+            nextConfig.qwen3.voice = voiceRef.current;
+          }
           nextConfig.qwen3.speed = speedRef.current;
         } else if (providerRef.current === 'openai_api') {
           nextConfig.openai_api.voice = voiceRef.current;
           nextConfig.openai_api.speed = speedRef.current;
         } else {
+          if (isJapaneseTTSLanguage) {
+            nextConfig.edge.voice_japanese = voiceRef.current;
+          } else {
           nextConfig.edge.voice = voiceRef.current;
+          }
           nextConfig.edge.speed = speedRef.current;
         }
 
@@ -306,7 +331,7 @@ export function useFullTextTTS({
     }, 400);
 
     return () => window.clearTimeout(timer);
-  }, [voice, speed, provider]);
+  }, [voice, speed, provider, isJapaneseTTSLanguage]);
 
   // ── 释放 blob URL ──
   const revokeBlobUrl = useCallback(() => {

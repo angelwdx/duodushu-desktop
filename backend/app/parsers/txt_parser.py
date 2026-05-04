@@ -53,6 +53,7 @@ class TXTParser(BaseParser):
             "title": title,
             "author": author,
             "total_pages": total_pages,
+            "language": None,
         }
 
         # TXT 没有封面

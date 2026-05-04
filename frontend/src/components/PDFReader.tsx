@@ -320,6 +320,7 @@ type PageSpread = number[];
 interface ReaderProps {
   fileUrl: string;
   bookId?: string;
+  bookLanguage?: string | null;
   pageNumber: number;
   totalPages?: number;
   words?: WordData[];
@@ -340,10 +341,11 @@ interface ReaderProps {
 
   const SPREAD_GAP = 4; // 双页间距（像素）
 
-  export default function PDFReader({
-    fileUrl,
-    bookId,
-    pageNumber,
+export default function PDFReader({
+  fileUrl,
+  bookId,
+  bookLanguage,
+  pageNumber,
     totalPages,
     words,
     textContent,
@@ -1336,8 +1338,8 @@ interface ReaderProps {
 
   // 全文朗读的文本来源与文本模式显示保持一致：都使用 normalizeText 处理后的文本
   const getPageText = useCallback((_page: number): string => {
-    return preprocessTTSPlainText(normalizeText(resolvedPageText));
-  }, [resolvedPageText]);
+    return preprocessTTSPlainText(normalizeText(resolvedPageText), bookLanguage);
+  }, [bookLanguage, resolvedPageText]);
 
   const tts = useFullTextTTS({
     getPageText,
@@ -1346,6 +1348,7 @@ interface ReaderProps {
     onPageChange: goToPage,
     pageChangeDelay: 400,
     pageStep: dualPageMode ? 2 : 1,
+    bookLanguage,
   });
 
   const renderHeight = pageDimensions

@@ -42,6 +42,7 @@ class BookResponse(BaseModel):
     total_pages: Optional[int] = None
     status: str
     book_type: Optional[str] = None
+    language: Optional[str] = None
     created_at: Optional[datetime] = None
 
 
@@ -172,6 +173,7 @@ def get_book_status(book_id: str, db: Session = Depends(get_db)):
         "total_pages": book.total_pages,
         "download_url": download_url,
         "cover_image": book.cover_image,
+        "language": book.language,
         "last_page": last_page,
     }
 

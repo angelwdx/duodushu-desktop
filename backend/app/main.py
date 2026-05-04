@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from .routers import (
     books,
     dictionary,
+    japanese,
     tts,
     vocabulary,
     vocabulary_snippet,
@@ -254,6 +255,15 @@ async def lifespan(app: FastAPI):
                     except Exception as e:
                         logger.warning(f"添加列 {col_name} 失败（可能已存在）: {e}")
 
+            book_columns = [col["name"] for col in inspector.get_columns("books")]
+            if "language" not in book_columns:
+                try:
+                    conn.execute(text('ALTER TABLE books ADD COLUMN language VARCHAR DEFAULT "unknown"'))
+                    conn.commit()
+                    logger.info("已添加列: books.language")
+                except Exception as e:
+                    logger.warning(f"添加列 books.language 失败: {e}")
+
             # 检查 word_contexts 表是否有 sentence_translation 列
             wc_columns = [col["name"] for col in inspector.get_columns("word_contexts")]
             if "sentence_translation" not in wc_columns:
@@ -318,6 +328,7 @@ app.add_middleware(
 
 app.include_router(books.router)
 app.include_router(dictionary.router)
+app.include_router(japanese.router)
 app.include_router(tts.router)
 app.include_router(vocabulary.router)
 app.include_router(bookmarks.router)

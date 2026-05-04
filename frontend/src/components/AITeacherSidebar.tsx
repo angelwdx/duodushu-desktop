@@ -3,17 +3,50 @@
 import { useState, useRef, useEffect, memo, useMemo, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import { createLogger } from "../lib/logger";
+import {
+  getApiUrl,
+  getTTSConfig,
+  streamSpeech,
+  type TTSConfig,
+} from "../lib/api";
+import {
+  detectTTSContentLanguage,
+  preprocessTTSPlainText,
+  stripMarkdownForTTS,
+  type TTSContentLanguage,
+} from "../lib/ttsText";
 
 const log = createLogger('AITeacherSidebar');
 
 // 注意：API_URL 已在 frontend/src/lib/api.ts 中正确处理
 // 使用从 api.ts 导入的 getApiUrl() 函数来获取后端 URL
 // 这样可以确保便携版和开发环境都使用正确的后端地址
-
-import { getApiUrl } from '../lib/api';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 
 const API_URL = getApiUrl();
+
+function resolveSpeechVoice(config: TTSConfig, language: TTSContentLanguage): string {
+  if (config.provider === "openai_api") {
+    return config.openai_api.voice?.trim() || "alloy";
+  }
+
+  if (config.provider === "qwen3") {
+    if (language === "ja") {
+      return config.qwen3.voice_japanese?.trim() || config.qwen3.voice?.trim() || "塔塔";
+    }
+    return config.qwen3.voice?.trim() || "塔塔";
+  }
+
+  if (language === "ja") {
+    return config.edge.voice_japanese?.trim() || "nanami";
+  }
+
+  if (language === "zh") {
+    return config.edge.voice_chinese?.trim() || "xiaoxiao";
+  }
+
+  return config.edge.voice?.trim() || "aria";
+}
 
 interface Message {
   role: "user" | "assistant";
@@ -38,6 +71,7 @@ interface AITeacherSidebarProps {
   currentPage?: number;
   bookTitle?: string;
   bookId?: string;
+  bookLanguage?: string | null;
   externalTrigger?: string;
   onPageChange?: (page: number) => void;
   isContentLoading?: boolean;
@@ -54,6 +88,7 @@ function AITeacherSidebar({
   currentPage = 1,
   bookTitle = "",
   bookId = "",
+  bookLanguage,
   externalTrigger,
   onPageChange,
   isContentLoading = false,
@@ -66,12 +101,16 @@ function AITeacherSidebar({
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [lastProcessedTrigger, setLastProcessedTrigger] = useState<string | undefined>(undefined);
-  const [currentSources, setCurrentSources] = useState<Source[]>([]);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [speakingMessageKey, setSpeakingMessageKey] = useState<string | null>(null);
+  const [isSpeechLoading, setIsSpeechLoading] = useState(false);
   const isOnline = useNetworkStatus();
 
   // AbortController ref for canceling requests on unmount
   const abortControllerRef = useRef<AbortController | null>(null);
+  const speechAudioRef = useRef<HTMLAudioElement | null>(null);
+  const speechBlobUrlRef = useRef<string | null>(null);
+  const speechRequestIdRef = useRef(0);
 
   // Get current page messages
   const messages = useMemo(() => viewMode === 'page'
@@ -89,7 +128,7 @@ function AITeacherSidebar({
           setAllChats(JSON.parse(savedChats));
         }
       } catch (e) {
-        console.error('Failed to parse AI chat history:', e);
+        log.error('Failed to parse AI chat history:', e);
       }
     }
   }, [bookId]);
@@ -105,10 +144,31 @@ function AITeacherSidebar({
           localStorage.removeItem(`ai-chat-v2-${bookId}`);
         }
       } catch (e) {
-        console.error('Failed to save AI chat history:', e);
+        log.error('Failed to save AI chat history:', e);
       }
     }
   }, [allChats, bookId]);
+
+  const releaseSpeechAudio = useCallback(() => {
+    if (speechAudioRef.current) {
+      speechAudioRef.current.pause();
+      speechAudioRef.current.onended = null;
+      speechAudioRef.current.onerror = null;
+      speechAudioRef.current = null;
+    }
+
+    if (speechBlobUrlRef.current) {
+      URL.revokeObjectURL(speechBlobUrlRef.current);
+      speechBlobUrlRef.current = null;
+    }
+  }, []);
+
+  const stopMessageSpeech = useCallback(() => {
+    speechRequestIdRef.current += 1;
+    releaseSpeechAudio();
+    setSpeakingMessageKey(null);
+    setIsSpeechLoading(false);
+  }, [releaseSpeechAudio]);
 
   // Cleanup: cancel any pending requests on unmount
   useEffect(() => {
@@ -116,8 +176,13 @@ function AITeacherSidebar({
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
+      stopMessageSpeech();
     };
-  }, []);
+  }, [stopMessageSpeech]);
+
+  useEffect(() => {
+    stopMessageSpeech();
+  }, [bookId, currentPage, viewMode, stopMessageSpeech]);
 
   // Helper to update messages for current page
   const setMessages = (updater: (prev: Message[]) => Message[]) => {
@@ -157,6 +222,8 @@ function AITeacherSidebar({
     const textToSend = overrideContent || inputValue.trim();
 
     if (!textToSend || isLoading) return;
+
+    stopMessageSpeech();
 
     // 验证页面内容状态
     log.debug('handleSendMessage called', {
@@ -234,12 +301,6 @@ function AITeacherSidebar({
       log.debug('AI response received', { replyLength: data?.reply?.length || 0 });
 
       // 保存来源引用
-      if (data.sources && data.sources.length > 0) {
-        setCurrentSources(data.sources);
-      } else {
-        setCurrentSources([]);
-      }
-
       const parsed = parseRecommendedQuestions(data.reply);
       const assistantMessage: Message = {
         role: "assistant",
@@ -260,17 +321,16 @@ function AITeacherSidebar({
       if (error instanceof Error && error.name === 'AbortError') {
         return;
       }
-      console.error("Chat Error:", error);
+      log.error("Chat Error:", error);
       // 网络或服务器错误
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: "⚠️ **网络连接失败**\n\n无法连接到后端服务。请检查：\n\n1. 后端服务是否正在运行\n2. 网络连接是否正常\n\n您可以尝试刷新页面或重新启动应用。" },
       ]);
-      setCurrentSources([]);
     } finally {
       setIsLoading(false);
     }
-  }, [inputValue, isLoading, messages, pageContent, currentPage, bookTitle, bookId, hasValidPageContent, setMessages]);
+  }, [inputValue, isLoading, messages, pageContent, currentPage, bookTitle, bookId, hasValidPageContent, isContentLoading, setMessages, stopMessageSpeech]);
 
   // 处理外部触发的问题
   useEffect(() => {
@@ -315,6 +375,8 @@ function AITeacherSidebar({
     log.debug('handleQuickQuestion called', { question });
 
     if (isLoading) return;
+
+    stopMessageSpeech();
 
     // 验证页面内容是否可用
     // hasValidPageContent is defined in component scope
@@ -366,12 +428,6 @@ function AITeacherSidebar({
       });
 
       // 保存来源引用
-      if (data.sources && data.sources.length > 0) {
-        setCurrentSources(data.sources);
-      } else {
-        setCurrentSources([]);
-      }
-
       const parsed = parseRecommendedQuestions(data.reply);
       const assistantMessage: Message = {
         role: "assistant",
@@ -386,17 +442,16 @@ function AITeacherSidebar({
       if (error instanceof Error && error.name === 'AbortError') {
         return;
       }
-      console.error("Chat Error:", error);
+      log.error("Chat Error:", error);
       // 网络或服务器错误
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: "⚠️ **网络连接失败**\n\n无法连接到后端服务。请检查：\n\n1. 后端服务是否正在运行\n2. 网络连接是否正常\n\n您可以尝试刷新页面或重新启动应用。" },
       ]);
-      setCurrentSources([]);
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, hasValidPageContent, pageContent, currentPage, bookTitle, bookId, setMessages, API_URL, messages]);
+  }, [isLoading, hasValidPageContent, pageContent, currentPage, bookTitle, bookId, setMessages, messages, stopMessageSpeech]);
 
   const parseRecommendedQuestions = (reply: string): { content: string; recommendedQuestions: string[] } => {
     const recommendedQuestions: string[] = [];
@@ -466,6 +521,65 @@ function AITeacherSidebar({
       )
     },
   ];
+
+  const handleSpeakMessage = useCallback(async (messageKey: string, content: string) => {
+    if (speakingMessageKey === messageKey) {
+      stopMessageSpeech();
+      return;
+    }
+
+    const plainText = stripMarkdownForTTS(content);
+    const contentLanguage = detectTTSContentLanguage(plainText, bookLanguage);
+    const speechText = preprocessTTSPlainText(plainText, contentLanguage);
+    if (!speechText) return;
+
+    const requestId = speechRequestIdRef.current + 1;
+    speechRequestIdRef.current = requestId;
+    releaseSpeechAudio();
+    setSpeakingMessageKey(messageKey);
+    setIsSpeechLoading(true);
+
+    try {
+      const config = await getTTSConfig();
+      const voice = resolveSpeechVoice(config, contentLanguage);
+      const blobUrl = await streamSpeech(speechText, voice);
+
+      if (speechRequestIdRef.current !== requestId) {
+        URL.revokeObjectURL(blobUrl);
+        return;
+      }
+
+      const audio = new Audio(blobUrl);
+      speechAudioRef.current = audio;
+      speechBlobUrlRef.current = blobUrl;
+
+      audio.onended = () => {
+        if (speechRequestIdRef.current !== requestId) return;
+        releaseSpeechAudio();
+        setSpeakingMessageKey(null);
+        setIsSpeechLoading(false);
+      };
+
+      audio.onerror = () => {
+        if (speechRequestIdRef.current !== requestId) return;
+        log.error("AI teacher speech playback failed");
+        releaseSpeechAudio();
+        setSpeakingMessageKey(null);
+        setIsSpeechLoading(false);
+      };
+
+      setIsSpeechLoading(false);
+      await audio.play();
+    } catch (error) {
+      if (speechRequestIdRef.current !== requestId) {
+        return;
+      }
+      log.error("Failed to read AI teacher message", error);
+      releaseSpeechAudio();
+      setSpeakingMessageKey(null);
+      setIsSpeechLoading(false);
+    }
+  }, [bookLanguage, releaseSpeechAudio, speakingMessageKey, stopMessageSpeech]);
 
   return (
     <div className={`h-full flex flex-col bg-gray-50 ${className}`}>
@@ -565,7 +679,14 @@ function AITeacherSidebar({
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {messages.map((msg, index) => (
+        {messages.map((msg, index) => {
+          const messageKey = `${msg.page ?? currentPage}-${index}`;
+          const isSpeakingThisMessage = speakingMessageKey === messageKey;
+          const speechButtonLabel = isSpeakingThisMessage
+            ? (isSpeechLoading ? "生成中…" : "停止朗读")
+            : "朗读回答";
+
+          return (
           <div key={index} className="group relative">
             {msg.role === "user" ? (
               <div className="flex gap-3 flex-row-reverse">
@@ -653,6 +774,38 @@ function AITeacherSidebar({
                       </ReactMarkdown>
                     </div>
 
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        onClick={() => handleSpeakMessage(messageKey, msg.content)}
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors ${
+                          isSpeakingThisMessage
+                            ? "bg-gray-900 text-white hover:bg-black"
+                            : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                        }`}
+                        title={speechButtonLabel}
+                      >
+                        {isSpeakingThisMessage ? (
+                          <>
+                            {isSpeechLoading ? (
+                              <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M5 4h4v12H5zM11 4h4v12h-4z" />
+                              </svg>
+                            )}
+                            <span>{speechButtonLabel}</span>
+                          </>
+                        ) : (
+                          <>
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path d="M6 4.5v11l9-5.5-9-5.5z" />
+                            </svg>
+                            <span>{speechButtonLabel}</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
                     {/* 来源引用显示 */}
                     {msg.sources && msg.sources.length > 0 && (
                       <div className="mt-2 pt-2 border-t border-gray-100">
@@ -726,7 +879,7 @@ function AITeacherSidebar({
               </div>
             )}
           </div>
-        ))}
+        )})}
         {isLoading && (
           <div className="flex gap-2">
             <div className="w-8 h-8 rounded-lg border border-gray-100 flex items-center justify-center bg-gray-50 text-sm">

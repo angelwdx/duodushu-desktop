@@ -923,6 +923,7 @@ function ReaderContent() {
               <PDFReader
                 fileUrl={fileUrl}
                 bookId={id}
+                bookLanguage={book.language}
                 pageNumber={currentPage}
                 totalPages={totalPages || book.total_pages}
                 words={pageData?.words_data}
@@ -950,6 +951,7 @@ function ReaderContent() {
                 fileUrl={fileUrl}
                 format={book.format?.toLowerCase() as "pdf" | "epub" | "txt"}
                 bookId={id}
+                bookLanguage={book.language}
                 pageNumber={currentPage}
                 totalPages={totalPages || book.total_pages}
                 textContent={pageData?.text_content}
@@ -1172,6 +1174,7 @@ function ReaderContent() {
                   currentPage={currentPage}
                   bookTitle={book?.title || ""}
                   bookId={id}
+                  bookLanguage={book?.language}
                   externalTrigger={aiQuestion}
                   onPageChange={handlePageChange}
                   isContentLoading={isContentLoading}

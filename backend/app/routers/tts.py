@@ -22,6 +22,8 @@ class TTSRequestStream(BaseModel):
 
 class TTSConfigEdge(BaseModel):
     voice: str = "default"
+    voice_japanese: str = "nanami"
+    voice_chinese: str = "xiaoxiao"
     speed: float = 1.0
 
 
@@ -37,6 +39,7 @@ class TTSConfigQwen3(BaseModel):
     base_url: str = "http://127.0.0.1:18790/v1"
     model: str = "tts-1"
     voice: str = "塔塔"
+    voice_japanese: str = ""
     speed: float = 1.0
 
 
@@ -161,9 +164,9 @@ def get_tts_config():
     config = load_config()
     default_tts = {
         "provider": "edge",
-        "edge": {"voice": "aria", "speed": 1.0},
+        "edge": {"voice": "aria", "voice_japanese": "nanami", "voice_chinese": "xiaoxiao", "speed": 1.0},
         "openai_api": {"base_url": "https://api.openai.com/v1", "api_key": "", "model": "tts-1", "voice": "alloy", "speed": 1.0},
-        "qwen3": {"base_url": "http://127.0.0.1:18790/v1", "model": "tts-1", "voice": "塔塔", "speed": 1.0},
+        "qwen3": {"base_url": "http://127.0.0.1:18790/v1", "model": "tts-1", "voice": "塔塔", "voice_japanese": "", "speed": 1.0},
     }
     raw_tts = config.get("tts", {})
     tts = {
@@ -213,7 +216,7 @@ async def test_tts_config(req: Optional[TTSConfigRequest] = None):
     用当前（或临时）配置合成一段测试音频并流式返回。
     若传入 req，临时使用该配置（不保存）；否则使用已保存配置。
     """
-    TEST_TEXT = "你好，这是一段语音合成测试。Hello, this is a TTS test."
+    TEST_TEXT = "你好，这是一段中文朗读测试。こんにちは、日本語の朗读テストです。Hello, this is a TTS test."
 
     if req is not None:
         from app.services.tts_providers import build_provider_from_config

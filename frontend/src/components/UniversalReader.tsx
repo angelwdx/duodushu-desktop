@@ -16,6 +16,7 @@ interface ReaderProps {
   fileUrl: string;
   format: 'pdf' | 'epub' | 'txt';
   bookId?: string; // Add bookId for progress tracking
+  bookLanguage?: string | null;
   pageNumber: number;
   totalPages?: number;
   words?: WordData[];
@@ -42,6 +43,7 @@ export default function UniversalReader(props: ReaderProps) {
         <EPUBReader
           fileUrl={props.fileUrl}
           bookId={props.bookId}
+          bookLanguage={props.bookLanguage}
           onWordClick={props.onWordClick}
           onOutlineChange={props.onOutlineChange}
           onPageChange={props.onPageChange}
@@ -56,6 +58,7 @@ export default function UniversalReader(props: ReaderProps) {
       return (
         <TXTReader
           textContent={props.textContent}
+          bookLanguage={props.bookLanguage}
           pageNumber={props.pageNumber}
           totalPages={props.totalPages}
           onPageChange={props.onPageChange}

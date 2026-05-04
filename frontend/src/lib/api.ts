@@ -63,6 +63,7 @@ export interface Book {
   total_pages: number;
   status: "processing" | "completed" | "failed";
   book_type?: string;
+  language?: string | null;
 }
 
 export async function uploadBook(
@@ -384,10 +385,39 @@ export async function streamSpeech(
   return URL.createObjectURL(blob);
 }
 
+export type FuriganaSegment =
+  | { type: "text"; text: string }
+  | { type: "ruby"; base: string; reading: string };
+
+export interface FuriganaAnnotation {
+  text: string;
+  segments: FuriganaSegment[];
+  has_furigana: boolean;
+}
+
+export async function generateJapaneseFurigana(texts: string[]): Promise<FuriganaAnnotation[]> {
+  if (texts.length === 0) return [];
+
+  const res = await fetchWithTimeout(`${API_URL}/api/japanese/furigana`, DEFAULT_TIMEOUT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ texts }),
+  });
+
+  if (!res.ok) {
+    throw new Error("Failed to generate Japanese furigana");
+  }
+
+  const data = await res.json();
+  return Array.isArray(data.items) ? data.items : [];
+}
+
 // ─── TTS Provider 配置 ────────────────────────────────────────────────────
 
 export interface TTSConfigEdge {
   voice: string;
+  voice_japanese: string;
+  voice_chinese: string;
   speed: number;
 }
 export interface TTSConfigOpenAIApi {
@@ -401,6 +431,7 @@ export interface TTSConfigQwen3 {
   base_url: string;
   model: string;
   voice: string;
+  voice_japanese: string;
   speed: number;
 }
 export interface TTSConfig {
@@ -424,9 +455,9 @@ export interface TTSCacheInfo {
 
 const DEFAULT_TTS_CONFIG: TTSConfig = {
   provider: 'edge',
-  edge: { voice: 'aria', speed: 1 },
+  edge: { voice: 'aria', voice_japanese: 'nanami', voice_chinese: 'xiaoxiao', speed: 1 },
   openai_api: { base_url: 'https://api.openai.com/v1', api_key: '', model: 'tts-1', voice: 'alloy', speed: 1 },
-  qwen3: { base_url: 'http://127.0.0.1:18790/v1', model: 'tts-1', voice: '塔塔', speed: 1 },
+  qwen3: { base_url: 'http://127.0.0.1:18790/v1', model: 'tts-1', voice: '塔塔', voice_japanese: '', speed: 1 },
 };
 
 export async function getTTSConfig(): Promise<TTSConfig> {

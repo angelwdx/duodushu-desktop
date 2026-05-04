@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi import HTTPException
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 from app.config import UPLOADS_DIR
+from app.services.japanese_text_service import JAPANESE_READING_VERSION, normalize_japanese_text_for_tts
 from app.services.tts_providers import (
     BaseTTSProvider,
     build_provider_from_config,
@@ -30,6 +31,7 @@ CONTENT_TYPE_EXTENSIONS = {
 }
 MAX_CACHE_FILES = 50000
 MAX_CACHE_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
+TTS_CACHE_VERSION = f"tts-v2:{JAPANESE_READING_VERSION}"
 
 
 def _get_tts_config() -> dict:
@@ -49,7 +51,10 @@ def get_active_tts_provider() -> BaseTTSProvider:
 def _build_cache_key(text: str, voice: str) -> str:
     tts_config = _get_tts_config()
     normalized_config = json.dumps(tts_config, ensure_ascii=False, sort_keys=True)
-    return hashlib.md5(f"{text}-{voice}-{normalized_config}".encode("utf-8")).hexdigest()
+    normalized_text = normalize_japanese_text_for_tts(text)
+    return hashlib.md5(
+        f"{TTS_CACHE_VERSION}-{normalized_text}-{voice}-{normalized_config}".encode("utf-8")
+    ).hexdigest()
 
 
 def _get_cache_meta_path(cache_key: str) -> Path:
@@ -152,6 +157,7 @@ async def get_or_generate_audio(text: str, voice: str = "default") -> tuple[str,
         raise HTTPException(status_code=400, detail="Text is empty")
 
     provider = get_active_tts_provider()
+    normalized_text = normalize_japanese_text_for_tts(text)
     cache_key = _build_cache_key(text, voice)
 
     cached = _load_cached_audio(cache_key)
@@ -165,7 +171,7 @@ async def get_or_generate_audio(text: str, voice: str = "default") -> tuple[str,
             return cached
 
         try:
-            content_type, body = await provider.stream_with_content_type(text, voice)
+            content_type, body = await provider.stream_with_content_type(normalized_text, voice)
             chunks: List[bytes] = []
             async for chunk in body:
                 chunks.append(chunk)

@@ -40,6 +40,8 @@ openai>=1.0.0
 
 # TTS
 edge-tts>=6.1.0
+fugashi>=1.4.0
+unidic-lite>=1.0.8
 
 # Logging
 loguru>=0.7.0

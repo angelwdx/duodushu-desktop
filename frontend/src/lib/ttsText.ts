@@ -353,9 +353,61 @@ function normalizeQuotesForTTS(text: string): string {
   return normalized;
 }
 
-export function preprocessTTSPlainText(text: string): string {
+export type TTSContentLanguage = "en" | "zh" | "ja";
+
+function countMatches(text: string, pattern: RegExp): number {
+  return text.match(pattern)?.length || 0;
+}
+
+export function detectTTSContentLanguage(
+  text: string,
+  fallbackLanguage?: string | null,
+): TTSContentLanguage {
+  const compact = text.replace(/\s+/g, "");
+  const fallback = (fallbackLanguage || "").trim().toLowerCase();
+  const kanaCount = countMatches(compact, /[\u3040-\u30FF]/g);
+  const cjkCount = countMatches(compact, /[\u3400-\u9FFF\uF900-\uFAFF]/g);
+
+  if (kanaCount >= 2 || (kanaCount > 0 && cjkCount > 0)) {
+    return "ja";
+  }
+
+  if (cjkCount > 0) {
+    if (fallback.startsWith("ja")) {
+      return "ja";
+    }
+    return "zh";
+  }
+
+  if (fallback.startsWith("ja")) return "ja";
+  if (fallback.startsWith("zh")) return "zh";
+  return "en";
+}
+
+export function stripMarkdownForTTS(text: string): string {
+  if (!text) return "";
+
+  let plainText = text;
+
+  // 尽量保留可读正文，只剥离会被 TTS 念成噪音的 Markdown 标记。
+  plainText = plainText.replace(/```[\w-]*\n([\s\S]*?)```/g, "$1");
+  plainText = plainText.replace(/`([^`]+)`/g, "$1");
+  plainText = plainText.replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1");
+  plainText = plainText.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+  plainText = plainText.replace(/^>\s+/gm, "");
+  plainText = plainText.replace(/^#{1,6}\s+/gm, "");
+  plainText = plainText.replace(/^\s*[-*+]\s+/gm, "");
+  plainText = plainText.replace(/^\s*\d+\.\s+/gm, "");
+  plainText = plainText.replace(/[*_~]+/g, "");
+  plainText = plainText.replace(/\n{3,}/g, "\n\n");
+
+  return plainText.trim();
+}
+
+export function preprocessTTSPlainText(text: string, language?: string | null): string {
   if (!text) return "";
   let processed = text;
+  const isJapanese = typeof language === "string" && language.toLowerCase().startsWith("ja");
 
   // 过滤常见的纯页码页脚，避免 PDF 朗读把页码念出来。
   processed = processed.replace(/(?:^|\n)\s*[-–—]?\s*Page\s+\d+\s*[-–—]?\s*(?=\n|$)/gim, "\n");
@@ -364,19 +416,21 @@ export function preprocessTTSPlainText(text: string): string {
   // 先还原为完整序数词（16\nth → 16th），避免后续页码过滤误删数字部分。
   processed = processed.replace(/(\d+)\s*\n+\s*(st|nd|rd|th)\b/gi, "$1$2");
   processed = processed.replace(/(?:^|\n)\s*\d+\s*(?=\n|$)/gm, "\n");
-  processed = normalizeQuotesForTTS(processed);
   processed = removeDecorativeSymbolsForTTS(processed);
-  processed = repairBrokenEnglishWordsForTTS(processed);
+  if (!isJapanese) {
+    processed = normalizeQuotesForTTS(processed);
+    processed = repairBrokenEnglishWordsForTTS(processed);
 
-  // 全大写单词（≥5字符且含至少1个元音）通常是标题或章节名等排版强调，而非缩略词。
-  // 将其转为首字母大写，避免 TTS 引擎将其逐字母拼读（如 "FOREWORD" → "Foreword"）。
-  // 短缩略词（≤4字符，如 NASA、HTML）或无元音词（如 HTTP、HTTPS）不受影响。
-  processed = processed.replace(/\b[A-Z]{5,}\b/g, (match) => {
-    if (/[AEIOU]/.test(match)) {
-      return match.charAt(0) + match.slice(1).toLowerCase();
-    }
-    return match;
-  });
+    // 全大写单词（≥5字符且含至少1个元音）通常是标题或章节名等排版强调，而非缩略词。
+    // 将其转为首字母大写，避免 TTS 引擎将其逐字母拼读（如 "FOREWORD" → "Foreword"）。
+    // 短缩略词（≤4字符，如 NASA、HTML）或无元音词（如 HTTP、HTTPS）不受影响。
+    processed = processed.replace(/\b[A-Z]{5,}\b/g, (match) => {
+      if (/[AEIOU]/.test(match)) {
+        return match.charAt(0) + match.slice(1).toLowerCase();
+      }
+      return match;
+    });
+  }
 
   processed = insertHeadingPauses(processed);
   processed = removeStandalonePageNumberParagraphs(processed);

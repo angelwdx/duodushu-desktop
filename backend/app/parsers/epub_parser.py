@@ -27,11 +27,13 @@ class EPUBParser(BaseParser):
 
         title = self._get_metadata(book, "DC", "title") or Path(file_path).name
         author = self._get_metadata(book, "DC", "creator") or "Unknown"
+        language = self._get_metadata(book, "DC", "language")
 
         metadata = {
             "title": title,
             "author": author,
             "total_pages": self._count_chapters(book),
+            "language": language,
         }
 
         cover_image = self._extract_cover(book, book_id, file_path)

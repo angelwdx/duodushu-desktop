@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from ..models.models import Book, Page
 from ..models.database import SessionLocal, BASE_DIR, UPLOADS_DIR
 from ..parsers.factory import ParserFactory
+from .book_language_service import detect_book_language
 import uuid
 import os
 import shutil
@@ -101,9 +102,15 @@ def verify_and_process_book_task(book_id: str):
         book.author = result.get("author")  # type: ignore
         book.total_pages = result.get("total_pages")  # type: ignore
         book.cover_image = result.get("cover_image")  # type: ignore
+        pages_data = result.get("pages", [])
+        language_sample = "\n".join(
+            (page.get("text_content") or "").strip()
+            for page in pages_data[:8]
+            if page.get("text_content")
+        )
+        book.language = detect_book_language(language_sample, result.get("language"))  # type: ignore
 
         # Save pages (批量插入，提升大型书籍的入库性能)
-        pages_data = result.get("pages", [])
         batch_size = 500
         for i in range(0, len(pages_data), batch_size):
             batch = pages_data[i:i + batch_size]
