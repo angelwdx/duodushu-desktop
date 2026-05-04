@@ -469,6 +469,36 @@ export default function EPUBReader({
     return clone.innerText || clone.textContent || '';
   }, []);
 
+  const getCurrentContentsFallbackText = useCallback(() => {
+    const contentsList = renditionRef.current?.getContents?.() ?? [];
+    const mergedText = Array.from(
+      new Set(
+        contentsList
+          .map((contents: any) => extractPlainTextFromBody(contents?.document?.body).trim())
+          .filter((text: string) => text.length > 0),
+      ),
+    ).join('\n');
+
+    if (!mergedText) return '';
+    return mergedText.length > 5000 ? `${mergedText.substring(0, 5000).trim()}\n...(truncated)` : mergedText;
+  }, [extractPlainTextFromBody]);
+
+  const resolveVisibleContentText = useCallback((text: string) => {
+    const normalizedText = text.trim();
+    if (normalizedText.length >= 10) return normalizedText;
+
+    const fallbackText = getCurrentContentsFallbackText();
+    if (fallbackText) {
+      log.debug('Using current contents fallback for visible text', {
+        extractedLength: normalizedText.length,
+        fallbackLength: fallbackText.length,
+      });
+      return fallbackText;
+    }
+
+    return normalizedText;
+  }, [getCurrentContentsFallbackText]);
+
   const applyReaderStylesToContents = useCallback((contents: any) => {
     const doc = contents?.document as Document | undefined;
     if (!doc?.documentElement || !doc.head) return;
@@ -1842,81 +1872,79 @@ export default function EPUBReader({
                                  range.setEnd(endContainer, endOffset);
 
                                  // 清理假名标注
-                                 let text = range.toString().trim();
                                  const div = doc.createElement('div');
                                  div.appendChild(range.cloneContents());
-                                 text = extractPlainTextFromBody(div);
-                                 log.debug('INIT SYNC - Text length:', text.length);
-                                 onContentChange(text);
-                             } catch (rangeOpErr) {
-                                 log.debug('INIT SYNC - Range operation failed (offsets may be stale):', rangeOpErr);
-                                 // Fallback: Safe truncation
-                                 let startText = rangeStart.toString().trim();
-                                 // 清理假名
-                                 const tempDiv = doc.createElement('div');
-                                 tempDiv.textContent = startText;
-                                 startText = extractPlainTextFromBody(tempDiv);
-                                 if (startText.length > 2000) {
-                                     onContentChange(startText.substring(0, 2000) + "\n...(truncated)");
-                                 } else {
-                                     onContentChange(startText);
+                                 let text = extractPlainTextFromBody(div);
+                                 // 如果提取的文本为空或太短，使用备用方法
+                                 if (!text || text.length < 10) {
+                                     log.debug('INIT SYNC - extractPlainTextFromBody returned empty/short, using fallback');
+                                     text = range.toString().trim();
+                                     text = text.replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
                                  }
-                             }
-                         } else {
-                             // Fallback for cross-chapter or detached nodes
-                             let sText = rangeStart.toString().trim();
-                             let eText = rangeEnd.toString().trim();
-                             // 清理假名
-                             const tempDiv1 = doc.createElement('div');
-                             tempDiv1.textContent = sText + "\n...\n" + eText;
-                             const combined = extractPlainTextFromBody(tempDiv1);
-                             if (combined.length > 5000) {
-                                 onContentChange(combined.substring(0, 5000) + "\n...(truncated)");
-                             } else {
-                                 onContentChange(combined);
-                             }
-                             log.debug('INIT SYNC (Fallback) - Text length truncated check used');
-                         }
-                     } else if (rangeStart) {
-                         // 只有 start 成功
-                         const doc = rangeStart.startContainer.ownerDocument;
+                                  const resolvedText = resolveVisibleContentText(text);
+                                  log.debug('INIT SYNC - Text length:', resolvedText.length);
+                                  onContentChange(resolvedText);
+                              } catch (rangeOpErr) {
+                                  log.debug('INIT SYNC - Range operation failed (offsets may be stale):', rangeOpErr);
+                                  // Fallback: Safe truncation
+                                  let startText = rangeStart.toString().trim();
+                                  // 手动清理假名
+                                  startText = startText.replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
+                                  if (startText.length > 2000) {
+                                      onContentChange(resolveVisibleContentText(startText.substring(0, 2000) + "\n...(truncated)"));
+                                  } else {
+                                      onContentChange(resolveVisibleContentText(startText));
+                                  }
+                              }
+                          } else {
+                              // Fallback for cross-chapter or detached nodes
+                              const sText = rangeStart.toString().trim();
+                              const eText = rangeEnd.toString().trim();
+                              // 手动清理假名
+                              const combined = (sText + "\n...\n" + eText).replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
+                              if (combined.length > 5000) {
+                                  onContentChange(resolveVisibleContentText(combined.substring(0, 5000) + "\n...(truncated)"));
+                              } else {
+                                  onContentChange(resolveVisibleContentText(combined));
+                              }
+                              log.debug('INIT SYNC (Fallback) - Text length truncated check used');
+                          }
+                      } else if (rangeStart) {
+                          // 只有 start 成功
                          let startText = rangeStart.toString().trim();
-                         // 清理假名
-                         const tempDiv2 = doc.createElement('div');
-                         tempDiv2.textContent = startText;
-                         startText = extractPlainTextFromBody(tempDiv2);
-                         if (startText.length > 3000) {
-                             onContentChange(startText.substring(0, 2000) + "\n...(truncated)");
-                         } else {
-                             onContentChange(startText);
-                         }
-                     }
-                   } catch (err) {
-                     log.debug('Manual range construction failed (likely IndexSizeError from epub.js):', err);
-                     // Simple fallback - 最后尝试
+                          // 手动清理假名
+                          startText = startText.replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
+                          if (startText.length > 3000) {
+                              onContentChange(resolveVisibleContentText(startText.substring(0, 2000) + "\n...(truncated)"));
+                          } else {
+                              onContentChange(resolveVisibleContentText(startText));
+                          }
+                      }
+                    } catch (err) {
+                      log.debug('Manual range construction failed (likely IndexSizeError from epub.js):', err);
+                      // Simple fallback - 最后尝试
                      try {
                        const range = await book.getRange(start);
-                       if (range) {
-                         // 清理假名
-                         let text = range.toString().trim();
-                         const doc = range.startContainer?.ownerDocument;
-                         if (doc) {
-                           const tempDiv = doc.createElement('div');
-                           tempDiv.textContent = text;
-                           text = extractPlainTextFromBody(tempDiv);
-                         }
-                         onContentChange(text);
-                       }
-                     } catch (finalErr) {
-                       log.debug('Final getRange fallback failed:', finalErr);
-                     }
-                   }
-                }
-             } catch (e) {
-                log.debug('Init sync failed:', e);
-             }
-          });
-      }
+                        if (range) {
+                          // 手动清理假名
+                          let text = range.toString().trim();
+                          text = text.replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
+                          onContentChange(resolveVisibleContentText(text));
+                        } else {
+                          onContentChange(resolveVisibleContentText(''));
+                        }
+                      } catch (finalErr) {
+                        log.debug('Final getRange fallback failed:', finalErr);
+                        onContentChange(resolveVisibleContentText(''));
+                      }
+                    }
+                 }
+              } catch (e) {
+                 log.debug('Init sync failed:', e);
+                 onContentChange(resolveVisibleContentText(''));
+              }
+           });
+       }
 
       if (!isCancelled) {
           setLoading(false);
@@ -1992,12 +2020,12 @@ export default function EPUBReader({
             // 新增：提取并回传当前页可见内容（带防抖）
             if (onContentChange) {
               if (contentSyncTimeoutRef.current) clearTimeout(contentSyncTimeoutRef.current);
-              
+
               contentSyncTimeoutRef.current = setTimeout(async () => {
                 try {
                   const start = location.start.cfi;
                   const end = location.end.cfi;
-                  
+
                   // 1. 尝试主提取方式：基于范围的提取
                   let text = "";
                   try {
@@ -2013,7 +2041,7 @@ export default function EPUBReader({
                     } catch (e) {
                       log.debug('Relocated sync - getRange(end) failed (IndexSizeError from epub.js):', e);
                     }
-                    
+
                     if (rangeStart && rangeEnd) {
                          const startContainer = rangeStart.startContainer;
                          const endContainer = rangeEnd.endContainer;
@@ -2032,43 +2060,46 @@ export default function EPUBReader({
                                  const div = doc.createElement('div');
                                  div.appendChild(range.cloneContents());
                                  text = extractPlainTextFromBody(div);
+                                 log.debug('Relocated sync - extractPlainTextFromBody result:', { length: text.length });
+                                 // 如果提取的文本为空或太短，使用备用方法
+                                 if (!text || text.length < 10) {
+                                     log.debug('extractPlainTextFromBody returned empty/short, using fallback');
+                                     text = range.toString().trim();
+                                     text = text.replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
+                                     log.debug('Relocated sync - fallback result:', { length: text.length });
+                                 }
                              } catch (rangeOpErr) {
                                  log.debug('Relocated sync - Range operation failed:', rangeOpErr);
                                  // Fallback: Safe truncation if start range is too large (likely whole chapter/wrapper)
                                  let startText = rangeStart.toString().trim();
-                                 const tempDiv = doc.createElement('div');
-                                 tempDiv.textContent = startText;
-                                 startText = extractPlainTextFromBody(tempDiv);
+                                 // 手动清理常见的假名格式
+                                 startText = startText.replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
                                  if (startText.length > 2000) {
                                      // Likely an element fallback, truncate
                                      text = startText.substring(0, 2000) + "\n...(truncated)";
                                  } else {
                                      text = startText;
                                  }
+                                 log.debug('Relocated sync - rangeOpErr fallback result:', { length: text.length });
                              }
-                        } else {
+                         } else {
                              // Fallback for cross-document (unlikely in single-view) or disconnected nodes
-                             let sText = rangeStart.toString().trim();
-                             let eText = rangeEnd.toString().trim();
-                             // 清理假名
-                             const tempDiv1 = doc.createElement('div');
-                             tempDiv1.textContent = sText + "\n...\n" + eText;
-                             const combined = extractPlainTextFromBody(tempDiv1);
-                             // If fallback creates massive text, truncate
-                             if (combined.length > 5000) {
-                                 text = combined.substring(0, 5000) + "\n...(truncated)";
+                              const sText = rangeStart.toString().trim();
+                              const eText = rangeEnd.toString().trim();
+                             // 手动清理假名
+                             const cleanCombined = (sText + "\n...\n" + eText).replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
+                             if (cleanCombined.length > 5000) {
+                                 text = cleanCombined.substring(0, 5000) + "\n...(truncated)";
                              } else {
-                                 text = combined;
+                                 text = cleanCombined;
                              }
-                        }
+                             log.debug('Relocated sync - cross-doc fallback result:', { length: text.length });
+                         }
                    } else if (rangeStart) {
                         // Only start range available (end failed)
-                        const doc = rangeStart.startContainer.ownerDocument;
                         let startText = rangeStart.toString().trim();
-                        // 清理假名
-                        const tempDiv2 = doc.createElement('div');
-                        tempDiv2.textContent = startText;
-                        startText = extractPlainTextFromBody(tempDiv2);
+                        // 手动清理假名
+                        startText = startText.replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
                         // 关键修复: 如果只有 start 且内容极长，说明可能选中了整个章节容器
                         if (startText.length > 3000) {
                              log.warn('Fallback extraction used start-only which is very long, truncating.');
@@ -2076,6 +2107,7 @@ export default function EPUBReader({
                         } else {
                              text = startText;
                         }
+                        log.debug('Relocated sync - start-only fallback result:', { length: text.length });
                    }
                  } catch (rangeErr) {
                    log.debug('Range extraction failed, trying fallback...');
@@ -2086,31 +2118,25 @@ export default function EPUBReader({
                     try {
                       const range = rendition.getRange(start);
                       if (range) {
-                        // 清理假名
-                        const doc = range.startContainer?.ownerDocument;
+                        // 手动清理假名
                         let rawText = range.toString().trim();
-                        if (doc) {
-                          const tempDiv = doc.createElement('div');
-                          tempDiv.textContent = rawText;
-                          text = extractPlainTextFromBody(tempDiv);
-                        } else {
-                          text = rawText;
-                        }
+                        rawText = rawText.replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
+                        text = rawText;
+                        log.debug('Relocated sync - rendition.getRange fallback result:', { length: text.length });
                       }
                     } catch (fallbackErr) {
-                      log.debug('Fallback extraction failed');
+                      log.debug('Fallback extraction failed:', fallbackErr);
                     }
                   }
 
-                  if (text) {
-                    log.debug('Extracted visible text:', { length: text.length, preview: text.substring(0, 50) + '...' });
-                    onContentChange(text);
-                  } else {
-                    // 降级为 debug，通常是由于处于加载中间态或图片页
-                    log.debug('Extracted text is empty (possibly image page or loading)');
-                  }
+                  // 始终调用 onContentChange，即使内容为空
+                  const resolvedText = resolveVisibleContentText(text);
+                  log.debug('Relocated sync - Final result:', { length: resolvedText.length, hasText: !!resolvedText });
+                  onContentChange(resolvedText);
                 } catch (e) {
                   log.debug('Content extraction logic encounter error:', e);
+                  // 出错时也要调用 onContentChange，避免状态卡住
+                  onContentChange(resolveVisibleContentText(''));
                 }
               }, 300); // 300ms 防抖，等待排版稳定
             }
@@ -2330,6 +2356,9 @@ export default function EPUBReader({
           log.debug('假名 reflow display 失败:', error);
         }
       }
+
+      if (cancelled || !onContentChange) return;
+      onContentChange(resolveVisibleContentText(''));
     };
 
     void refreshCurrentContents();
@@ -2337,7 +2366,7 @@ export default function EPUBReader({
     return () => {
       cancelled = true;
     };
-  }, [applyFuriganaToDocument, applyReaderStylesToContents, fontFamily, lineHeight, remeasureCurrentEpubViews, renditionReady, showFurigana]);
+  }, [applyFuriganaToDocument, applyReaderStylesToContents, fontFamily, lineHeight, onContentChange, remeasureCurrentEpubViews, renditionReady, resolveVisibleContentText, showFurigana]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
