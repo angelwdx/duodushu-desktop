@@ -10,7 +10,11 @@ from app.services.book_language_service import contains_japanese_text
 
 KANJI_CHARACTERS = set("々〆ヵヶ")
 INLINE_JAPANESE_SPACING_RE = re.compile(r"[ \t\u3000]+")
-JAPANESE_READING_VERSION = "fugashi-unidic-lite-v7"
+JAPANESE_READING_VERSION = "fugashi-unidic-lite-v8"
+JAPANESE_PAUSE_RE = re.compile(r"[、]{2,}")
+JAPANESE_ELLIPSIS_RE = re.compile(r"(?:\.{3,}|…{2,}|‥{2,})")
+JAPANESE_BRACKETS_RE = re.compile(r"[()\[\]{}（）［］｛｝【】〈〉《》]")
+JAPANESE_PUNCTUATION_SPACING_RE = re.compile(r"\s*([、。！？])\s*")
 READING_OVERRIDES: tuple[tuple[str, str], ...] = (
     ("土方歳三", "ひじかたとしぞう"),
     ("近藤勇", "こんどういさみ"),
@@ -32,6 +36,16 @@ READING_OVERRIDES: tuple[tuple[str, str], ...] = (
     ("村百姓", "むらびゃくしょう"),
     ("一昨日", "おととい"),
 )
+TTS_PRESERVE_SURFACES = {
+    "お父様",
+    "お母様",
+    "お兄様",
+    "お姉様",
+    "お父さん",
+    "お母さん",
+    "お兄さん",
+    "お姉さん",
+}
 NUMBER_LIKE_SURFACES = set("0123456789〇一二三四五六七八九十百千万億兆")
 COUNTER_SURFACES = {"号"}
 
@@ -167,6 +181,24 @@ def _normalize_text_for_analysis(text: str) -> tuple[str, list[int]]:
         previous_kept_char = char
 
     return "".join(normalized_chars), normalized_index_map
+
+
+def _normalize_japanese_punctuation_for_tts(text: str) -> str:
+    trailing_sentence_pause = bool(re.search(r"(?:\.{3,}|…{2,}|‥{2,}|(?<!\d)\.)\s*$", text))
+    normalized = JAPANESE_ELLIPSIS_RE.sub("、", text)
+    normalized = JAPANESE_BRACKETS_RE.sub("、", normalized)
+    normalized = normalized.replace("!", "！").replace("?", "？")
+    normalized = re.sub(r"(?<!\d)[/／\\|](?!\d)", "、", normalized)
+    normalized = re.sub(r"(?<!\d)[,，;；:：](?!\d)", "、", normalized)
+    normalized = re.sub(r"(?<!\d)\.(?!\d)", "。", normalized)
+    normalized = JAPANESE_PUNCTUATION_SPACING_RE.sub(r"\1", normalized)
+    normalized = JAPANESE_PAUSE_RE.sub("、", normalized)
+    normalized = re.sub(r"、([。！？])", r"\1", normalized)
+    normalized = re.sub(r"([。！？])[。！？]+", r"\1", normalized)
+    if trailing_sentence_pause:
+        normalized = re.sub(r"[、\s]*$", "。", normalized)
+    normalized = re.sub(r"([。！？])[。！？]+", r"\1", normalized)
+    return normalized.strip("、 ")
 
 
 @lru_cache(maxsize=1)
@@ -416,6 +448,91 @@ def _get_plain_chunk_fugashi_words(text: str) -> list[dict[str, Any]]:
     return words
 
 
+def _is_likely_missing_okurigana_extraction_error(
+    previous_word: dict[str, Any],
+    current_word: dict[str, Any],
+) -> bool:
+    previous_surface = previous_word["surface"] or ""
+    current_surface = current_word["surface"] or ""
+    previous_pos1 = previous_word["pos1"] or ""
+    previous_pos2 = previous_word["pos2"] or ""
+    current_pos1 = current_word["pos1"] or ""
+
+    return (
+        len(previous_surface) == 1
+        and _is_all_kanji(previous_surface)
+        and not previous_word["reading"]
+        and previous_pos1 == "名詞"
+        and previous_pos2 == "普通名詞"
+        and current_surface.startswith("つ")
+        and not current_word["reading"]
+        and current_pos1 in {"動詞", "形容詞"}
+    )
+
+
+def _is_likely_tsu_te_ta_extraction_error(
+    current_word: dict[str, Any],
+    next_word: dict[str, Any],
+) -> bool:
+    current_surface = current_word["surface"] or ""
+    current_pos1 = current_word["pos1"] or ""
+    next_surface = next_word["surface"] or ""
+    next_pos1 = next_word["pos1"] or ""
+
+    return (
+        current_pos1 == "動詞"
+        and current_surface.endswith("つ")
+        and next_surface in {"て", "た"}
+        and next_pos1 in {"助詞", "助動詞"}
+    )
+
+
+def _repair_small_tsu_extraction_errors(text: str) -> str:
+    repaired = text
+
+    while True:
+        words = _get_plain_chunk_fugashi_words(repaired)
+        did_repair = False
+
+        for previous_word, current_word in zip(words, words[1:]):
+            if not _is_likely_missing_okurigana_extraction_error(previous_word, current_word):
+                continue
+
+            candidate = repaired[:current_word["start"]] + repaired[current_word["start"] + 1:]
+            candidate_words = _get_plain_chunk_fugashi_words(candidate)
+            repaired_word = next(
+                (
+                    word
+                    for word in candidate_words
+                    if word["start"] <= previous_word["start"] < word["end"]
+                    and (word["pos1"] or "") in {"動詞", "形容詞"}
+                    and bool(word["reading"])
+                ),
+                None,
+            )
+            if repaired_word is None:
+                continue
+
+            repaired = candidate
+            did_repair = True
+            break
+
+        if did_repair:
+            continue
+
+        for current_word, next_word in zip(words, words[1:]):
+            if not _is_likely_tsu_te_ta_extraction_error(current_word, next_word):
+                continue
+
+            replacement_index = current_word["end"] - 1
+            repaired = repaired[:replacement_index] + "っ" + repaired[replacement_index + 1:]
+            did_repair = True
+            break
+
+        if not did_repair:
+            return repaired
+
+
 def _tokenize_with_fugashi(text: str) -> list[dict[str, str | None]]:
     tokens: list[dict[str, str | None]] = []
     chunk_start = 0
@@ -469,6 +586,9 @@ def _get_tts_separator(
     if current_pos1 in {"補助記号", "記号"}:
         return ""
 
+    if previous_pos1 in {"補助記号", "記号"}:
+        return ""
+
     if current_pos1 == "助詞":
         return ""
 
@@ -491,12 +611,39 @@ def _normalize_non_kanji_token_for_tts(
     surface = token["surface"] or ""
     pos1 = token["pos1"] or ""
 
-    if pos1 == "助詞" and surface == "は":
-        if previous_token and (previous_token["pos1"] or "") == "助詞":
-            return "は"
-        return "わ"
+    if pos1 == "助詞":
+        if surface == "は":
+            if previous_token and (previous_token["pos1"] or "") == "助詞":
+                return "は"
+            return "わ"
+        if surface == "へ":
+            return "え"
+        if surface == "を":
+            return "お"
 
     return surface
+
+
+def _apply_reading_overrides_inline_for_tts(text: str) -> str:
+    parts: list[str] = []
+    current_index = 0
+
+    while current_index < len(text):
+        matched_override = _match_reading_override(text, current_index)
+        if matched_override is None:
+            parts.append(text[current_index])
+            current_index += 1
+            continue
+
+        override_surface, override_reading = matched_override
+        parts.append(
+            override_surface if override_surface in TTS_PRESERVE_SURFACES else override_reading
+        )
+        current_index += len(override_surface)
+
+    normalized = "".join(parts)
+    normalized = re.sub(r"[ \t\u3000]{2,}", " ", normalized)
+    return JAPANESE_PUNCTUATION_SPACING_RE.sub(r"\1", normalized).strip()
 
 
 def _annotate_with_fugashi(text: str) -> dict[str, Any]:
@@ -562,32 +709,9 @@ def normalize_japanese_text_for_tts(text: str) -> str:
         return original_text
 
     normalized_text, _ = _normalize_text_for_analysis(original_text)
-    tokens = _tokenize_with_fugashi(normalized_text)
-
-    tts_parts: list[str] = []
-    previous_token: dict[str, str | None] | None = None
-    for token in tokens:
-        reading = token["reading"]
-        pos1 = token["pos1"] or ""
-        token_text: str
-
-        if reading and pos1 in {"動詞", "形容詞", "助動詞"}:
-            token_text = token["surface"] or ""
-        elif reading:
-            token_text = reading
-        else:
-            token_text = _normalize_non_kanji_token_for_tts(token, previous_token)
-
-        if previous_token:
-            separator = _get_tts_separator(previous_token, token)
-            if separator:
-                tts_parts.append(separator)
-
-        tts_parts.append(token_text)
-        previous_token = token
-
-    tts_text = "".join(tts_parts)
-    return re.sub(r"[ \t\u3000]{2,}", " ", tts_text)
+    normalized_text = _normalize_japanese_punctuation_for_tts(normalized_text)
+    normalized_text = _repair_small_tsu_extraction_errors(normalized_text)
+    return _apply_reading_overrides_inline_for_tts(normalized_text)
 
 
 def annotate_japanese_texts(texts: list[str], db: Session) -> list[dict[str, Any]]:

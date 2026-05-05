@@ -17,6 +17,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+MIN_TTS_SPEED = 0.5
+MAX_TTS_SPEED = 2.0
+
 # Edge TTS 内置音色映射（按地区分组，仅保留通用音色，不含 Multilingual / Expressive 变体）
 EDGE_VOICE_MAP: dict[str, str] = {
     # en-US
@@ -87,8 +90,28 @@ class BaseTTSProvider(ABC):
         return b"".join(chunks)
 
 
+def normalize_tts_speed(speed: float | int | None, default: float = 1.0) -> float:
+    """规范化 TTS 速度，避免异常值影响合成质量。"""
+    try:
+        numeric = float(speed) if speed is not None else default
+    except (TypeError, ValueError):
+        numeric = default
+
+    return max(MIN_TTS_SPEED, min(MAX_TTS_SPEED, numeric))
+
+
 class EdgeTTSProvider(BaseTTSProvider):
     """微软 Edge TTS - 免费，无需配置，输出 audio/mpeg"""
+
+    def __init__(self, speed: float = 1.0) -> None:
+        self.speed = normalize_tts_speed(speed)
+
+    @staticmethod
+    def _speed_to_rate(speed: float) -> str:
+        percent = round((normalize_tts_speed(speed) - 1.0) * 100)
+        if percent >= 0:
+            return f"+{percent}%"
+        return f"{percent}%"
 
     async def stream_with_content_type(
         self, text: str, voice: str = "aria"
@@ -100,7 +123,11 @@ class EdgeTTSProvider(BaseTTSProvider):
     ) -> AsyncGenerator[bytes, None]:
         voice_name = EDGE_VOICE_MAP.get(voice, voice) if voice else EDGE_VOICE_MAP["aria"]
         try:
-            communicate = edge_tts.Communicate(text, voice_name)
+            communicate = edge_tts.Communicate(
+                text,
+                voice_name,
+                rate=self._speed_to_rate(self.speed),
+            )
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":  # type: ignore
                     yield chunk["data"]       # type: ignore
@@ -129,7 +156,7 @@ class OpenAIApiProvider(BaseTTSProvider):
         self.api_key = api_key
         self.model = model
         self.default_voice = voice
-        self.speed = speed
+        self.speed = normalize_tts_speed(speed)
         self.speech_path = speech_path
         self.timeout = timeout
 
@@ -314,4 +341,7 @@ def build_provider_from_config(tts_config: dict) -> BaseTTSProvider:
             speed=float(cfg.get("speed", 1.0)),
         )
     else:
-        return EdgeTTSProvider()
+        cfg = tts_config.get("edge", {})
+        return EdgeTTSProvider(
+            speed=float(cfg.get("speed", 1.0)),
+        )

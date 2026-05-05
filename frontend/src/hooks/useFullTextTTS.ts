@@ -19,9 +19,11 @@ import { isJapaneseBookLanguage } from '../lib/japaneseText';
 // ─── 常量 ──────────────────────────────────────────────────────────────────
 const MAX_CHUNK = 9800;
 const MAX_CHUNK_QWEN3 = 180;
+const MAX_CHUNK_JAPANESE = 320;
 const MAX_CONSECUTIVE_EMPTY = 3;
 const PREFETCH_DEPTH_DEFAULT = 1;
 const PREFETCH_DEPTH_QWEN3 = 2;
+const PREFETCH_DEPTH_JAPANESE = 2;
 
 const EDGE_VOICES_EN = [
   // en-US
@@ -156,6 +158,38 @@ function splitTextIntoChunksForQwen3(text: string, maxLen = MAX_CHUNK_QWEN3): st
   return sentences.flatMap(sentence => splitLongSentence(sentence, maxLen));
 }
 
+function splitTextIntoChunksForJapanese(text: string, maxLen = MAX_CHUNK_JAPANESE): string[] {
+  const sentences = splitIntoSentences(text.trim());
+  if (sentences.length === 0) return [];
+
+  const chunks: string[] = [];
+  let currentChunk = '';
+
+  const pushChunk = () => {
+    const trimmed = currentChunk.trim();
+    if (trimmed) chunks.push(trimmed);
+    currentChunk = '';
+  };
+
+  for (const sentence of sentences.flatMap(part => splitLongSentence(part, maxLen))) {
+    if (!currentChunk) {
+      currentChunk = sentence;
+      continue;
+    }
+
+    if (currentChunk.length + sentence.length <= maxLen) {
+      currentChunk += sentence;
+      continue;
+    }
+
+    pushChunk();
+    currentChunk = sentence;
+  }
+
+  pushChunk();
+  return chunks;
+}
+
 const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 // ─── Hook ──────────────────────────────────────────────────────────────────
@@ -193,6 +227,7 @@ export function useFullTextTTS({
   // ── 核心 Refs ──
   const audioRef               = useRef<HTMLAudioElement | null>(null);
   const blobUrlRef             = useRef<string | null>(null);
+  const currentAudioSynthesisSpeedRef = useRef(1);
   const shouldPlayRef          = useRef(false);  // false 时循环退出
   const readingPageRef         = useRef<number>(1);
   const providerRef            = useRef(provider);
@@ -210,6 +245,19 @@ export function useFullTextTTS({
   const pageStepRef        = useRef(pageStep);
   const speedRef           = useRef(speed);
 
+  const getCurrentAudioPlaybackRate = useCallback(() => {
+    const synthesisSpeed = currentAudioSynthesisSpeedRef.current || 1;
+    const rawRatio = speedRef.current / synthesisSpeed;
+    if (!Number.isFinite(rawRatio) || rawRatio <= 0) return 1;
+    return Math.min(2, Math.max(0.5, rawRatio));
+  }, []);
+
+  const syncCurrentAudioPlaybackRate = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.playbackRate = getCurrentAudioPlaybackRate();
+    }
+  }, [getCurrentAudioPlaybackRate]);
+
   useEffect(() => { getPageTextRef.current     = getPageText;     }, [getPageText]);
   useEffect(() => { totalPagesRef.current      = totalPages;      }, [totalPages]);
   useEffect(() => { onPageChangeRef.current    = onPageChange;    }, [onPageChange]);
@@ -222,10 +270,8 @@ export function useFullTextTTS({
     if (typeof window !== 'undefined') {
       window.localStorage.setItem('reader_tts_speed', String(speed));
     }
-    if (audioRef.current) {
-      audioRef.current.playbackRate = speed;
-    }
-  }, [speed]);
+    syncCurrentAudioPlaybackRate();
+  }, [speed, syncCurrentAudioPlaybackRate]);
 
   const setSpeed = useCallback((nextSpeed: number) => {
     const normalized = Math.min(2, Math.max(0.5, Number(nextSpeed) || 1));
@@ -346,18 +392,28 @@ export function useFullTextTTS({
     shouldPlayRef.current = false;
     audioRef.current?.pause();
     audioRef.current = null;
+    currentAudioSynthesisSpeedRef.current = 1;
     // 强制 resolve 挂起的 playChunk Promise，让循环可以检测到 shouldPlayRef 并退出
     abortCurrentChunkRef.current?.();
     abortCurrentChunkRef.current = null;
     revokeBlobUrl();
   }, [revokeBlobUrl]);
 
-  const loadChunkAudio = useCallback(async (text: string): Promise<string> => {
+  const loadChunkAudio = useCallback(async (
+    text: string,
+  ): Promise<{ blobUrl: string; synthesisSpeed: number }> => {
     const { streamSpeech } = await import('../lib/api');
+    const synthesisSpeed = speedRef.current;
     pendingAudioLoadsRef.current += 1;
     setIsGenerating(true);
     try {
-      return await streamSpeech(text, voiceRef.current);
+      const blobUrl = await streamSpeech(
+        text,
+        voiceRef.current,
+        providerRef.current,
+        synthesisSpeed,
+      );
+      return { blobUrl, synthesisSpeed };
     } finally {
       pendingAudioLoadsRef.current = Math.max(0, pendingAudioLoadsRef.current - 1);
       setIsGenerating(pendingAudioLoadsRef.current > 0);
@@ -365,7 +421,10 @@ export function useFullTextTTS({
   }, []);
 
   // ── 播放已加载的 chunk（返回 Promise，挂起直到播放完毕或被 abort） ──
-  const playPreparedChunk = useCallback(async (blobUrl: string): Promise<void> => {
+  const playPreparedChunk = useCallback(async (
+    preparedAudio: { blobUrl: string; synthesisSpeed: number },
+  ): Promise<void> => {
+    const { blobUrl, synthesisSpeed } = preparedAudio;
     if (!shouldPlayRef.current) {
       URL.revokeObjectURL(blobUrl);
       return;
@@ -373,9 +432,10 @@ export function useFullTextTTS({
 
     revokeBlobUrl();
     blobUrlRef.current = blobUrl;
+    currentAudioSynthesisSpeedRef.current = synthesisSpeed;
 
     const audio = new Audio(blobUrl);
-    audio.playbackRate = speedRef.current;
+    audio.playbackRate = getCurrentAudioPlaybackRate();
     audioRef.current = audio;
 
     return new Promise((resolve, reject) => {
@@ -384,17 +444,19 @@ export function useFullTextTTS({
 
       audio.onended = () => {
         abortCurrentChunkRef.current = null;
+        currentAudioSynthesisSpeedRef.current = 1;
         resolve();
       };
       audio.onerror = () => {
         abortCurrentChunkRef.current = null;
+        currentAudioSynthesisSpeedRef.current = 1;
         reject(new Error('Audio playback error'));
       };
       audio.play().catch(reject);
       // 注意：不在 onpause 里 resolve —— 这样暂停时 Promise 保持挂起，
       // resume() 调用 audio.play() 后音频从原位继续，onended 照常触发。
     });
-  }, [revokeBlobUrl]);
+  }, [getCurrentAudioPlaybackRate, revokeBlobUrl]);
 
   // ── 朗读一整页（可能分多个 chunk），返回是否有内容 ──
   const playPage = useCallback(async (page: number): Promise<boolean> => {
@@ -404,9 +466,15 @@ export function useFullTextTTS({
     const isQwen3 = providerRef.current === 'qwen3';
     const chunks = isQwen3
       ? splitTextIntoChunksForQwen3(rawText)
+      : isJapaneseTTSLanguage
+        ? splitTextIntoChunksForJapanese(rawText)
       : splitTextIntoChunks(rawText);
-    const prefetchDepth = isQwen3 ? PREFETCH_DEPTH_QWEN3 : PREFETCH_DEPTH_DEFAULT;
-    const blobQueue: Array<Promise<string>> = [];
+    const prefetchDepth = isQwen3
+      ? PREFETCH_DEPTH_QWEN3
+      : isJapaneseTTSLanguage
+        ? PREFETCH_DEPTH_JAPANESE
+        : PREFETCH_DEPTH_DEFAULT;
+    const blobQueue: Array<Promise<{ blobUrl: string; synthesisSpeed: number }>> = [];
     const enqueueNext = (chunkIndex: number) => {
       if (chunkIndex >= chunks.length) return;
       blobQueue.push(loadChunkAudio(chunks[chunkIndex]));
@@ -423,16 +491,16 @@ export function useFullTextTTS({
         return true;
       }
 
-      const blobUrl = await blobQueue.shift()!;
+      const preparedAudio = await blobQueue.shift()!;
       enqueueNext(i + prefetchDepth);
 
       // 高亮当前正在朗读的片段
       setTimeout(() => setCurrentChunkText(chunk), 0);
-      await playPreparedChunk(blobUrl);
+      await playPreparedChunk(preparedAudio);
     }
     setTimeout(() => setCurrentChunkText(null), 0);
     return true;
-  }, [loadChunkAudio, playPreparedChunk]);
+  }, [isJapaneseTTSLanguage, loadChunkAudio, playPreparedChunk]);
 
   const playPageRef = useRef(playPage);
   useEffect(() => { playPageRef.current = playPage; }, [playPage]);

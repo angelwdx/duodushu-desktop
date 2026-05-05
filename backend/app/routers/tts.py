@@ -14,12 +14,14 @@ class TTSRequest(BaseModel):
     text: str
     voice: str = "default"
     provider: Optional[Literal["edge", "openai_api", "qwen3"]] = None
+    speed: Optional[float] = None
 
 
 class TTSRequestStream(BaseModel):
     text: str
     voice: str = "default"
     provider: Optional[Literal["edge", "openai_api", "qwen3"]] = None
+    speed: Optional[float] = None
 
 
 class TTSConfigEdge(BaseModel):
@@ -64,7 +66,7 @@ async def generate_speech(req: TTSRequest):
     if len(req.text) > 5000:
         raise HTTPException(status_code=400, detail="Text too long")
 
-    file_path = await tts_service.generate_speech_file(req.text, req.voice, req.provider)
+    file_path = await tts_service.generate_speech_file(req.text, req.voice, req.provider, req.speed)
     filename = file_path.split("/")[-1].split("\\")[-1]
 
     return {"url": f"/api/tts/audio/{filename}"}
@@ -79,7 +81,7 @@ async def stream_speech(req: TTSRequestStream):
     if len(req.text) > 10000:
         raise HTTPException(status_code=400, detail="Text too long for streaming")
 
-    return await tts_service.get_stream_response(req.text, req.voice, req.provider)
+    return await tts_service.get_stream_response(req.text, req.voice, req.provider, req.speed)
 
 
 @router.get("/audio/{filename}")

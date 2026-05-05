@@ -110,14 +110,28 @@ def test_annotate_japanese_text_skips_plain_kana():
 
 
 def test_normalize_japanese_text_for_tts_reuses_furigana_readings():
-    assert normalize_japanese_text_for_tts("お母さんは一昨日来た。") == "おかあさんわ、おととい来た。"
+    assert normalize_japanese_text_for_tts("お母さんは一昨日来た。") == "お母さんはおととい来た。"
 
 
 def test_normalize_japanese_text_for_tts_handles_spacing_and_contextual_readings():
-    assert normalize_japanese_text_for_tts("女 の 夜 市") == "おんなのよるいち"
+    assert normalize_japanese_text_for_tts("女 の 夜 市") == "女のよるいち"
     assert normalize_japanese_text_for_tts("石田村百姓") == "いしだむらびゃくしょう"
-    assert normalize_japanese_text_for_tts("勇は 上 石 原") == "いさみわ、かみいしはら"
-    assert normalize_japanese_text_for_tts("環 状 八 号 線") == "かんじょう はちごう せん"
-    assert normalize_japanese_text_for_tts("二十分ほどしか離れていない") == "にじゅう ふんほどしか離れていない"
-    assert normalize_japanese_text_for_tts("住宅街は街灯もまばらで") == "じゅうたくがいわ、がいとうもまばらで"
-    assert normalize_japanese_text_for_tts("星空とは比べるべくもないが") == "ほしぞらとは、比べるべくもないが"
+    assert normalize_japanese_text_for_tts("勇は 上 石 原") == "いさみはかみいしはら"
+    assert normalize_japanese_text_for_tts("環 状 八 号 線") == "環状八号線"
+    assert normalize_japanese_text_for_tts("二十分ほどしか離れていない") == "二十分ほどしか離れていない"
+    assert normalize_japanese_text_for_tts("住宅街は街灯もまばらで") == "住宅街は街灯もまばらで"
+    assert normalize_japanese_text_for_tts("星空とは比べるべくもないが") == "星空とは比べるべくもないが"
+
+
+def test_normalize_japanese_text_for_tts_repairs_fullsize_tsu_extraction_errors():
+    assert normalize_japanese_text_for_tts("浴槽に浸つかった") == "浴槽に浸かった"
+    assert normalize_japanese_text_for_tts("彼は勝つていた") == "彼は勝っていた"
+
+
+def test_normalize_japanese_text_for_tts_keeps_valid_tsu_verbs():
+    assert normalize_japanese_text_for_tts("持つから大丈夫だ") == "持つから大丈夫だ"
+
+
+def test_normalize_japanese_text_for_tts_normalizes_particles_and_punctuation():
+    assert normalize_japanese_text_for_tts("彼は、海へ本を持っていく...") == "彼は、海へ本を持っていく。"
+    assert normalize_japanese_text_for_tts("山/川(谷)") == "山、川、谷"
