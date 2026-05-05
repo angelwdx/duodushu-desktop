@@ -18,7 +18,7 @@ def make_block(x0: float, y0: float, x1: float, y1: float, text_len: int = 50) -
     """构造一个最小的 block_info 字典，text_len 控制显著性（>= 6 即显著）。"""
     chars = [{"c": "a", "bbox": [x0, y0, x0 + 5, y1]}] * text_len
     span = {"chars": chars, "bbox": [x0, y0, x1, y1]}
-    line = {"spans": [span]}
+    line = {"spans": [span], "bbox": [x0, y0, x1, y1]}
     block = {"type": 0, "bbox": [x0, y0, x1, y1], "lines": [line]}
     return {
         "block": block,
@@ -28,6 +28,29 @@ def make_block(x0: float, y0: float, x1: float, y1: float, text_len: int = 50) -
         "y1": y1,
         "center_x": (x0 + x1) / 2,
     }
+
+
+def make_line(text: str, x0: float, y0: float, x1: float, y1: float) -> dict:
+    """构造带 bbox 的 line，便于模拟 rawdict 中同一 block 的多个区域。"""
+    step = max((x1 - x0) / max(len(text), 1), 1.0)
+    chars = []
+    cursor = x0
+    for c in text:
+        next_x = cursor + step
+        chars.append({"c": c, "bbox": [cursor, y0, next_x, y1]})
+        cursor = next_x
+    return {
+        "bbox": [x0, y0, x1, y1],
+        "spans": [{"chars": chars, "bbox": [x0, y0, x1, y1]}],
+    }
+
+
+def make_text_block(*lines: dict) -> dict:
+    x0 = min(line["bbox"][0] for line in lines)
+    y0 = min(line["bbox"][1] for line in lines)
+    x1 = max(line["bbox"][2] for line in lines)
+    y1 = max(line["bbox"][3] for line in lines)
+    return {"type": 0, "bbox": [x0, y0, x1, y1], "lines": list(lines)}
 
 
 PAGE_W = 600.0
@@ -250,6 +273,83 @@ class TestDetectColumns:
         left_results = [b for b in result if b["center_x"] < PAGE_W / 2]
         right_results = [b for b in result if b["center_x"] >= PAGE_W / 2]
         assert max(result.index(b) for b in left_results) < min(result.index(b) for b in right_results)
+
+    def test_split_block_regions_keeps_floating_caption_separate(self):
+        block = make_text_block(
+            make_line("Tycho is so large that", 235, 650, 386, 673),
+            make_line("it could fit all of London", 226, 675, 396, 697),
+            make_line("within its walls.", 250, 699, 362, 721),
+            make_line("Scientists think Tycho", 35, 694, 112, 705),
+            make_line("is about 100 million", 35, 705, 108, 716),
+            make_line("years old—it hasn't", 35, 716, 103, 727),
+            make_line("been damaged yet by", 35, 727, 114, 738),
+            make_line("other asteroid impacts.", 35, 738, 112, 749),
+        )
+
+        regions = self.parser._split_block_into_regions(block)
+
+        assert len(regions) == 2
+
+        region_texts = []
+        for region in regions:
+            lines = []
+            for line in region["lines"]:
+                line_text, _ = self.parser._extract_line_text_and_words(line)
+                lines.append(line_text)
+            region_texts.append(lines)
+
+        assert region_texts[0] == [
+            "Tycho is so large that",
+            "it could fit all of London",
+            "within its walls.",
+        ]
+        assert region_texts[1] == [
+            "Scientists think Tycho",
+            "is about 100 million",
+            "years old—it hasn't",
+            "been damaged yet by",
+            "other asteroid impacts.",
+        ]
+
+    def test_parse_page_splits_misgrouped_block_into_distinct_context_blocks(self):
+        class FakePage:
+            def __init__(self, block: dict):
+                self.rect = type("Rect", (), {"width": PAGE_W})()
+                self._block = block
+
+            def get_text(self, mode: str, flags=None):
+                assert mode == "rawdict"
+                return {"blocks": [self._block]}
+
+        page = FakePage(
+            make_text_block(
+                make_line("Tycho is so large that", 235, 650, 386, 673),
+                make_line("it could fit all of London", 226, 675, 396, 697),
+                make_line("within its walls.", 250, 699, 362, 721),
+                make_line("Scientists think Tycho", 35, 694, 112, 705),
+                make_line("is about 100 million", 35, 705, 108, 716),
+                make_line("years old—it hasn't", 35, 716, 103, 727),
+                make_line("been damaged yet by", 35, 727, 114, 738),
+                make_line("other asteroid impacts.", 35, 738, 112, 749),
+            )
+        )
+
+        parsed = self.parser._parse_page(page, 29)
+
+        assert parsed["text_content"] == (
+            "Tycho is so large that\n"
+            "it could fit all of London\n"
+            "within its walls.\n\n"
+            "Scientists think Tycho\n"
+            "is about 100 million\n"
+            "years old—it hasn't\n"
+            "been damaged yet by\n"
+            "other asteroid impacts."
+        )
+
+        quote_word = next(word for word in parsed["words_data"] if word["text"] == "London")
+        caption_word = next(word for word in parsed["words_data"] if word["text"] == "Scientists")
+        assert quote_word["block_id"] != caption_word["block_id"]
 
 
 if __name__ == "__main__":

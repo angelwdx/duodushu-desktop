@@ -146,27 +146,25 @@ class PDFParser(BaseParser):
         ordered_blocks = self._detect_columns(blocks_info, page.rect.width)
 
         # 3. 按顺序提取文字和单词坐标（无需再区分单栏/多栏）
+        #    额外在 block 内做一次区域拆分，避免 rawdict 把互不相邻的图注/引文
+        #    合并进同一个 block 后被逐行交织。
         words_data = []
         text_parts = []
 
-        for i, block_info in enumerate(ordered_blocks):
-            block = block_info["block"]
-            block_lines = []
-            ordered_lines = PDFParser._sort_visual_line_order(
-                block.get("lines", []),
-                lambda line: float(line.get("bbox", [0, 0, 0, 0])[1]),
-                lambda line: float(line.get("bbox", [0, 0, 0, 0])[3]),
-                lambda line: float(line.get("bbox", [0, 0, 0, 0])[0]),
-            )
-            for line in ordered_lines:
-                line_text, line_words = self._extract_line_text_and_words(line, block_idx=i)
-                if line_text:
-                    block_lines.append(line_text)
-                if line_words:
-                    words_data.extend(line_words)
+        block_idx = 0
+        for block_info in ordered_blocks:
+            for region in self._split_block_into_regions(block_info["block"]):
+                region_lines = []
+                for line in region["lines"]:
+                    line_text, line_words = self._extract_line_text_and_words(line, block_idx=block_idx)
+                    if line_text:
+                        region_lines.append(line_text)
+                    if line_words:
+                        words_data.extend(line_words)
 
-            if block_lines:
-                text_parts.append("\n".join(block_lines))
+                if region_lines:
+                    text_parts.append("\n".join(region_lines))
+                    block_idx += 1
 
         text_content = "\n\n".join(text_parts)
 
@@ -176,6 +174,157 @@ class PDFParser(BaseParser):
             "words_data": words_data,
             "images": [],
         }
+
+    def _split_block_into_regions(self, block: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        将 rawdict 的单个 block 按实际视觉区域拆分成多个子区域。
+
+        PyMuPDF 偶尔会把互不相邻的文本区（如居中引文 + 左下角图注）合并到同一 block。
+        如果直接按行排序，这些区域会因 y 轴重叠而被交织。这里先按行的横向分布做连通域聚类，
+        再决定这些区域是“并排栏”还是“上下独立区域”，从而避免混排。
+        """
+        line_infos: List[Dict[str, Any]] = []
+        for line in block.get("lines", []):
+            bbox = line.get("bbox", [0, 0, 0, 0])
+            if len(bbox) < 4:
+                continue
+
+            x0 = float(bbox[0])
+            y0 = float(bbox[1])
+            x1 = float(bbox[2])
+            y1 = float(bbox[3])
+            width = max(x1 - x0, 0.0)
+            height = max(y1 - y0, 0.0)
+            char_count = sum(len(span.get("chars", [])) for span in line.get("spans", []))
+
+            if width <= 0 or height <= 0 or char_count == 0:
+                continue
+
+            line_infos.append(
+                {
+                    "line": line,
+                    "x0": x0,
+                    "y0": y0,
+                    "x1": x1,
+                    "y1": y1,
+                    "width": width,
+                    "height": height,
+                    "center_x": (x0 + x1) / 2,
+                }
+            )
+
+        if not line_infos:
+            return []
+
+        if len(line_infos) == 1:
+            return [self._build_block_region(line_infos)]
+
+        regions: List[List[Dict[str, Any]]] = []
+        visited = [False] * len(line_infos)
+
+        for idx in range(len(line_infos)):
+            if visited[idx]:
+                continue
+
+            stack = [idx]
+            component: List[Dict[str, Any]] = []
+
+            while stack:
+                current_idx = stack.pop()
+                if visited[current_idx]:
+                    continue
+
+                visited[current_idx] = True
+                component.append(line_infos[current_idx])
+
+                for other_idx in range(len(line_infos)):
+                    if visited[other_idx]:
+                        continue
+                    if self._lines_share_region(line_infos[current_idx], line_infos[other_idx]):
+                        stack.append(other_idx)
+
+            regions.append(component)
+
+        region_infos = [self._build_block_region(region_lines) for region_lines in regions]
+        return self._order_block_regions(region_infos)
+
+    def _build_block_region(self, line_infos: List[Dict[str, Any]]) -> Dict[str, Any]:
+        ordered_line_infos = PDFParser._sort_visual_line_order(
+            line_infos,
+            lambda info: info["y0"],
+            lambda info: info["y1"],
+            lambda info: info["x0"],
+        )
+
+        x0 = min(info["x0"] for info in ordered_line_infos)
+        y0 = min(info["y0"] for info in ordered_line_infos)
+        x1 = max(info["x1"] for info in ordered_line_infos)
+        y1 = max(info["y1"] for info in ordered_line_infos)
+        avg_line_height = sum(info["height"] for info in ordered_line_infos) / max(len(ordered_line_infos), 1)
+
+        return {
+            "lines": [info["line"] for info in ordered_line_infos],
+            "x0": x0,
+            "y0": y0,
+            "x1": x1,
+            "y1": y1,
+            "center_x": (x0 + x1) / 2,
+            "avg_line_height": avg_line_height,
+        }
+
+    def _lines_share_region(self, left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+        overlap = min(left["x1"], right["x1"]) - max(left["x0"], right["x0"])
+        min_width = max(min(left["width"], right["width"]), 1.0)
+        max_height = max(left["height"], right["height"], 1.0)
+        edge_threshold = max(12.0, max_height * 2.5)
+        center_threshold = max(18.0, min_width * 0.45, max_height * 4.0)
+
+        if overlap >= min_width * 0.2:
+            return True
+
+        if abs(left["x0"] - right["x0"]) <= edge_threshold:
+            return True
+
+        if abs(left["x1"] - right["x1"]) <= edge_threshold:
+            return True
+
+        return abs(left["center_x"] - right["center_x"]) <= center_threshold
+
+    def _order_block_regions(self, regions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if len(regions) <= 1:
+            return regions
+
+        rough = sorted(regions, key=lambda region: (region["y0"], region["x0"]))
+        bands: List[List[Dict[str, Any]]] = []
+        current_band: List[Dict[str, Any]] = [rough[0]]
+
+        for region in rough[1:]:
+            if any(self._regions_should_share_band(existing, region) for existing in current_band):
+                current_band.append(region)
+                continue
+
+            bands.append(sorted(current_band, key=lambda item: item["x0"]))
+            current_band = [region]
+
+        bands.append(sorted(current_band, key=lambda item: item["x0"]))
+
+        ordered: List[Dict[str, Any]] = []
+        for band in bands:
+            ordered.extend(band)
+        return ordered
+
+    def _regions_should_share_band(self, upper: Dict[str, Any], lower: Dict[str, Any]) -> bool:
+        overlap = min(upper["y1"], lower["y1"]) - max(upper["y0"], lower["y0"])
+        min_height = max(min(upper["y1"] - upper["y0"], lower["y1"] - lower["y0"]), 1.0)
+        min_line_height = max(min(upper["avg_line_height"], lower["avg_line_height"]), 1.0)
+        top_threshold = max(12.0, min_line_height * 1.8)
+        horizontal_gap = max(upper["x0"], lower["x0"]) - min(upper["x1"], lower["x1"])
+
+        return (
+            abs(upper["y0"] - lower["y0"]) <= top_threshold
+            and overlap >= min_height * 0.45
+            and horizontal_gap >= max(8.0, min_line_height * 1.2)
+        )
 
     def _extract_line_text_and_words(self, line: Dict, block_idx: int = 0) -> Tuple[str, List[Dict[str, Any]]]:
         """

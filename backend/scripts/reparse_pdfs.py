@@ -19,6 +19,7 @@ import os
 import argparse
 import logging
 import json
+from pathlib import Path
 
 # 确保能找到 app 包
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -34,16 +35,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def reparse_book(db, book_id: str, file_path: str, dry_run: bool = False) -> bool:
+def resolve_book_path(file_path: str) -> Path:
+    """兼容历史相对路径格式，统一解析到真实上传文件路径。"""
+    path = Path(file_path)
+    if path.is_absolute():
+        return path
+
+    parts = list(path.parts)
+    if "uploads" in parts:
+        upload_idx = parts.index("uploads")
+        return (UPLOADS_DIR / Path(*parts[upload_idx + 1 :])).resolve()
+
+    return (UPLOADS_DIR / path.name).resolve()
+
+
+def reparse_book(db, book_id: str, file_path: Path, dry_run: bool = False) -> bool:
     """重解析单本 PDF，更新所有页面的文本和单词坐标。"""
-    if not os.path.exists(file_path):
+    if not file_path.exists():
         logger.warning(f"  [跳过] 文件不存在: {file_path}")
         return False
 
-    logger.info(f"  解析中... {os.path.basename(file_path)}")
+    logger.info(f"  解析中... {file_path.name}")
     try:
         parser = PDFParser()
-        result = parser.parse(file_path, book_id)
+        result = parser.parse(str(file_path), book_id)
         pages = result.get("pages", [])
         logger.info(f"  解析完成，共 {len(pages)} 页")
 
@@ -128,12 +143,10 @@ def main():
 
         for row in rows:
             book_id, file_path, title = row[0], row[1], row[2]
-            # file_path 存储的可能是相对于 UPLOADS_DIR 的路径，也可能是绝对路径
-            if not os.path.isabs(file_path):
-                file_path = os.path.join(str(UPLOADS_DIR), file_path)
+            resolved_path = resolve_book_path(file_path)
 
             logger.info(f"\n[{book_id[:8]}...] {title}")
-            ok = reparse_book(db, book_id, file_path, dry_run=args.dry_run)
+            ok = reparse_book(db, book_id, resolved_path, dry_run=args.dry_run)
             if ok:
                 success += 1
             else:
