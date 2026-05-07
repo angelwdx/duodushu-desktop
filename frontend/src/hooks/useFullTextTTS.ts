@@ -140,13 +140,16 @@ function getConfiguredVoice(config: StoredTTSConfig, provider: TTSProvider, ttsL
   return config.edge.voice?.trim() || 'aria';
 }
 
+function getConfiguredOpenAIVoice(config: StoredTTSConfig): string {
+  return config.openai_api.voice?.trim() || '';
+}
+
 function buildVoiceKey(provider: TTSProvider, voice: string): string {
   return `${provider}::${voice}`;
 }
 
 function buildReaderVoiceOptions(
   config: StoredTTSConfig,
-  openAIVoices: ApiTTSVoiceOption[],
   qwen3Voices: ApiTTSVoiceOption[],
   ttsLanguage: TTSLanguage,
 ): TTSVoiceOption[] {
@@ -185,17 +188,10 @@ function buildReaderVoiceOptions(
     pushOption('edge', edgeVoice.id, `Edge TTS · ${edgeVoice.label}`, config.edge.speed || 1);
   });
 
-  const configuredOpenAIVoice = config.openai_api.voice?.trim() || 'alloy';
-  if (
-    openAIVoices.length === 0
-    || openAIVoices.some((voiceOption) => voiceOption.voice === configuredOpenAIVoice)
-  ) {
+  const configuredOpenAIVoice = getConfiguredOpenAIVoice(config);
+  if (configuredOpenAIVoice) {
     pushOption('openai_api', configuredOpenAIVoice, `自定义 API · ${configuredOpenAIVoice}`, config.openai_api.speed || 1);
   }
-  openAIVoices.forEach((voiceOption) => {
-    const label = voiceOption.name?.trim() || voiceOption.voice;
-    pushOption('openai_api', voiceOption.voice, `自定义 API · ${label}`, config.openai_api.speed || 1);
-  });
 
   const configuredQwenVoice = getConfiguredVoice(config, 'qwen3', ttsLanguage);
   pushOption('qwen3', configuredQwenVoice, `本地 Qwen3 · ${configuredQwenVoice}`, config.qwen3.speed || 1);
@@ -425,14 +421,13 @@ export function useFullTextTTS({
     const loadActiveTTSConfig = async () => {
       try {
         const { getTTSConfig, getTTSVoices } = await import('../lib/api');
-        const [config, openAIVoices, qwen3Voices] = await Promise.all([
+        const [config, qwen3Voices] = await Promise.all([
           getTTSConfig(),
-          getTTSVoices('openai_api'),
           getTTSVoices('qwen3'),
         ]);
         if (cancelled) return;
 
-        const nextVoices = buildReaderVoiceOptions(config, openAIVoices, qwen3Voices, ttsLanguage);
+        const nextVoices = buildReaderVoiceOptions(config, qwen3Voices, ttsLanguage);
         const configuredVoice = getConfiguredVoice(config, config.provider, ttsLanguage);
         const activeVoiceOption = nextVoices.find((option) =>
           option.provider === config.provider && option.voice === configuredVoice,
