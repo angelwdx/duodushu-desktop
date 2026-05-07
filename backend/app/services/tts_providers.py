@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 MIN_TTS_SPEED = 0.5
 MAX_TTS_SPEED = 2.0
 
-# Edge TTS 内置音色映射（按地区分组，仅保留通用音色，不含 Multilingual / Expressive 变体）
+# Edge TTS 内置音色映射（英语仅保留美式 / 英式）
 EDGE_VOICE_MAP: dict[str, str] = {
     # en-US
     "aria":          "en-US-AriaNeural",
@@ -42,18 +42,6 @@ EDGE_VOICE_MAP: dict[str, str] = {
     "maisie":        "en-GB-MaisieNeural",
     "ryan":          "en-GB-RyanNeural",
     "thomas":        "en-GB-ThomasNeural",
-    # en-AU
-    "natasha":       "en-AU-NatashaNeural",
-    "william":       "en-AU-WilliamMultilingualNeural",
-    # en-CA
-    "clara":         "en-CA-ClaraNeural",
-    "liam":          "en-CA-LiamNeural",
-    # en-IN
-    "neerja":        "en-IN-NeerjaNeural",
-    "prabhat":       "en-IN-PrabhatNeural",
-    # en-IE
-    "emily":         "en-IE-EmilyNeural",
-    "connor":        "en-IE-ConnorNeural",
     # zh-CN
     "xiaoxiao":      "zh-CN-XiaoxiaoNeural",
     "yunxi":         "zh-CN-YunxiNeural",
@@ -65,6 +53,8 @@ EDGE_VOICE_MAP: dict[str, str] = {
 
 class BaseTTSProvider(ABC):
     """TTS Provider 抽象基类"""
+
+    supports_synthesis_speed = True
 
     @abstractmethod
     async def stream_with_content_type(
@@ -89,6 +79,10 @@ class BaseTTSProvider(ABC):
             chunks.append(chunk)
         return b"".join(chunks)
 
+    @property
+    def synthesis_speed(self) -> float:
+        return 1.0
+
 
 def normalize_tts_speed(speed: float | int | None, default: float = 1.0) -> float:
     """规范化 TTS 速度，避免异常值影响合成质量。"""
@@ -105,6 +99,10 @@ class EdgeTTSProvider(BaseTTSProvider):
 
     def __init__(self, speed: float = 1.0) -> None:
         self.speed = normalize_tts_speed(speed)
+
+    @property
+    def synthesis_speed(self) -> float:
+        return self.speed
 
     @staticmethod
     def _speed_to_rate(speed: float) -> str:
@@ -137,7 +135,7 @@ class EdgeTTSProvider(BaseTTSProvider):
 
 
 class OpenAIApiProvider(BaseTTSProvider):
-    """OpenAI 兼容 TTS API（支持 OpenAI、硅基流动、Fish Audio 等）
+    """OpenAI 兼容 TTS API（支持 OpenAI 与其他兼容服务）
 
     Content-Type 由服务端响应头决定，透传给调用方（可能是 audio/mpeg 或 audio/wav）。
     """
@@ -159,6 +157,10 @@ class OpenAIApiProvider(BaseTTSProvider):
         self.speed = normalize_tts_speed(speed)
         self.speech_path = speech_path
         self.timeout = timeout
+
+    @property
+    def synthesis_speed(self) -> float:
+        return self.speed
 
     async def stream_with_content_type(
         self, text: str, voice: str = ""
@@ -325,12 +327,15 @@ def build_provider_from_config(tts_config: dict) -> BaseTTSProvider:
 
     if provider_type == "openai_api":
         cfg = tts_config.get("openai_api", {})
+        base_url = cfg.get("base_url", "https://api.openai.com/v1")
+        model = cfg.get("model", "tts-1")
         return OpenAIApiProvider(
-            base_url=cfg.get("base_url", "https://api.openai.com/v1"),
+            base_url=base_url,
             api_key=cfg.get("api_key", ""),
-            model=cfg.get("model", "tts-1"),
+            model=model,
             voice=cfg.get("voice", "alloy"),
             speed=float(cfg.get("speed", 1.0)),
+            timeout=60.0,
         )
     elif provider_type == "qwen3":
         cfg = tts_config.get("qwen3", {})

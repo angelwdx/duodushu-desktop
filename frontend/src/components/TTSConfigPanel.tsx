@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   clearTTSCache,
   getTTSConfig,
@@ -35,18 +35,6 @@ const EDGE_VOICES_EN = [
   { id: 'maisie',      label: 'Maisie（英式女声）' },
   { id: 'ryan',        label: 'Ryan（英式男声）' },
   { id: 'thomas',      label: 'Thomas（英式男声）' },
-  // en-AU
-  { id: 'natasha',     label: 'Natasha（澳式女声）' },
-  { id: 'william',     label: 'William（澳式男声）' },
-  // en-CA
-  { id: 'clara',       label: 'Clara（加式女声）' },
-  { id: 'liam',        label: 'Liam（加式男声）' },
-  // en-IN
-  { id: 'neerja',      label: 'Neerja（印度女声）' },
-  { id: 'prabhat',     label: 'Prabhat（印度男声）' },
-  // en-IE
-  { id: 'emily',       label: 'Emily（爱尔兰女声）' },
-  { id: 'connor',      label: 'Connor（爱尔兰男声）' },
 ];
 
 const EDGE_VOICES_JA = [
@@ -76,16 +64,46 @@ export default function TTSConfigPanel() {
   const [testing, setTesting]       = useState(false);
   const [clearingCache, setClearingCache] = useState(false);
   const [cacheInfo, setCacheInfo]   = useState<TTSCacheInfo | null>(null);
+  const [openAIVoices, setOpenAIVoices] = useState<TTSVoiceOption[]>([]);
   const [qwen3Voices, setQwen3Voices] = useState<TTSVoiceOption[]>([]);
+  const [refreshingProvider, setRefreshingProvider] = useState<'openai_api' | 'qwen3' | null>(null);
   const [message, setMessage]       = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const audioRef                    = useRef<HTMLAudioElement | null>(null);
   const blobUrlRef                  = useRef<string | null>(null);
 
-  useEffect(() => {
-    getTTSConfig().then(setConfig);
-    getTTSCacheInfo().then(setCacheInfo);
-    getTTSVoices('qwen3').then(setQwen3Voices);
+  const loadProviderVoices = useCallback(async (
+    nextConfig: TTSConfig,
+    provider: 'openai_api' | 'qwen3',
+  ) => {
+    setRefreshingProvider(provider);
+    try {
+      const voices = await getTTSVoices(provider, nextConfig);
+      if (provider === 'openai_api') {
+        setOpenAIVoices(voices);
+      } else {
+        setQwen3Voices(voices);
+      }
+    } finally {
+      setRefreshingProvider(current => (current === provider ? null : current));
+    }
   }, []);
+
+  useEffect(() => {
+    const bootstrap = async () => {
+      const [loadedConfig, loadedCacheInfo] = await Promise.all([
+        getTTSConfig(),
+        getTTSCacheInfo(),
+      ]);
+      setConfig(loadedConfig);
+      setCacheInfo(loadedCacheInfo);
+      await Promise.all([
+        loadProviderVoices(loadedConfig, 'openai_api'),
+        loadProviderVoices(loadedConfig, 'qwen3'),
+      ]);
+    };
+
+    bootstrap();
+  }, [loadProviderVoices]);
 
   const updateConfig = (patch: Partial<TTSConfig>) =>
     setConfig(prev => prev ? { ...prev, ...patch } : null);
@@ -115,11 +133,26 @@ export default function TTSConfigPanel() {
     setMessage(null);
     try {
       await saveTTSConfig(config);
+      await Promise.all([
+        loadProviderVoices(config, 'openai_api'),
+        loadProviderVoices(config, 'qwen3'),
+      ]);
       setMessage({ type: 'success', text: '配置已保存' });
-    } catch {
-      setMessage({ type: 'error', text: '保存失败，请重试' });
+    } catch (e: any) {
+      setMessage({ type: 'error', text: `保存失败：${e?.message ?? '请重试'}` });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleRefreshVoices = async (provider: 'openai_api' | 'qwen3') => {
+    if (!config) return;
+    setMessage(null);
+    try {
+      await loadProviderVoices(config, provider);
+      setMessage({ type: 'success', text: provider === 'openai_api' ? '已刷新自定义 API 音色列表' : '已刷新 Qwen3 音色列表' });
+    } catch (e: any) {
+      setMessage({ type: 'error', text: `刷新音色失败：${e?.message ?? '请检查配置'}` });
     }
   };
 
@@ -173,6 +206,11 @@ export default function TTSConfigPanel() {
       </div>
     );
   }
+
+  const displayedOpenAIVoices = config.openai_api.voice.trim()
+    && !openAIVoices.some((voice) => voice.voice === config.openai_api.voice.trim())
+      ? [{ id: config.openai_api.voice.trim(), name: `当前输入 · ${config.openai_api.voice.trim()}`, voice: config.openai_api.voice.trim() }, ...openAIVoices]
+      : openAIVoices;
 
   return (
     <div className="space-y-5">
@@ -248,9 +286,48 @@ export default function TTSConfigPanel() {
           <InputField label="模型" value={config.openai_api.model}
             placeholder="tts-1"
             onChange={v => updateApi({ model: v })} />
-          <InputField label="音色 (Voice)" value={config.openai_api.voice}
-            placeholder="alloy / echo / fable / onyx / nova / shimmer"
-            onChange={v => updateApi({ voice: v })} />
+          {displayedOpenAIVoices.length > 0 ? (
+            <>
+              <div className="flex items-end gap-2">
+                <div className="flex-1">
+                  <SelectField
+                    label="音色 (Voice)"
+                    value={config.openai_api.voice}
+                    onChange={v => updateApi({ voice: v })}
+                    options={displayedOpenAIVoices.map(v => ({ value: v.voice, label: v.name || v.voice }))}
+                  />
+                </div>
+                <button
+                  onClick={() => handleRefreshVoices('openai_api')}
+                  disabled={refreshingProvider === 'openai_api'}
+                  className="px-3 py-1.5 mb-0.5 rounded-lg text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors disabled:opacity-50 shrink-0"
+                >
+                  {refreshingProvider === 'openai_api' ? '刷新中…' : '刷新音色'}
+                </button>
+              </div>
+              <InputField
+                label="手动输入音色 ID（可覆盖下拉选择）"
+                value={config.openai_api.voice}
+                placeholder="alloy / echo / fable / onyx / nova / shimmer"
+                onChange={v => updateApi({ voice: v })}
+              />
+            </>
+          ) : (
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <InputField label="音色 (Voice)" value={config.openai_api.voice}
+                  placeholder="alloy / echo / fable / onyx / nova / shimmer"
+                  onChange={v => updateApi({ voice: v })} />
+              </div>
+              <button
+                onClick={() => handleRefreshVoices('openai_api')}
+                disabled={refreshingProvider === 'openai_api'}
+                className="px-3 py-1.5 mb-0.5 rounded-lg text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors disabled:opacity-50 shrink-0"
+              >
+                {refreshingProvider === 'openai_api' ? '刷新中…' : '刷新音色'}
+              </button>
+            </div>
+          )}
           <SelectField
             label="默认速度"
             value={String(config.openai_api.speed)}
@@ -258,7 +335,7 @@ export default function TTSConfigPanel() {
             options={TTS_SPEED_OPTIONS}
           />
           <HintBox>
-            支持 OpenAI、Fish Audio、硅基流动等兼容服务。<br />
+            支持 OpenAI、硅基流动和其他 OpenAI 兼容服务。<br />
             以 OpenAI 为例：Base URL 填 <code>https://api.openai.com/v1</code>，模型填 <code>tts-1</code>。
           </HintBox>
         </Section>
@@ -272,6 +349,15 @@ export default function TTSConfigPanel() {
           <InputField label="模型名" value={config.qwen3.model}
             placeholder="tts-1"
             onChange={v => updateQwen3({ model: v })} />
+          <div className="flex justify-end -mt-1">
+            <button
+              onClick={() => handleRefreshVoices('qwen3')}
+              disabled={refreshingProvider === 'qwen3'}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors disabled:opacity-50"
+            >
+              {refreshingProvider === 'qwen3' ? '刷新中…' : '刷新音色'}
+            </button>
+          </div>
           {qwen3Voices.length > 0 ? (
             <>
               <SelectField
@@ -400,7 +486,7 @@ const PROVIDER_OPTIONS = [
   {
     value: 'openai_api',
     label: '自定义 API（OpenAI 兼容）',
-    desc: '接入 OpenAI TTS、Fish Audio、硅基流动等兼容服务',
+    desc: '接入 OpenAI TTS、硅基流动或其他兼容服务',
   },
   {
     value: 'qwen3',

@@ -86,7 +86,7 @@ function DictionarySidebar({
         "en-US-RogerNeural",
       ];
       const randomVoice = usVoices[Math.floor(Math.random() * usVoices.length)];
-      const blobUrl = await streamSpeech(wordData.word, randomVoice);
+      const { blobUrl } = await streamSpeech(wordData.word, randomVoice);
       const audio = new Audio(blobUrl);
       audio.onended = () => URL.revokeObjectURL(blobUrl);
       await audio.play();
@@ -572,7 +572,7 @@ function DictionarySidebar({
                           const randomVoice =
                             voices[Math.floor(Math.random() * voices.length)];
 
-                          const blobUrl = await streamSpeech(
+                          const { blobUrl } = await streamSpeech(
                             wordData.context_sentence!,
                             randomVoice,
                           );

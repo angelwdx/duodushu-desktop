@@ -33,7 +33,7 @@ export function useDictionaryAudio({
       ];
       const randomVoice = usVoices[Math.floor(Math.random() * usVoices.length)];
       log.debug(`[Webster TTS] Using Edge TTS (${randomVoice}) for word: ${word}`);
-      const blobUrl = await streamSpeech(word, randomVoice);
+      const { blobUrl } = await streamSpeech(word, randomVoice);
       const audio = new Audio(blobUrl);
       audio.onended = () => URL.revokeObjectURL(blobUrl);
       await audio.play();
@@ -147,7 +147,7 @@ export function useDictionaryAudio({
         log.debug('Falling back to backend TTS API for text:', text);
         const { streamSpeech } = await import("../lib/api");
         const voice = "en-US-MichelleNeural";
-        const blobUrl = await streamSpeech(text, voice);
+        const { blobUrl } = await streamSpeech(text, voice);
         const audio = new Audio(blobUrl);
         audio.onended = () => URL.revokeObjectURL(blobUrl);
         await audio.play();

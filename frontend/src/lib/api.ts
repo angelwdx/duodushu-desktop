@@ -50,6 +50,9 @@ async function fetchWithTimeout(url: string, timeout: number, options?: RequestI
     return res;
   } catch (error) {
     clearTimeout(timeoutId);
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`Request timed out after ${Math.round(timeout / 1000)}s`);
+    }
     throw error;
   }
 }
@@ -368,7 +371,7 @@ export async function streamSpeech(
   voice: string = "default",
   provider?: TTSConfig["provider"],
   speed?: number,
-): Promise<string> {
+): Promise<{ blobUrl: string; synthesisSpeed: number }> {
   // Sanitize text for TTS: replace slashes with commas to avoid reading "slash"
   const sanitizedText = text.replace(/\//g, ", ");
 
@@ -389,7 +392,11 @@ export async function streamSpeech(
   }
 
   const blob = await res.blob();
-  return URL.createObjectURL(blob);
+  const synthesisSpeed = Number(res.headers.get("x-tts-synthesis-speed") || "1");
+  return {
+    blobUrl: URL.createObjectURL(blob),
+    synthesisSpeed: Number.isFinite(synthesisSpeed) && synthesisSpeed > 0 ? synthesisSpeed : 1,
+  };
 }
 
 export type FuriganaSegment =
@@ -490,13 +497,32 @@ export async function saveTTSConfig(config: TTSConfig): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(config),
   });
-  if (!res.ok) throw new Error('Failed to save TTS config');
+  if (!res.ok) {
+    let detail = 'Failed to save TTS config';
+    try {
+      const payload = await res.json();
+      detail = payload.detail || payload.message || detail;
+    } catch {
+      detail = `Failed to save TTS config (HTTP ${res.status})`;
+    }
+    throw new Error(detail);
+  }
 }
 
-export async function getTTSVoices(provider?: TTSConfig["provider"]): Promise<TTSVoiceOption[]> {
+export async function getTTSVoices(
+  provider?: TTSConfig["provider"],
+  config?: TTSConfig,
+): Promise<TTSVoiceOption[]> {
   try {
     const query = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-    const res = await fetch(`${API_URL}/api/tts/voices${query}`);
+    const url = config
+      ? `${API_URL}/api/tts/voices/query${query}`
+      : `${API_URL}/api/tts/voices${query}`;
+    const res = await fetch(url, config ? {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    } : undefined);
     if (!res.ok) return [];
     const data = await res.json();
     return Array.isArray(data.voices) ? data.voices : [];
@@ -530,7 +556,16 @@ export async function testTTSConfig(config?: TTSConfig): Promise<string> {
     headers: { 'Content-Type': 'application/json' },
     body: config ? JSON.stringify(config) : 'null',
   });
-  if (!res.ok) throw new Error('TTS test failed');
+  if (!res.ok) {
+    let detail = 'TTS test failed';
+    try {
+      const payload = await res.json();
+      detail = payload.detail || payload.message || detail;
+    } catch {
+      detail = `TTS test failed (HTTP ${res.status})`;
+    }
+    throw new Error(detail);
+  }
   const blob = await res.blob();
   return URL.createObjectURL(blob);
 }

@@ -74,6 +74,15 @@ def get_active_tts_provider(
     return build_provider_from_config(_get_effective_tts_config(provider_override, speed_override))
 
 
+def get_tts_synthesis_speed(
+    provider_override: Optional[TTSProvider] = None,
+    speed_override: Optional[float] = None,
+) -> float:
+    """返回服务端实际参与合成的语速。"""
+    provider = get_active_tts_provider(provider_override, speed_override)
+    return provider.synthesis_speed
+
+
 def _build_cache_key(
     text: str,
     voice: str,
@@ -81,6 +90,12 @@ def _build_cache_key(
     speed_override: Optional[float] = None,
 ) -> str:
     effective_tts_config = _get_effective_tts_config(provider_override, speed_override)
+    provider = build_provider_from_config(effective_tts_config)
+    if not provider.supports_synthesis_speed:
+        provider_type = effective_tts_config.get("provider", "edge")
+        provider_config = dict(effective_tts_config.get(provider_type, {}))
+        provider_config["speed"] = 1.0
+        effective_tts_config[provider_type] = provider_config
     normalized_config = json.dumps(effective_tts_config, ensure_ascii=False, sort_keys=True)
     normalized_text = normalize_japanese_text_for_tts(text)
     return hashlib.md5(
