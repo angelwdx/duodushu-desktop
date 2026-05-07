@@ -8,6 +8,56 @@ from ..services import tts_service
 router = APIRouter(prefix="/api/tts", tags=["tts"])
 
 
+async def _fetch_qwen3_voice_names(base_url: str) -> list[str]:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        res = await client.get(f"{base_url.rstrip('/')}/audio/voices")
+        res.raise_for_status()
+        data = res.json()
+        raw_voices = data.get("voices", [])
+        return [
+            str(voice)
+            for voice in raw_voices
+            if any(ord(ch) > 127 for ch in str(voice))
+        ]
+
+
+async def list_provider_voices(
+    tts: dict,
+    provider: Literal["edge", "openai_api", "qwen3"],
+) -> list[dict]:
+    if provider == "edge":
+        return [
+            {"id": "default", "name": "Aria (Female)", "voice": "en-US-AriaNeural"},
+            {"id": "male", "name": "Christopher (Male)", "voice": "en-US-ChristopherNeural"},
+            {"id": "female", "name": "Jenny (Female)", "voice": "en-US-JennyNeural"},
+        ]
+
+    if provider == "qwen3":
+        cfg = tts.get("qwen3", {})
+        configured_voice = cfg.get("voice", "塔塔")
+
+        try:
+            voices = await _fetch_qwen3_voice_names(
+                cfg.get("base_url", "http://127.0.0.1:18790/v1")
+            )
+            if voices:
+                return [
+                    {"id": voice, "name": voice, "voice": voice}
+                    for voice in dict.fromkeys([configured_voice, *voices])
+                ]
+        except Exception:
+            pass
+
+        return [{"id": configured_voice, "name": configured_voice, "voice": configured_voice}]
+
+    if provider == "openai_api":
+        cfg = tts.get("openai_api", {})
+        configured_voice = cfg.get("voice", "alloy")
+        return [{"id": configured_voice, "name": configured_voice, "voice": configured_voice}]
+
+    return []
+
+
 # ─── 请求/响应模型 ─────────────────────────────────────────────────────────
 
 class TTSRequest(BaseModel):
@@ -105,51 +155,14 @@ async def clear_cache():
 
 
 @router.get("/voices")
-async def list_voices():
-    """List available voices for current provider"""
+async def list_voices(provider: Optional[Literal["edge", "openai_api", "qwen3"]] = None):
+    """List available voices for current or requested provider"""
     from app.routers.config import load_config
 
     tts = load_config().get("tts", {})
-    provider = tts.get("provider", "edge")
-
-    if provider == "edge":
-        return {
-            "voices": [
-                {"id": "default", "name": "Aria (Female)", "voice": "en-US-AriaNeural"},
-                {"id": "male", "name": "Christopher (Male)", "voice": "en-US-ChristopherNeural"},
-                {"id": "female", "name": "Jenny (Female)", "voice": "en-US-JennyNeural"}
-            ]
-        }
-
-    if provider == "qwen3":
-        cfg = tts.get("qwen3", {})
-        base_url = cfg.get("base_url", "http://127.0.0.1:18790/v1").rstrip("/")
-        configured_voice = cfg.get("voice", "塔塔")
-
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.get(f"{base_url}/audio/voices")
-                res.raise_for_status()
-                data = res.json()
-                raw_voices = data.get("voices", [])
-                voices = [
-                    {"id": str(v), "name": str(v), "voice": str(v)}
-                    for v in raw_voices
-                    if any(ord(ch) > 127 for ch in str(v))
-                ]
-                if voices:
-                    return {"voices": voices}
-        except Exception:
-            pass
-
-        return {"voices": [{"id": configured_voice, "name": configured_voice, "voice": configured_voice}]}
-
-    if provider == "openai_api":
-        cfg = tts.get("openai_api", {})
-        configured_voice = cfg.get("voice", "alloy")
-        return {"voices": [{"id": configured_voice, "name": configured_voice, "voice": configured_voice}]}
-
-    return {"voices": []}
+    resolved_provider = provider or tts.get("provider", "edge")
+    voices = await list_provider_voices(tts, resolved_provider)
+    return {"voices": voices}
 
 
 # ─── 新增：TTS provider 配置端点 ────────────────────────────────────────────

@@ -84,7 +84,7 @@ export default function TTSConfigPanel() {
   useEffect(() => {
     getTTSConfig().then(setConfig);
     getTTSCacheInfo().then(setCacheInfo);
-    getTTSVoices().then(setQwen3Voices);
+    getTTSVoices('qwen3').then(setQwen3Voices);
   }, []);
 
   const updateConfig = (patch: Partial<TTSConfig>) =>

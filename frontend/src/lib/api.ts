@@ -493,9 +493,10 @@ export async function saveTTSConfig(config: TTSConfig): Promise<void> {
   if (!res.ok) throw new Error('Failed to save TTS config');
 }
 
-export async function getTTSVoices(): Promise<TTSVoiceOption[]> {
+export async function getTTSVoices(provider?: TTSConfig["provider"]): Promise<TTSVoiceOption[]> {
   try {
-    const res = await fetch(`${API_URL}/api/tts/voices`);
+    const query = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+    const res = await fetch(`${API_URL}/api/tts/voices${query}`);
     if (!res.ok) return [];
     const data = await res.json();
     return Array.isArray(data.voices) ? data.voices : [];

@@ -14,7 +14,11 @@
  */
 
 import { useRef, useState, useCallback, useEffect } from 'react';
+import type { TTSConfig as StoredTTSConfig, TTSVoiceOption as ApiTTSVoiceOption } from '../lib/api';
+import { createLogger } from '../lib/logger';
 import { isJapaneseBookLanguage } from '../lib/japaneseText';
+
+const log = createLogger('useFullTextTTS');
 
 // ─── 常量 ──────────────────────────────────────────────────────────────────
 const MAX_CHUNK = 9800;
@@ -65,8 +69,22 @@ const EDGE_VOICES_JA = [
   { id: 'keita', label: 'Keita（日语男声）' },
 ] as const;
 
+const EDGE_VOICES_ZH = [
+  { id: 'xiaoxiao', label: 'Xiaoxiao（中文女声）' },
+  { id: 'yunxi', label: 'Yunxi（中文男声）' },
+] as const;
+
+type TTSProvider = 'edge' | 'openai_api' | 'qwen3';
+type TTSLanguage = 'default' | 'ja' | 'zh';
+
 export type TTSVoice = string;
-export type TTSVoiceOption = { id: string; label: string };
+export type TTSVoiceOption = {
+  id: string;
+  label: string;
+  provider: TTSProvider;
+  voice: string;
+  speed: number;
+};
 
 // ─── 类型 ──────────────────────────────────────────────────────────────────
 export interface UseFullTextTTSOptions {
@@ -88,7 +106,7 @@ export interface UseFullTextTTSReturn {
   currentReadingPage: number | null;
   /** 当前正在朗读的文本片段（用于 UI 高亮） */
   currentChunkText: string | null;
-  provider: 'edge' | 'openai_api' | 'qwen3';
+  provider: TTSProvider;
   voice: TTSVoice;
   voices: TTSVoiceOption[];
   speed: number;
@@ -100,6 +118,95 @@ export interface UseFullTextTTSReturn {
   pause: () => void;
   resume: () => void;
   stop: () => void;
+}
+
+function getTTSLanguage(bookLanguage?: string | null): TTSLanguage {
+  if (isJapaneseBookLanguage(bookLanguage)) return 'ja';
+
+  const normalized = bookLanguage?.trim().toLowerCase();
+  if (normalized === 'zh' || normalized?.startsWith('zh-')) {
+    return 'zh';
+  }
+
+  return 'default';
+}
+
+function getConfiguredVoice(config: StoredTTSConfig, provider: TTSProvider, ttsLanguage: TTSLanguage): string {
+  if (provider === 'qwen3') {
+    if (ttsLanguage === 'ja') {
+      return config.qwen3.voice_japanese?.trim() || config.qwen3.voice?.trim() || '塔塔';
+    }
+    return config.qwen3.voice?.trim() || '塔塔';
+  }
+
+  if (provider === 'openai_api') {
+    return config.openai_api.voice?.trim() || 'alloy';
+  }
+
+  if (ttsLanguage === 'ja') {
+    return config.edge.voice_japanese?.trim() || 'nanami';
+  }
+  if (ttsLanguage === 'zh') {
+    return config.edge.voice_chinese?.trim() || 'xiaoxiao';
+  }
+  return config.edge.voice?.trim() || 'aria';
+}
+
+function buildVoiceKey(provider: TTSProvider, voice: string): string {
+  return `${provider}::${voice}`;
+}
+
+function buildReaderVoiceOptions(
+  config: StoredTTSConfig,
+  qwen3Voices: ApiTTSVoiceOption[],
+  ttsLanguage: TTSLanguage,
+): TTSVoiceOption[] {
+  const options: TTSVoiceOption[] = [];
+  const seen = new Set<string>();
+
+  const pushOption = (
+    provider: TTSProvider,
+    voice: string,
+    label: string,
+    speed: number,
+  ) => {
+    const normalizedVoice = voice.trim();
+    if (!normalizedVoice) return;
+
+    const key = buildVoiceKey(provider, normalizedVoice);
+    if (seen.has(key)) return;
+
+    seen.add(key);
+    options.push({
+      id: key,
+      label,
+      provider,
+      voice: normalizedVoice,
+      speed,
+    });
+  };
+
+  const edgeVoices = ttsLanguage === 'ja'
+    ? EDGE_VOICES_JA
+    : ttsLanguage === 'zh'
+      ? EDGE_VOICES_ZH
+      : EDGE_VOICES_EN;
+
+  edgeVoices.forEach((edgeVoice) => {
+    pushOption('edge', edgeVoice.id, `Edge TTS · ${edgeVoice.label}`, config.edge.speed || 1);
+  });
+
+  const openAIVoice = config.openai_api.voice?.trim() || 'alloy';
+  pushOption('openai_api', openAIVoice, `自定义 API · ${openAIVoice}`, config.openai_api.speed || 1);
+
+  const configuredQwenVoice = getConfiguredVoice(config, 'qwen3', ttsLanguage);
+  pushOption('qwen3', configuredQwenVoice, `本地 Qwen3 · ${configuredQwenVoice}`, config.qwen3.speed || 1);
+  qwen3Voices.forEach((voiceOption) => {
+    const label = voiceOption.name?.trim() || voiceOption.voice;
+    pushOption('qwen3', voiceOption.voice, `本地 Qwen3 · ${label}`, config.qwen3.speed || 1);
+  });
+
+  return options;
 }
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────
@@ -203,7 +310,8 @@ export function useFullTextTTS({
   pageChangeDelay = 600,
   pageStep = 1,
 }: UseFullTextTTSOptions): UseFullTextTTSReturn {
-  const isJapaneseTTSLanguage = isJapaneseBookLanguage(bookLanguage);
+  const ttsLanguage = getTTSLanguage(bookLanguage);
+  const isJapaneseTTSLanguage = ttsLanguage === 'ja';
   const getInitialSpeed = () => {
     if (typeof window === 'undefined') return 1;
     const raw = window.localStorage.getItem('reader_tts_speed');
@@ -217,11 +325,11 @@ export function useFullTextTTS({
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentReadingPage, setCurrentReadingPage] = useState<number | null>(null);
   const [currentChunkText, setCurrentChunkText]     = useState<string | null>(null);
-  const [voice, setVoice] = useState<TTSVoice>('default');
-  const [voices, setVoices] = useState<TTSVoiceOption[]>(
-    isJapaneseTTSLanguage ? [...EDGE_VOICES_JA] : [...EDGE_VOICES_EN],
+  const [voice, setVoiceState] = useState<TTSVoice>(
+    buildVoiceKey('edge', ttsLanguage === 'ja' ? 'nanami' : ttsLanguage === 'zh' ? 'xiaoxiao' : 'aria'),
   );
-  const [provider, setProvider] = useState<'edge' | 'openai_api' | 'qwen3'>('edge');
+  const [voices, setVoices] = useState<TTSVoiceOption[]>([]);
+  const [provider, setProvider] = useState<TTSProvider>('edge');
   const [speed, setSpeedState] = useState<number>(getInitialSpeed);
 
   // ── 核心 Refs ──
@@ -231,6 +339,7 @@ export function useFullTextTTS({
   const shouldPlayRef          = useRef(false);  // false 时循环退出
   const readingPageRef         = useRef<number>(1);
   const providerRef            = useRef(provider);
+  const voiceOptionsRef        = useRef<TTSVoiceOption[]>([]);
   // stop() 时用于强制 resolve 挂起的 playChunk Promise
   const abortCurrentChunkRef   = useRef<(() => void) | null>(null);
   const pendingAudioLoadsRef   = useRef(0);
@@ -240,7 +349,7 @@ export function useFullTextTTS({
   const getPageTextRef     = useRef(getPageText);
   const totalPagesRef      = useRef(totalPages);
   const onPageChangeRef    = useRef(onPageChange);
-  const voiceRef           = useRef(voice);
+  const voiceRef           = useRef(ttsLanguage === 'ja' ? 'nanami' : ttsLanguage === 'zh' ? 'xiaoxiao' : 'aria');
   const pageChangeDelayRef = useRef(pageChangeDelay);
   const pageStepRef        = useRef(pageStep);
   const speedRef           = useRef(speed);
@@ -261,7 +370,13 @@ export function useFullTextTTS({
   useEffect(() => { getPageTextRef.current     = getPageText;     }, [getPageText]);
   useEffect(() => { totalPagesRef.current      = totalPages;      }, [totalPages]);
   useEffect(() => { onPageChangeRef.current    = onPageChange;    }, [onPageChange]);
-  useEffect(() => { voiceRef.current           = voice;           }, [voice]);
+  useEffect(() => {
+    voiceOptionsRef.current = voices;
+    const selectedVoiceOption = voices.find((option) => option.id === voice);
+    if (selectedVoiceOption) {
+      voiceRef.current = selectedVoiceOption.voice;
+    }
+  }, [voice, voices]);
   useEffect(() => { pageChangeDelayRef.current = pageChangeDelay; }, [pageChangeDelay]);
   useEffect(() => { pageStepRef.current        = pageStep;        }, [pageStep]);
   useEffect(() => { providerRef.current        = provider;        }, [provider]);
@@ -273,9 +388,38 @@ export function useFullTextTTS({
     syncCurrentAudioPlaybackRate();
   }, [speed, syncCurrentAudioPlaybackRate]);
 
+  useEffect(() => {
+    setVoices((prevVoices) => {
+      let changed = false;
+      const nextVoices = prevVoices.map((voiceOption) => {
+        if (voiceOption.provider !== provider || voiceOption.speed === speed) {
+          return voiceOption;
+        }
+        changed = true;
+        return { ...voiceOption, speed };
+      });
+
+      return changed ? nextVoices : prevVoices;
+    });
+  }, [provider, speed]);
+
   const setSpeed = useCallback((nextSpeed: number) => {
     const normalized = Math.min(2, Math.max(0.5, Number(nextSpeed) || 1));
     setSpeedState(normalized);
+  }, []);
+
+  const setVoice = useCallback((nextVoiceId: TTSVoice) => {
+    const selectedVoiceOption = voiceOptionsRef.current.find((option) => option.id === nextVoiceId);
+    if (!selectedVoiceOption) return;
+
+    const providerChanged = providerRef.current !== selectedVoiceOption.provider;
+    voiceRef.current = selectedVoiceOption.voice;
+    setVoiceState(selectedVoiceOption.id);
+    setProvider(selectedVoiceOption.provider);
+
+    if (providerChanged) {
+      setSpeedState(selectedVoiceOption.speed || 1);
+    }
   }, []);
 
   useEffect(() => {
@@ -284,49 +428,49 @@ export function useFullTextTTS({
     const loadActiveTTSConfig = async () => {
       try {
         const { getTTSConfig, getTTSVoices } = await import('../lib/api');
-        const config = await getTTSConfig();
+        const [config, qwen3Voices] = await Promise.all([
+          getTTSConfig(),
+          getTTSVoices('qwen3'),
+        ]);
         if (cancelled) return;
 
-        setProvider(config.provider);
+        const nextVoices = buildReaderVoiceOptions(config, qwen3Voices, ttsLanguage);
+        const configuredVoice = getConfiguredVoice(config, config.provider, ttsLanguage);
+        const activeVoiceOption = nextVoices.find((option) =>
+          option.provider === config.provider && option.voice === configuredVoice,
+        ) ?? nextVoices.find((option) => option.provider === config.provider) ?? nextVoices[0];
 
-        if (config.provider === 'qwen3') {
-          const configuredVoice = isJapaneseTTSLanguage
-            ? config.qwen3.voice_japanese?.trim() || config.qwen3.voice?.trim() || '塔塔'
-            : config.qwen3.voice?.trim() || '塔塔';
-          setSpeed(config.qwen3.speed || 1);
-          const availableVoices = await getTTSVoices();
-          if (cancelled) return;
-          const mappedVoices = availableVoices.length > 0
-            ? availableVoices.map(v => ({ id: v.voice, label: v.name || v.voice }))
-            : [{ id: configuredVoice, label: configuredVoice }];
-          setVoices(mappedVoices);
-          setVoice(configuredVoice);
-          persistReadyRef.current = true;
-          return;
+        if (!activeVoiceOption) {
+          throw new Error('No available TTS voices');
         }
 
-        if (config.provider === 'openai_api') {
-          const configuredVoice = config.openai_api.voice?.trim() || 'alloy';
-          setSpeed(config.openai_api.speed || 1);
-          setVoices([{ id: configuredVoice, label: configuredVoice }]);
-          setVoice(configuredVoice);
-          persistReadyRef.current = true;
-          return;
-        }
-
-        const edgeVoices = isJapaneseTTSLanguage ? [...EDGE_VOICES_JA] : [...EDGE_VOICES_EN];
-        const configuredVoice = isJapaneseTTSLanguage
-          ? config.edge.voice_japanese?.trim() || 'nanami'
-          : config.edge.voice?.trim() || 'aria';
-        setVoices(edgeVoices);
-        setVoice(configuredVoice);
-        setSpeed(config.edge.speed || 1);
+        voiceOptionsRef.current = nextVoices;
+        voiceRef.current = activeVoiceOption.voice;
+        setVoices(nextVoices);
+        setVoiceState(activeVoiceOption.id);
+        setProvider(activeVoiceOption.provider);
+        setSpeed(activeVoiceOption.speed || 1);
         persistReadyRef.current = true;
       } catch {
         if (!cancelled) {
+          const fallbackVoice = ttsLanguage === 'ja' ? 'nanami' : ttsLanguage === 'zh' ? 'xiaoxiao' : 'aria';
+          const fallbackLabel = ttsLanguage === 'ja'
+            ? 'Nanami（日语女声）'
+            : ttsLanguage === 'zh'
+              ? 'Xiaoxiao（中文女声）'
+              : 'Aria (美式女声)';
+          const fallbackVoices = [{
+            id: buildVoiceKey('edge', fallbackVoice),
+            label: `Edge TTS · ${fallbackLabel}`,
+            provider: 'edge' as const,
+            voice: fallbackVoice,
+            speed: 1,
+          }];
+          voiceOptionsRef.current = fallbackVoices;
+          voiceRef.current = fallbackVoice;
+          setVoices(fallbackVoices);
+          setVoiceState(fallbackVoices[0].id);
           setProvider('edge');
-          setVoices(isJapaneseTTSLanguage ? [...EDGE_VOICES_JA] : [...EDGE_VOICES_EN]);
-          setVoice(isJapaneseTTSLanguage ? 'nanami' : 'aria');
           setSpeed(1);
           persistReadyRef.current = true;
         }
@@ -335,7 +479,7 @@ export function useFullTextTTS({
 
     loadActiveTTSConfig();
     return () => { cancelled = true; };
-  }, [isJapaneseTTSLanguage]);
+  }, [setSpeed, ttsLanguage]);
 
   useEffect(() => {
     if (!persistReadyRef.current) return;
@@ -346,6 +490,7 @@ export function useFullTextTTS({
         const config = await getTTSConfig();
         const nextConfig = {
           ...config,
+          provider: providerRef.current,
           edge: { ...config.edge },
           openai_api: { ...config.openai_api },
           qwen3: { ...config.qwen3 },
@@ -364,20 +509,22 @@ export function useFullTextTTS({
         } else {
           if (isJapaneseTTSLanguage) {
             nextConfig.edge.voice_japanese = voiceRef.current;
+          } else if (ttsLanguage === 'zh') {
+            nextConfig.edge.voice_chinese = voiceRef.current;
           } else {
-          nextConfig.edge.voice = voiceRef.current;
+            nextConfig.edge.voice = voiceRef.current;
           }
           nextConfig.edge.speed = speedRef.current;
         }
 
         await saveTTSConfig(nextConfig);
       } catch (error) {
-        console.warn('[useFullTextTTS] Failed to persist reader TTS config:', error);
+        log.warn('Failed to persist reader TTS config', error);
       }
     }, 400);
 
     return () => window.clearTimeout(timer);
-  }, [voice, speed, provider, isJapaneseTTSLanguage]);
+  }, [voice, speed, provider, isJapaneseTTSLanguage, ttsLanguage]);
 
   // ── 释放 blob URL ──
   const revokeBlobUrl = useCallback(() => {
@@ -538,7 +685,7 @@ export function useFullTextTTS({
         await delay(pageChangeDelayRef.current);
       }
     } catch (err) {
-      console.error('[useFullTextTTS] Playback error:', err);
+      log.error('Playback error', err);
     } finally {
       if (shouldPlayRef.current) {
         // 正常读完
@@ -573,7 +720,7 @@ export function useFullTextTTS({
     try {
       await playPageRef.current(page);
     } catch (err) {
-      console.error('[useFullTextTTS] playCurrentPage error:', err);
+      log.error('playCurrentPage error', err);
     } finally {
       stopAudio();
       setIsPlaying(false);
