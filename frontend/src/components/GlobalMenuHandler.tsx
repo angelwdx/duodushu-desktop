@@ -175,7 +175,7 @@ export default function GlobalMenuHandler() {
     return () => {
       window.electronAPI?.removeMenuActionListener?.();
     };
-  }, [openSettings, openUpload]);
+  }, [openSettings, openUpload, router]);
 
   // 这是一个纯逻辑组件，不渲染任何内容
   return null;

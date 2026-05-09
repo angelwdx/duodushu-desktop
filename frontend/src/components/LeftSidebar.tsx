@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { getBookmarks } from "../lib/api";
+import { getApiUrl, getBookmarks } from "../lib/api";
 
 interface Bookmark {
   id: number;
@@ -57,7 +57,11 @@ export default function LeftSidebar({
   const loadingThumbnailsRef = useRef<Set<number>>(new Set());
   const loadedThumbnailsRef = useRef<Set<number>>(new Set());
   const failedThumbnailsRef = useRef<Set<number>>(new Set());
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+  const getThumbnailUrl = useCallback(
+    (page: number) => `${getApiUrl()}/api/books/thumbnail/${bookId}/${page}`,
+    [bookId],
+  );
 
   const loadBookmarks = useCallback(async () => {
     try {
@@ -146,7 +150,7 @@ export default function LeftSidebar({
     loadingThumbnailsRef.current.add(page);
 
     const img = new Image();
-    const thumbnailUrl = `${API_URL}/api/books/thumbnail/${bookId}/${page}`;
+    const thumbnailUrl = getThumbnailUrl(page);
 
     img.onload = () => {
       setLoadedThumbnails((prev) => new Set([...prev, page]));
@@ -159,7 +163,7 @@ export default function LeftSidebar({
     };
 
     img.src = thumbnailUrl;
-  }, [bookId, API_URL]);
+  }, [getThumbnailUrl]);
 
   // Load thumbnails in a range
   const loadThumbnailRange = useCallback((start: number, end: number) => {
@@ -409,7 +413,7 @@ export default function LeftSidebar({
                   {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
                     const isLoaded = loadedThumbnails.has(page);
                     const isFailed = failedThumbnails.has(page);
-                    const thumbnailUrl = `${API_URL}/api/books/thumbnail/${bookId}/${page}`;
+                    const thumbnailUrl = getThumbnailUrl(page);
 
                     return (
                       <button
@@ -427,10 +431,11 @@ export default function LeftSidebar({
                         title={`第 ${page} 页`}
                       >
                         { }
-                        {isLoaded ? (
-                          <img
-                            src={thumbnailUrl}
-                            alt={`第 ${page} 页`}
+                         {isLoaded ? (
+                           // eslint-disable-next-line @next/next/no-img-element -- Electron 本地缩略图无需 next/image 优化
+                           <img
+                             src={thumbnailUrl}
+                             alt={`第 ${page} 页`}
                             className="w-full h-full object-contain bg-gray-50"
                           />
                         ) : isFailed ? (

@@ -11,7 +11,7 @@ import LeftSidebar from "../../components/LeftSidebar";
 import SelectionToolbar from "../../components/SelectionToolbar";
 import { useGlobalTextSelection } from "../../hooks/useGlobalTextSelection";
 
-import { trackWordQuery } from "../../lib/api";
+import { getApiUrl, trackWordQuery } from "../../lib/api";
 import { createLogger } from "../../lib/logger";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
@@ -41,8 +41,6 @@ const UniversalReader = dynamic(
     ),
   },
 );
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 function ReaderContent() {
   const params = useParams();
@@ -163,7 +161,7 @@ function ReaderContent() {
   // Fetch Book Info and restore reading progress
   useEffect(() => {
     if (!id) return;
-    fetch(`${API_URL}/api/books/${id}/status`)
+    fetch(`${getApiUrl()}/api/books/${id}/status`)
       .then((res) => res.json())
       .then((data) => {
         setBook(data);
@@ -194,7 +192,7 @@ function ReaderContent() {
           setCurrentPage(data.last_page);
         }
       })
-      .catch((err) => console.error(err));
+      .catch((err) => log.error("Failed to load book status", err));
   }, [id, targetPage, searchText, targetWord]);
 
   // Fetch Page Data (Words coordinates)
@@ -206,7 +204,7 @@ function ReaderContent() {
     log.debug('Fetching page data', { page: currentPage });
     const controller = new AbortController();
 
-    fetch(`${API_URL}/api/books/${id}/pages/${currentPage}`, { signal: controller.signal })
+    fetch(`${getApiUrl()}/api/books/${id}/pages/${currentPage}`, { signal: controller.signal })
       .then((res) => res.json())
       .then((data) => {
         log.debug('Page data received', {
@@ -234,11 +232,11 @@ function ReaderContent() {
         clearTimeout(saveProgressTimeout.current);
       }
       saveProgressTimeout.current = setTimeout(() => {
-        fetch(`${API_URL}/api/books/${id}/progress`, {
+        fetch(`${getApiUrl()}/api/books/${id}/progress`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ page }),
-        }).catch((err) => console.error("Failed to save progress:", err));
+        }).catch((err) => log.error("Failed to save progress", err));
       }, 1000);
     },
     [id],
@@ -320,11 +318,7 @@ function ReaderContent() {
     return () => window.removeEventListener("resize", checkScreen);
   }, []);
 
-  const fileUrl = useMemo(() => {
-    if (!book?.download_url) return "";
-    // Use full backend URL (CORS should be configured on backend)
-    return `${API_URL}${book.download_url}`;
-  }, [book?.download_url]);
+  const fileUrl = book?.download_url ? `${getApiUrl()}${book.download_url}` : "";
 
   // --- AI / Dictionary Toggle ---
   const [sidebarMode, setSidebarMode] = useState<"dictionary" | "ai" | "notes">
@@ -679,7 +673,7 @@ function ReaderContent() {
       }
 
       try {
-        const { lookupWord, lookupWordMultipleSources } = await import("../../lib/api");
+        const { lookupWord } = await import("../../lib/api");
 
         let data;
 
@@ -729,7 +723,7 @@ function ReaderContent() {
         setLoadingDict(false);
       }
     },
-    [pageData, activeWord?.context_sentence, savedWords, activeWord?.word, currentPage, id],
+    [pageData, activeWord?.context_sentence, activeWord?.lookup_term, activeWord?.word, savedWords, currentPage, id],
   );
 
   // Handle Add to Vocabulary
@@ -759,7 +753,7 @@ function ReaderContent() {
         alert("Failed to add word");
       }
     },
-    [book?.id, loadVocabulary, id, currentPage],
+    [book?.id, loadVocabulary, id, currentPage, selection?.pageNumber],
   );
 
   const handleDeleteWord = useCallback(

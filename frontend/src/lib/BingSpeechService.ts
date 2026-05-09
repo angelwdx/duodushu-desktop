@@ -72,9 +72,8 @@ class BingSpeechService {
       this.socket.onclose = () => log.warn('Bing TTS WebSocket closed.');
 
       // Attach error handler immediately to suppress browser's default error logging
-      let errorHandled = false;
       this.socket.onerror = () => {
-        errorHandled = true;
+        // 预先绑定空处理，避免浏览器输出默认错误日志
       };
 
       await new Promise<void>((resolve, reject) => {

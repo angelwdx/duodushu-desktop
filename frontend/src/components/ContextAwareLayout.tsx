@@ -50,8 +50,6 @@ export default function ContextAwareLayout({
   title,
   backUrl,
   onWordClick,
-  onAskAI: _onAskAI,
-  onHighlight: _onHighlight,
   bookId,
   currentPage = 1,
   pageContent = "",

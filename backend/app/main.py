@@ -44,8 +44,9 @@ def scheduled_priority_update():
     """每天凌晨3点更新所有单词优先级"""
     logger.info(f"🕒 [{datetime.utcnow()}] 开始定时更新单词优先级...")
 
-    db = SessionLocal()
+    db = None
     try:
+        db = SessionLocal()
         from .routers.vocabulary import update_all_priorities
 
         result = update_all_priorities(db)
@@ -53,7 +54,8 @@ def scheduled_priority_update():
     except Exception as e:
         logger.error(f"❌ 定时更新失败: {e}", exc_info=True)
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 # 添加定时任务：每天凌晨3点
@@ -72,7 +74,8 @@ def _migrate_word_contexts_unique_index(db_path: str):
     3. 创建唯一索引
     """
     import sqlite3
-    
+
+    conn = None
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
@@ -133,7 +136,8 @@ def ensure_fts5_index(db_path: str):
     这是幂等操作，使用 IF NOT EXISTS 避免重复创建。
     """
     import sqlite3
-    
+
+    conn = None
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()

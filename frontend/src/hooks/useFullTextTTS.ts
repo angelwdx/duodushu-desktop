@@ -543,7 +543,6 @@ export function useFullTextTTS({
     text: string,
   ): Promise<{ blobUrl: string; synthesisSpeed: number }> => {
     const { streamSpeech } = await import('../lib/api');
-    const synthesisSpeed = speedRef.current;
     pendingAudioLoadsRef.current += 1;
     setIsGenerating(true);
     try {

@@ -20,31 +20,6 @@ export function useGlobalTextSelection(
   enabled: boolean = true,
   excludeSelectors: string[] = []
 ) {
-// ... (lines 14-255 omitted, no changes needed inside hook body implementation until handleEpubSelection)
-
-    // 监听 EPUB iframe 中的文本选择事件
-    const handleEpubSelection = (e: any) => {
-      log.debug('Received epub-text-selected event:', e);
-      if (!e.detail) {
-        log.debug('No detail in event');
-        return;
-      }
-      
-      const { text, x, y, source, rect, pageNum, cfi } = e.detail;
-      log.debug('Text selected in EPUB:', text, 'at', x, y, 'Page:', pageNum);
-      
-      setSelection({
-        text,
-        x,
-        y,
-        source,
-        rect: rect || { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 },
-        pageNumber: pageNum,
-        cfi: cfi
-      });
-      
-      lastSelectionTextRef.current = text;
-    };
   const [selection, setSelection] = useState<SelectionState | null>(null);
   const selectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSelectionTextRef = useRef<string>("");
@@ -249,7 +224,7 @@ export function useGlobalTextSelection(
       let clonedRange: Range | undefined;
       try {
         clonedRange = range.cloneRange();
-      } catch (e) {
+      } catch {
         // 克隆失败时不保存 range
       }
 

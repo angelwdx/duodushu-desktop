@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 type UpdaterEventType = 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
 
@@ -18,17 +18,29 @@ interface UpdaterEvent {
 export default function UpdateNotifier() {
   const [event, setEvent] = useState<UpdaterEvent | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  const dismissTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const api = (window as any).electronAPI;
     if (!api?.onUpdaterEvent) return;
 
+    const clearDismissTimeout = () => {
+      if (dismissTimeoutRef.current) {
+        clearTimeout(dismissTimeoutRef.current);
+        dismissTimeoutRef.current = null;
+      }
+    };
+
     const handleEvent = (ev: UpdaterEvent) => {
+      clearDismissTimeout();
       setDismissed(false);
       setEvent(ev);
       // "正在检查" 和 "无新版本" 状态 3 秒后自动消失
       if (ev.type === 'checking' || ev.type === 'not-available') {
-        setTimeout(() => setDismissed(true), 3000);
+        dismissTimeoutRef.current = setTimeout(() => {
+          setDismissed(true);
+          dismissTimeoutRef.current = null;
+        }, 3000);
       }
     };
 
@@ -41,6 +53,7 @@ export default function UpdateNotifier() {
     });
 
     return () => {
+      clearDismissTimeout();
       api.removeUpdaterListener?.();
     };
   }, []);

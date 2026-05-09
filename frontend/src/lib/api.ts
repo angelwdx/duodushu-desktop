@@ -901,7 +901,7 @@ export function importDict(
         try {
           const response = JSON.parse(xhr.responseText);
           resolve(response);
-        } catch (e) {
+        } catch {
           // If response is not JSON
           resolve(xhr.responseText);
         }

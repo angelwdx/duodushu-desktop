@@ -9,7 +9,7 @@ export function DictManager() {
   const [deleting, setDeleting] = useState<string | null>(null); // 正在删除的词典名
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [draggedItem, setDraggedItem] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [, setSaving] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // 显示Toast提示

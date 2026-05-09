@@ -95,6 +95,7 @@ export function repairDropCapParagraphs(text: string): string {
 
   const isDropCap = (part: string) => /^[A-Z]$/.test(part);
   const startsWithLowercase = (part: string) => /^[a-z]/.test(part);
+  const startsWithUppercase = (part: string) => /^[A-Z]/.test(part);
   const isLikelyHeadingOrCaption = (part: string) => {
     if (!part || startsWithLowercase(part)) return false;
     const lines = part
@@ -170,6 +171,67 @@ export function repairDropCapParagraphs(text: string): string {
       continue;
     }
 
+    const previousParagraph = repaired[repaired.length - 1] || "";
+    const previousPrefixBlock = repaired[repaired.length - 2] || "";
+    const previousCompactLength = previousParagraph.replace(/\s+/g, " ").trim().length;
+
+    // 某些科普 PDF 会把下沉首字母延后到整段正文后面：
+    // Inside Mercury / he planet ... / T
+    // 这里仅在“上一段以小写开头且已经像完整正文、再上一段又像标题/图注”时回补，
+    // 避免把正常的单字母展示块误并入正文。
+    if (
+      isDropCap(current) &&
+      startsWithLowercase(previousParagraph) &&
+      previousCompactLength >= 80 &&
+      previousPrefixBlock &&
+      isLikelyShortDisplayBlock(previousPrefixBlock)
+    ) {
+      repaired[repaired.length - 1] = `${current}${previousParagraph}`;
+      continue;
+    }
+
+    // 某些页面会把段首下沉首字母所在段落的行顺序解析乱：
+    // F / revealed ... / But up ... have / rom Earth ... / its atmosphere.
+    // 这里先识别“孤立首字母 + 一条短前缀碎片 + 若干正文行”的模式，再把它重排回：
+    // From Earth ... / But up ... have / revealed ... / its atmosphere.
+    if (currentLines.length >= 4 && isDropCap(currentLines[0])) {
+      const candidateFragments = currentLines
+        .slice(1)
+        .map((line, index) => {
+          const firstWord = line.match(/^[a-z][a-z'’-]*/)?.[0] || "";
+          return {
+            index: index + 1,
+            line,
+            firstWord,
+          };
+        })
+        .filter(({ line, firstWord }) =>
+          startsWithLowercase(line) &&
+          firstWord.length >= 1 &&
+          firstWord.length <= 4 &&
+          line.length >= 20,
+        )
+        .sort((left, right) => {
+          if (left.firstWord.length !== right.firstWord.length) {
+            return left.firstWord.length - right.firstWord.length;
+          }
+          return right.line.length - left.line.length;
+        });
+
+      const dropCapBodyIndex = candidateFragments[0]?.index;
+      if (dropCapBodyIndex !== undefined) {
+        const leadingLine = `${currentLines[0]}${currentLines[dropCapBodyIndex]}`;
+        const remainingLines = currentLines.filter((_, index) => index !== 0 && index !== dropCapBodyIndex);
+        const uppercaseLines = remainingLines.filter((line) => startsWithUppercase(line));
+        const lowercaseLines = remainingLines.filter((line) => !startsWithUppercase(line));
+
+        if (uppercaseLines.length > 0 && lowercaseLines.length > 0) {
+          repaired.push([leadingLine, ...uppercaseLines, ...lowercaseLines].join("\n"));
+          continue;
+        }
+      }
+    }
+
     if (!isDropCap(current)) {
       repaired.push(current);
       continue;
@@ -198,10 +260,93 @@ export function repairDropCapParagraphs(text: string): string {
   return repaired.join("\n\n");
 }
 
+function startsWithLowercaseParagraph(text: string): boolean {
+  return /^[a-z]/.test(text.trim());
+}
+
+function isLikelyDisplayBlockParagraph(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (startsWithLowercaseParagraph(trimmed)) return false;
+  if (isLikelyStandalonePageNumber(trimmed)) return true;
+
+  const compact = trimmed.replace(/\s+/g, " ");
+  if (compact.length > 280) return false;
+
+  const lines = trimmed
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0 || lines.length > 7) return false;
+  if (lines.some((line) => line.length > 80)) return false;
+
+  return true;
+}
+
+function repairInterruptedDisplayBlocks(text: string): string {
+  if (!text) return "";
+
+  let paragraphs = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split(/\n\s*\n/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (paragraphs.length < 3) return text;
+
+  for (let pass = 0; pass < 6; pass += 1) {
+    let changed = false;
+    const repaired: string[] = [];
+
+    for (let i = 0; i < paragraphs.length; i += 1) {
+      const current = paragraphs[i];
+      repaired.push(current);
+
+      const previous = repaired[repaired.length - 1];
+      if (!previous || endsWithSentencePunctuation(previous) || previous.replace(/\s+/g, " ").length < 60) {
+        continue;
+      }
+
+      const displayBlocks: string[] = [];
+      let lookahead = i + 1;
+
+      while (lookahead < paragraphs.length && isLikelyDisplayBlockParagraph(paragraphs[lookahead])) {
+        displayBlocks.push(paragraphs[lookahead]);
+        lookahead += 1;
+      }
+
+      if (displayBlocks.length === 0 || lookahead >= paragraphs.length) {
+        continue;
+      }
+
+      const continuation = paragraphs[lookahead];
+      if (!startsWithLowercaseParagraph(continuation)) {
+        continue;
+      }
+
+      repaired[repaired.length - 1] = `${previous}\n${continuation}`;
+      repaired.push(...displayBlocks);
+      i = lookahead;
+      changed = true;
+    }
+
+    if (!changed) {
+      return repaired.join("\n\n");
+    }
+
+    paragraphs = repaired;
+  }
+
+  return paragraphs.join("\n\n");
+}
+
 export function normalizePdfPageText(text: string): string {
   if (!text) return "";
 
   let refined = repairDropCapParagraphs(text);
+  refined = repairInterruptedDisplayBlocks(refined);
   refined = refined.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
   // 某些 PDF 会把段首下沉首字母单独放成一行，下一行从小写续写：

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo, memo, useCallback } from "react";
 import DictionaryContent from "./DictionaryContent";
+import { getApiUrl } from "../lib/api";
 
 interface Definition {
   definition: string;
@@ -50,9 +51,6 @@ function DictionarySidebar({
   savedWords = [],
   onDeleteWord,
   className = "",
-  bookId: _bookId,
-  currentPage: _currentPage,
-  onRefresh: _onRefresh,
 }: DictionarySidebarProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [translationMap, setTranslationMap] = useState<{
@@ -289,9 +287,7 @@ function DictionarySidebar({
   useEffect(() => {
     const fetchDicts = async () => {
       try {
-        // 使用正确的 API URL
-        const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
-        const res = await fetch(`${API_URL}/api/dicts/?_t=${Date.now()}`);
+        const res = await fetch(`${getApiUrl()}/api/dicts/?_t=${Date.now()}`);
         if (res.ok) {
           const dicts = await res.json();
           
@@ -322,7 +318,7 @@ function DictionarySidebar({
     const interval = setInterval(fetchDicts, 2000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [activeTab]);
 
   // 同步 activeTab
   useEffect(() => {

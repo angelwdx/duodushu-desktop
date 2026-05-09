@@ -119,12 +119,12 @@ function AITeacherSidebar({
   }, []);
 
   // Helper to update messages for current page
-  const setMessages = (updater: (prev: Message[]) => Message[]) => {
+  const setMessages = useCallback((updater: (prev: Message[]) => Message[]) => {
     setAllChats(prev => ({
       ...prev,
       [currentPage]: updater(prev[currentPage] || [])
     }));
-  };
+  }, [currentPage]);
 
   // 自动滚动到底部
   useEffect(() => {

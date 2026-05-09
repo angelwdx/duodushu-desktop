@@ -1,8 +1,11 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { uploadBook } from '../lib/api';
+import { createLogger } from '../lib/logger';
+
+const log = createLogger('GlobalFileDropHandler');
 
 /**
  * 全局文件拖拽处理组件
@@ -13,6 +16,23 @@ export default function GlobalFileDropHandler() {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const errorTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const clearErrorTimeout = useCallback(() => {
+    if (errorTimeoutRef.current) {
+      clearTimeout(errorTimeoutRef.current);
+      errorTimeoutRef.current = null;
+    }
+  }, []);
+
+  const showTemporaryError = useCallback((message: string) => {
+    clearErrorTimeout();
+    setUploadError(message);
+    errorTimeoutRef.current = setTimeout(() => {
+      setUploadError(null);
+      errorTimeoutRef.current = null;
+    }, 3000);
+  }, [clearErrorTimeout]);
 
   // 阻止浏览器的默认拖拽打开文件行为
   const preventDefault = useCallback((e: DragEvent) => {
@@ -56,8 +76,7 @@ export default function GlobalFileDropHandler() {
     
     // 校验扩展名
     if (!fileName.endsWith('.epub') && !fileName.endsWith('.pdf')) {
-      setUploadError('只支持 .epub 或 .pdf 格式的书籍');
-      setTimeout(() => setUploadError(null), 3000);
+      showTemporaryError('只支持 .epub 或 .pdf 格式的书籍');
       return;
     }
 
@@ -74,13 +93,12 @@ export default function GlobalFileDropHandler() {
       // 上传成功后直接跳转到阅读页
       router.push(`/read?id=${book_id}`);
     } catch (err: any) {
-      console.error('拖拽上传失败:', err);
-      setUploadError(err.message || '上传失败');
-      setTimeout(() => setUploadError(null), 3000);
+      log.error('拖拽上传失败:', err);
+      showTemporaryError(err.message || '上传失败');
     } finally {
       setIsUploading(false);
     }
-  }, [preventDefault, router]);
+  }, [preventDefault, router, showTemporaryError]);
 
   useEffect(() => {
     // 在 window 级别注册全局事件
@@ -94,8 +112,9 @@ export default function GlobalFileDropHandler() {
       window.removeEventListener('dragleave', handleDragLeave);
       window.removeEventListener('dragover', handleDragOver);
       window.removeEventListener('drop', handleDrop);
+      clearErrorTimeout();
     };
-  }, [handleDragEnter, handleDragLeave, handleDragOver, handleDrop]);
+  }, [clearErrorTimeout, handleDragEnter, handleDragLeave, handleDragOver, handleDrop]);
 
   // 如果什么状态都没有，不渲染任何 DOM
   if (!isDragging && !isUploading && !uploadError) return null;

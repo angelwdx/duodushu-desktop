@@ -71,7 +71,7 @@ export default function SelectionToolbar({
     if (selection?.range) {
       try {
         clonedRangeRef.current = selection.range.cloneRange();
-      } catch (e) {
+      } catch {
         clonedRangeRef.current = null;
       }
     } else {
@@ -94,7 +94,7 @@ export default function SelectionToolbar({
               if (currentRange.toString() === rangeToRestore.toString()) {
                 return;
               }
-            } catch (e) {
+            } catch {
               // Range 可能已失效
             }
           }

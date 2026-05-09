@@ -22,7 +22,7 @@ interface ECDICTDictionaryProps {
   rawData?: ECDICTData;
 }
 
-export default function ECDICTDictionary({ word, rawData }: ECDICTDictionaryProps) {
+export default function ECDICTDictionary({ rawData }: ECDICTDictionaryProps) {
   if (!rawData) {
     return (
       <div className="p-4 text-gray-500 italic">

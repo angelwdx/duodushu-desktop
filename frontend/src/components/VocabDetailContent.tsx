@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { createLogger } from "../lib/logger";
 import {
-  updateVocabularyMastery,
   translateText,
   saveContextTranslation,
   lookupWord,
@@ -75,16 +74,12 @@ export default function VocabDetailContent({
   vocabId,
   showBackButton = true,
   backUrl = "/vocabulary",
-  onWordClick: _onWordClick,
-  onLearnModeNext: _onLearnModeNext,
-  onLearnModePrev: _onLearnModePrev,
   isLearnMode = false,
   bottomBar,
 }: VocabDetailContentProps) {
   const router = useRouter();
   const [vocab, setVocab] = useState<VocabularyDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [markingMastered, setMarkingMastered] = useState(false);
   const [translationMap, setTranslationMap] = useState<{ [key: string]: string }>({});
   const [translatingSet, setTranslatingSet] = useState<Set<string>>(new Set());
   const [failedSet, setFailedSet] = useState<Set<string>>(new Set());
@@ -293,7 +288,7 @@ export default function VocabDetailContent({
         delete next[sentence];
         try {
           localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify(next));
-        } catch (e) { /* ignore */ }
+        } catch { /* ignore */ }
         return next;
       });
       setFailedSet((prev) => {
@@ -392,25 +387,6 @@ export default function VocabDetailContent({
     }
   }, [vocab]);
 
-  const handleMarkMastered = async () => {
-    if (!vocab) return;
-    setMarkingMastered(true);
-    try {
-      await updateVocabularyMastery(vocab.id, {
-        mastery_level: 5,
-        review_count: vocab.review_count + 1,
-        last_reviewed_at: new Date().toISOString(),
-      });
-      alert("已标记为掌握");
-      loadVocab();
-    } catch (e) {
-      log.error(e);
-      alert("操作失败");
-    } finally {
-      setMarkingMastered(false);
-    }
-  };
-
   const handleAskAI = useCallback((text: string) => {
     setAiQuestion(text);
     setRightSidebarMode("ai");
@@ -499,7 +475,7 @@ export default function VocabDetailContent({
     setRightSidebarExpanded(true); // 自动展开侧边栏
   }, [vocabId]);
 
-  const handleSelectionAskAI = useCallback((text: string, _source?: string) => {
+  const handleSelectionAskAI = useCallback((text: string) => {
     setAiQuestion(`请讲解一下这段内容：\n\n"${text}"`);
     setRightSidebarMode("ai");
     setRightSidebarExpanded(true); // 自动展开侧边栏

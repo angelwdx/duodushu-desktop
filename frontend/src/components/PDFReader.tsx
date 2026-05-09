@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { useReaderGestures } from "../hooks/useReaderGestures";
 import { useFullTextTTS } from "../hooks/useFullTextTTS";
 import TTSLoadingDots from "./TTSLoadingDots";
+import { getApiUrl } from "../lib/api";
 import { normalizePdfPageText, preprocessTTSPlainText } from "../lib/ttsText";
 import { getLookupWordFromText, splitTextForWordLookup, splitWordDataForLookup } from "../lib/wordLookup";
 import { createLogger } from "../lib/logger";
@@ -354,21 +355,25 @@ export default function PDFReader({
     onTotalPagesChange,
     onOutlineChange,
     jumpRequest,
-    onAskAI: _onAskAI,
-    onHighlight: _onHighlight,
     onContentChange,
     dualPageMode: dualPageModeProp,
     coverPageEnabled: coverPageEnabledProp,
     onDualPageModeChange,
     onCoverPageChange,
   }: ReaderProps) {
-  // Inject CSS to narrow the text layer selection blocks
-  useEffect(() => {
+  // 在首帧前注入文本层样式，避免下沉首字母先闪出再被隐藏。
+  useLayoutEffect(() => {
     const styleId = "pdf-reader-selection-style";
     if (!document.getElementById(styleId)) {
       const style = document.createElement("style");
       style.id = styleId;
       style.innerHTML = `
+            .react-pdf__Page__textContent,
+            .react-pdf__Page__textContent :is(span, br) {
+                color: transparent !important;
+                -webkit-text-fill-color: transparent !important;
+                text-shadow: none !important;
+            }
             .react-pdf__Page__textContent span {
                 line-height: 1.0 !important;
                 cursor: text !important;
@@ -384,6 +389,8 @@ export default function PDFReader({
             }
             .react-pdf__Page__textContent span::selection {
                 background: rgba(0, 100, 255, 0.2) !important;
+                color: transparent !important;
+                -webkit-text-fill-color: transparent !important;
             }
         `;
       document.head.appendChild(style);
@@ -495,7 +502,6 @@ export default function PDFReader({
   }, [dualPageMode, currentSpreadIndex, spreads, pageNumber]);
 
   const [showZoomMenu, setShowZoomMenu] = useState(false);
-  const [isEditingZoom, setIsEditingZoom] = useState(false);
   const [zoomInputValue, setZoomInputValue] = useState("100");
   const [pageTextForTTS, setPageTextForTTS] = useState("");
   const [pageTextForTTSPage, setPageTextForTTSPage] = useState<number | null>(null);
@@ -524,7 +530,17 @@ export default function PDFReader({
   const dualPageLoadData = useRef<Map<number, { viewport: any; text: string }>>(new Map());
   const dualPageSpreadRef = useRef<PageSpread>([]); // 追踪当前 spread 快照
   const pageMetricsRef = useRef<Map<number, { width: number; height: number; offsetX: number; offsetY: number }>>(new Map());
-  const [secondPageWords, setSecondPageWords] = useState<WordData[] | null>(null); // 第二页单词数据
+  const [spreadCompanionWords, setSpreadCompanionWords] = useState<WordData[] | null>(null);
+
+  const rightPageNumber =
+    dualPageMode && currentSpread.length > 1 ? currentSpread[1] : null;
+  const companionPageNumber =
+    dualPageMode && currentSpread.length > 1
+      ? currentSpread.find((spreadPage) => spreadPage !== pageNumber) ?? null
+      : null;
+
+  const currentTextAnchorPage =
+    dualPageMode && currentSpread.length > 0 ? currentSpread[0] : pageNumber;
 
   const goToPage = useCallback((page: number) => {
     const validPage = Math.max(1, Math.min(page, numPages || totalPages || 1));
@@ -630,7 +646,7 @@ export default function PDFReader({
     };
 
     jumpToDest();
-  }, [jumpRequest, goToPage]);
+  }, [jumpRequest, goToPage, pageNumber]);
 
 
 
@@ -696,8 +712,7 @@ export default function PDFReader({
   }, [getPageMetrics, manualOffset.x, manualOffset.y, pageNumber, renderWidth]);
 
   const processedWords = useMemo(() => {
-    if (!words) return [];
-    const firstPageNumber = dualPageMode && currentSpread.length > 0 ? currentSpread[0] : pageNumber;
+    if (!words && !spreadCompanionWords) return [];
 
     const mergeDropCapWords = (pageWords: WordData[], targetPageNumber: number) => {
       const dropCapIndices = new Set<number>();
@@ -791,27 +806,24 @@ export default function PDFReader({
       return mergedPageWords;
     };
 
-    const merged: WordData[] = mergeDropCapWords(words, firstPageNumber);
-
-    // 双页模式：添加第二页的 words（保持原始 x 坐标，在命中检测时处理偏移）
-    if (dualPageMode && secondPageWords && pageDimensions) {
-      const pageOffsetX = renderWidth + SPREAD_GAP;
-      const secondPageProcessed = mergeDropCapWords(secondPageWords, currentSpread[1]).map((word) => ({
+    const appendSpreadPageWords = (pageWords: WordData[] | null | undefined, targetPageNumber: number) => {
+      if (!pageWords) return [];
+      const isRightPage = rightPageNumber !== null && targetPageNumber === rightPageNumber;
+      const pageOffsetX = isRightPage ? renderWidth + SPREAD_GAP : 0;
+      return mergeDropCapWords(pageWords, targetPageNumber).map((word) => ({
         ...word,
-        _isSecondPage: true,
-        _pageOffsetX: pageOffsetX,
+        _isSecondPage: isRightPage,
+        _pageOffsetX: isRightPage ? pageOffsetX : undefined,
       }));
-      merged.push(...secondPageProcessed);
-      logger.debug('[PDFReader] processedWords includes second page words:', {
-        firstPageCount: words?.length || 0,
-        secondPageCount: secondPageWords.length,
-        totalMerged: merged.length,
-        pageOffsetX,
-      });
-    }
+    };
+
+    const merged: WordData[] = [
+      ...appendSpreadPageWords(words, pageNumber),
+      ...(companionPageNumber ? appendSpreadPageWords(spreadCompanionWords, companionPageNumber) : []),
+    ];
 
     return merged.flatMap((word) => splitWordDataForLookup(word));
-  }, [words, dualPageMode, secondPageWords, pageDimensions, renderWidth, currentSpread, pageNumber]);
+  }, [words, spreadCompanionWords, renderWidth, rightPageNumber, companionPageNumber, pageNumber]);
 
   const getPageWordCandidates = useCallback((isSecondPage: boolean) => {
     if (!dualPageMode) return processedWords;
@@ -971,6 +983,85 @@ export default function PDFReader({
   }, [pageNumber, dualPageMode, currentSpread]);
 
   useEffect(() => {
+    if (!dualPageMode || currentSpread.length < 2 || !bookId || companionPageNumber === null) {
+      setSpreadCompanionWords(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadCompanionWords = async () => {
+      try {
+        const res = await fetch(`${getApiUrl()}/api/books/${bookId}/pages/${companionPageNumber}`);
+        if (!res.ok) {
+          if (!cancelled) setSpreadCompanionWords(null);
+          return;
+        }
+
+        const data = await res.json();
+        if (!cancelled) {
+          setSpreadCompanionWords(Array.isArray(data?.words_data) ? data.words_data : null);
+        }
+      } catch (err) {
+        logger.error('[PDFReader] Failed to fetch companion page words:', err);
+        if (!cancelled) setSpreadCompanionWords(null);
+      }
+    };
+
+    loadCompanionWords().catch((err) => logger.error('[PDFReader] loadCompanionWords failed:', err));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dualPageMode, currentSpread, bookId, companionPageNumber]);
+
+  useEffect(() => {
+    if (!dualPageMode || currentSpread.length === 0) return;
+
+    let cancelled = false;
+    const spreadSnapshot = [...currentSpread];
+
+    const loadSpreadText = async () => {
+      const pageTexts = await Promise.all(
+        spreadSnapshot.map(async (spreadPage) => {
+          if (spreadPage === pageNumber && typeof textContent === "string") {
+            const currentPageText = textContent.trim();
+            if (currentPageText) return currentPageText;
+          }
+
+          if (!bookId) return "";
+
+          try {
+            const res = await fetch(`${getApiUrl()}/api/books/${bookId}/pages/${spreadPage}`);
+            if (!res.ok) return "";
+            const data = await res.json();
+            return typeof data?.text_content === "string" ? data.text_content.trim() : "";
+          } catch {
+            return "";
+          }
+        }),
+      );
+
+      if (cancelled) return;
+
+      const combinedText = pageTexts.filter(Boolean).join("\n\n");
+      if (!combinedText) return;
+
+      setPageTextForTTS(combinedText);
+      setPageTextForTTSPage(spreadSnapshot[0]);
+      if (onContentChange) {
+        onContentChange(normalizePdfPageText(combinedText));
+      }
+    };
+
+    loadSpreadText().catch((err) => logger.error('[PDFReader] loadSpreadText failed:', err));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dualPageMode, currentSpread, pageNumber, textContent, bookId, onContentChange]);
+
+  useEffect(() => {
     const container = contentRef.current;
     if (!container) return;
     const updateSize = () => {
@@ -1051,7 +1142,7 @@ export default function PDFReader({
         if (onContentChange) {
           try {
             onContentChange(normalizePdfPageText(backendText));
-          } catch (err) {
+          } catch {
             // 静默处理
           }
         }
@@ -1118,7 +1209,7 @@ export default function PDFReader({
       if (onContentChange) {
         try {
           onContentChange(normalizePdfPageText(resolvedText));
-        } catch (err) {
+        } catch {
           // 静默处理
         }
       }
@@ -1151,11 +1242,14 @@ export default function PDFReader({
 
     const capturedSpread = [...currentSpread];
     dualPageSpreadRef.current = capturedSpread;
-    const capturedPageNumber = pg;
+
+    const isCurrentSpread = () =>
+      dualPageSpreadRef.current.length === capturedSpread.length &&
+      dualPageSpreadRef.current.every((spreadPage, index) => spreadPage === capturedSpread[index]);
 
     const extractAndStore = async () => {
-      // 第一页优先使用后端文本（textContent prop 来自父组件的 API 数据）
-      if (pg === capturedSpread[0] && typeof textContent === "string") {
+      // 优先复用当前页已拿到的后端文本；若当前加载页不是 currentPage，则改走 API 获取。
+      if (pg === pageNumber && typeof textContent === "string") {
         const backendText = textContent.trim();
         if (backendText) {
           dualPageLoadData.current.set(pg, { viewport, text: backendText });
@@ -1164,14 +1258,13 @@ export default function PDFReader({
         }
       }
 
-      // 第二页尝试从后端 API 获取，失败则回退到 PDF.js 提取
-      if (pg !== capturedSpread[0] && bookId) {
+      // 其余页面尝试从后端 API 获取，失败则回退到 PDF.js 提取
+      if (bookId) {
         try {
-          const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-          const res = await fetch(`${apiUrl}/api/books/${bookId}/pages/${pg}`);
+          const res = await fetch(`${getApiUrl()}/api/books/${bookId}/pages/${pg}`);
           if (res.ok) {
             const data = await res.json();
-            if (data?.text_content?.trim()) {
+            if (isCurrentSpread() && data?.text_content?.trim()) {
               dualPageLoadData.current.set(pg, { viewport, text: data.text_content.trim() });
               checkAndCombine(capturedSpread);
               return;
@@ -1186,7 +1279,7 @@ export default function PDFReader({
       let extractedText = "";
       try {
         const tc = await page.getTextContent();
-        if (capturedPageNumber !== pageNumber) return; // 已翻页
+        if (!isCurrentSpread()) return; // 已翻页
         if (tc?.items?.length > 0) {
           const pageWidth = page.view?.[2] || 0;
           const pageHeight = page.view?.[3] || 0;
@@ -1210,7 +1303,7 @@ export default function PDFReader({
         logger.error(`[PDFReader] Dual page text extraction failed for page ${pg}:`, error);
       }
 
-      if (capturedPageNumber !== pageNumber) return; // 已翻页，丢弃
+      if (!isCurrentSpread()) return; // 已翻页，丢弃
       dualPageLoadData.current.set(pg, { viewport, text: extractedText });
       checkAndCombine(capturedSpread);
     };
@@ -1234,39 +1327,8 @@ export default function PDFReader({
       if (onContentChange) {
         try {
           onContentChange(normalizePdfPageText(combinedText));
-        } catch (err) { /* 静默处理 */ }
+        } catch { /* 静默处理 */ }
       }
-    }
-
-    // 双页模式：获取第二页的 words 数据
-    if (spread.length > 1 && bookId) {
-      const secondPage = spread[1];
-      logger.debug('[PDFReader] Fetching second page words:', { secondPage, bookId });
-      (async () => {
-        try {
-          const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-          const res = await fetch(`${apiUrl}/api/books/${bookId}/pages/${secondPage}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data?.words_data && Array.isArray(data.words_data)) {
-              logger.debug('[PDFReader] Second page words loaded:', {
-                count: data.words_data.length,
-                sample: data.words_data.slice(0, 3).map((w: WordData) => w.text),
-              });
-              setSecondPageWords(data.words_data);
-            } else {
-              logger.debug('[PDFReader] No words_data in response:', data);
-            }
-          } else {
-            logger.warn('[PDFReader] Failed to fetch second page words:', res.status);
-          }
-        } catch (err) {
-          logger.error('[PDFReader] Error fetching second page words:', err);
-          setSecondPageWords(null); // 清理旧数据
-        }
-      })();
-    } else {
-      setSecondPageWords(null);
     }
 
     // 清理不属于当前 spread 的缓存
@@ -1285,11 +1347,6 @@ export default function PDFReader({
     setFitMode("none");
     setScale((s) => Math.max(s - 0.1, 0.25));
   };
-  const setZoomPreset = (value: number) => {
-    setFitMode("none");
-    setScale(value);
-    setShowZoomMenu(false);
-  };
   const setFitModeOption = (mode: "width" | "height" | "page") => {
     setFitMode(mode);
     setShowZoomMenu(false);
@@ -1306,7 +1363,6 @@ export default function PDFReader({
       setFitMode("none");
       setScale(value / 100);
     }
-    setIsEditingZoom(false);
   };
 
   const getZoomDisplayText = () => {
@@ -1317,27 +1373,30 @@ export default function PDFReader({
   };
 
   useEffect(() => {
+    if (dualPageMode) return;
+
     setPageTextForTTS(textContent || "");
     setPageTextForTTSPage(textContent ? pageNumber : null);
     // 当后端 textContent 就绪时通知父组件，解决 PDF.js 渲染早于 API 返回的时序问题
     if (textContent && onContentChange) {
       onContentChange(normalizePdfPageText(textContent));
     }
-  }, [pageNumber, textContent]);
+  }, [dualPageMode, pageNumber, textContent, onContentChange]);
 
   useEffect(() => {
-    setPageTextForTTSPage((prev) => (prev === pageNumber ? prev : null));
-  }, [pageNumber]);
+    setPageTextForTTSPage((prev) => (prev === currentTextAnchorPage ? prev : null));
+  }, [currentTextAnchorPage]);
 
   /* Moved goToPage up */
 
   const resolvedPageText =
-    (pageTextForTTSPage === pageNumber ? pageTextForTTS : "") || textContent || "";
+    (pageTextForTTSPage === currentTextAnchorPage ? pageTextForTTS : "") ||
+    (dualPageMode ? "" : textContent || "");
 
   const normalizeText = (text: string) => normalizePdfPageText(text);
 
   // 全文朗读的文本来源与文本模式显示保持一致：都使用 normalizeText 处理后的文本
-  const getPageText = useCallback((_page: number): string => {
+  const getPageText = useCallback((): string => {
     return preprocessTTSPlainText(normalizeText(resolvedPageText), bookLanguage);
   }, [bookLanguage, resolvedPageText]);
 
@@ -1357,6 +1416,11 @@ export default function PDFReader({
 
   const renderTextMode = () => {
     const rawTextForDisplay = resolvedPageText;
+    const pageLabel =
+      dualPageMode && currentSpread.length > 1
+        ? `${currentSpread[0]}-${currentSpread[currentSpread.length - 1]}`
+        : `${pageNumber}`;
+
     if (!rawTextForDisplay) {
       return (
         <div className="flex-1 flex items-center justify-center text-gray-400 p-10 bg-gray-50">
@@ -1439,7 +1503,7 @@ export default function PDFReader({
             })}
           </div>
           <div className="mt-16 pt-8 border-t text-center text-gray-400 text-sm">
-            - Page {pageNumber} -
+            - Page {pageLabel} -
           </div>
         </div>
       </div>
@@ -1662,13 +1726,7 @@ export default function PDFReader({
                 {/* 双页模式下的 Debug / Calibration Layer */}
                 {words && pageDimensions && showDebug && (
                   <div className="absolute inset-0 pointer-events-none z-10">
-                    {words
-                      .filter(w => {
-                        // 双页模式下，需要根据 word 的 block_id 或位置判断属于哪一页
-                        // 简化处理：显示所有 words（调试用）
-                        return true;
-                      })
-                      .map((w, i) => {
+                    {words.map((w, i) => {
                         const totalOffsetX = pageOffset.x + manualOffset.x;
                         const totalOffsetY = pageOffset.y + manualOffset.y;
                         const scaleFactor = renderWidth / pageDimensions.width;

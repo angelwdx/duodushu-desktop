@@ -13,11 +13,13 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from pathlib import Path
+import logging
 from ..models.database import get_db, BASE_DIR, UPLOADS_DIR
 from ..models.models import Book, Page, ReadingProgress, Vocabulary
 from ..services import book_service
 
 router = APIRouter(prefix="/api/books", tags=["books"])
+logger = logging.getLogger(__name__)
 
 
 class ProgressUpdate(BaseModel):
@@ -106,48 +108,52 @@ def get_book_cover(filename: str):
 def delete_book(book_id: str, db: Session = Depends(get_db)):
     """Delete a book and its associated data"""
     from sqlalchemy import text
+    from ..services.thumbnail_service import ThumbnailService
 
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    # 1. Delete associated pages (使用原生 SQL 逐行删除，确保触发 FTS5 的 pages_ad 触发器)
-    db.execute(text("DELETE FROM pages WHERE book_id = :book_id"), {"book_id": book_id})
+    book_filename = Path(book.file_path).name if isinstance(book.file_path, str) else None
+    cover_image = book.cover_image if isinstance(book.cover_image, str) else None
 
-    # 2. Delete reading progress
-    db.query(ReadingProgress).filter(ReadingProgress.book_id == book_id).delete()
-
-    # 3. Delete word contexts from this book (防止孤立数据)
-    db.execute(text("DELETE FROM word_contexts WHERE book_id = :book_id"), {"book_id": book_id})
-
-    # 4. Delete bookmarks from this book
-    db.execute(text("DELETE FROM bookmarks WHERE book_id = :book_id"), {"book_id": book_id})
-
-    # 5. Delete files
     try:
-        # Delete book file
-        book_path_str = book.file_path if isinstance(book.file_path, str) else None
-        if book_path_str is not None:
-            # 提取文件名，从 UPLOADS_DIR 删除
-            filename = Path(book_path_str).name
-            book_path = (UPLOADS_DIR / filename).resolve()
+        # 1. Delete associated pages (使用原生 SQL 逐行删除，确保触发 FTS5 的 pages_ad 触发器)
+        db.execute(text("DELETE FROM pages WHERE book_id = :book_id"), {"book_id": book_id})
+
+        # 2. Delete reading progress
+        db.query(ReadingProgress).filter(ReadingProgress.book_id == book_id).delete()
+
+        # 3. Delete word contexts from this book (防止孤立数据)
+        db.execute(text("DELETE FROM word_contexts WHERE book_id = :book_id"), {"book_id": book_id})
+
+        # 4. Delete bookmarks from this book
+        db.execute(text("DELETE FROM bookmarks WHERE book_id = :book_id"), {"book_id": book_id})
+
+        # 5. Unlink vocabulary (Preserve words, just remove book association)
+        db.query(Vocabulary).filter(Vocabulary.book_id == book_id).update({Vocabulary.book_id: None})
+
+        # 6. Delete book record
+        db.delete(book)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    try:
+        if book_filename:
+            book_path = (UPLOADS_DIR / book_filename).resolve()
             if book_path.exists():
-                Path(book_path).unlink()
+                book_path.unlink()
 
-        # Delete cover image
-        if book.cover_image is not None:
-            cover_path = (UPLOADS_DIR / "covers" / book.cover_image).resolve()
+        if cover_image:
+            cover_path = (UPLOADS_DIR / "covers" / cover_image).resolve()
             if cover_path.exists():
-                Path(cover_path).unlink()
+                cover_path.unlink()
+
+        ThumbnailService(UPLOADS_DIR).delete_thumbnails(book_id)
     except Exception as e:
-        print(f"Error deleting files: {e}")
-
-    # 6. Unlink vocabulary (Preserve words, just remove book association)
-    db.query(Vocabulary).filter(Vocabulary.book_id == book_id).update({Vocabulary.book_id: None})
-
-    # 7. Delete book record
-    db.delete(book)
-    db.commit()
+        logger.error(f"删除书籍文件失败: {e}")
 
     return {"status": "success", "message": "Book deleted"}
 
@@ -202,7 +208,7 @@ def get_page_thumbnail(book_id: str, page_number: int):
     """Serve page thumbnail image"""
     from ..services.thumbnail_service import ThumbnailService
 
-    thumbnail_service = ThumbnailService(BASE_DIR)
+    thumbnail_service = ThumbnailService(UPLOADS_DIR)
     thumbnail_path = thumbnail_service.get_thumbnail_path(book_id, page_number)
 
     if not thumbnail_path:

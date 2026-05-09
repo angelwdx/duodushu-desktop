@@ -72,7 +72,6 @@ export default function EPUBReader({
   onOutlineChange,
   onPageChange,
   onContentChange, // 新增
-  onHighlight, // Add this
   jumpRequest
 }: EPUBReaderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1018,7 +1017,7 @@ export default function EPUBReader({
                           // 静默处理 IndexSizeError - 这是 epub.js 内部错误，不影响功能
                           renditionRef.current!.display(cfi).catch(() => {});
                       }
-                  } catch (e) {
+                  } catch {
                       // 静默处理对齐错误 - epub.js 内部错误，不影响功能
                   }
 
@@ -1752,7 +1751,7 @@ export default function EPUBReader({
           });
 
           // Clear selection on click if no text is selected
-          doc.addEventListener('click', (_e: MouseEvent) => {
+          doc.addEventListener('click', () => {
               const selection = win.getSelection();
               if (!selection || selection.isCollapsed) {
                    document.dispatchEvent(new CustomEvent('epub-clear-selection', { bubbles: true }));
@@ -1970,7 +1969,7 @@ export default function EPUBReader({
                     } catch {}
                }
 
-            }).catch((_err: any) => {
+            }).catch(() => {
                if (!isCancelled) {
                  setLoading(false);
                  setIsReadyToSave(true);
@@ -1998,7 +1997,7 @@ export default function EPUBReader({
                         if (virtualLocation >= 0) {
                           pageNum = virtualLocation + 1;
                         }
-                    } catch (e) {
+                    } catch {
                          // ignore
                     }
                 }
@@ -2109,9 +2108,9 @@ export default function EPUBReader({
                         }
                         log.debug('Relocated sync - start-only fallback result:', { length: text.length });
                    }
-                 } catch (rangeErr) {
-                   log.debug('Range extraction failed, trying fallback...');
-                 }
+                 } catch {
+                    log.debug('Range extraction failed, trying fallback...');
+                  }
 
                   // 2. 如果主方式失败或结果为空，尝试兜底方式：单点提取
                   if (!text) {
@@ -2240,6 +2239,7 @@ export default function EPUBReader({
         renditionRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 初始化流程依赖大量稳定引用，按文件切换时重建即可
   }, [fileUrl, forceHorizontalWritingModeInDocument, isClient, isJapaneseBook]);
 
 
@@ -2269,7 +2269,7 @@ export default function EPUBReader({
   // 当 rendition 无法再进行时（最后一章），getPageText 返回空字符串，朗读循环将自动结束。
   const epubPageRef = useRef(1); // 用于模拟页码计数，触发 onPageChange
 
-  const getEpubPageText = useCallback((_page: number): string => {
+  const getEpubPageText = useCallback((): string => {
     try {
       const contents = renditionRef.current?.getContents();
       const body = contents?.[0]?.document?.body;
@@ -2463,7 +2463,7 @@ export default function EPUBReader({
                       log.debug('Resize restore display failed:', displayErr);
                   }
               }
-          } catch (e) {
+          } catch {
               if (currentCfi) {
                   try {
                       renditionRef.current.display(currentCfi);

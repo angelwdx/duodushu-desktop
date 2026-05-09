@@ -1,7 +1,6 @@
 'use client';
 
 import { useDrag } from '@use-gesture/react';
-import { useCallback } from 'react';
 
 /**
  * 阅读器手势 Hook - 支持左右滑动翻页
