@@ -94,6 +94,9 @@ def get_resource_path(filename: str, fallback_path: Path) -> Path:
 # 打包环境：sys._MEIPASS/ecdict.db（如果打包时包含）
 ECDICT_DB_PATH = get_resource_path("ecdict.db", BASE_DIR / "static" / "ecdict.db")
 
+# JMDICT_DB_PATH：内置日语词典（JMdict English）
+JMDICT_DB_PATH = get_resource_path("jmdict.db", BASE_DIR / "static" / "jmdict.db")
+
 # OPEN_DICT_DB_PATH：通常只在开发环境使用
 OPEN_DICT_DB_PATH = get_resource_path("open_dict.db", BASE_DIR / "data" / "open_dict.db")  # Legacy fallback
 
@@ -114,6 +117,7 @@ logger.info(f"DATA_DIR: {DATA_DIR}")
 logger.info(f"UPLOADS_DIR: {UPLOADS_DIR}")
 logger.info(f"DICTS_DIR: {DICTS_DIR}")
 logger.info(f"ECDICT_DB_PATH: {ECDICT_DB_PATH}")
+logger.info(f"JMDICT_DB_PATH: {JMDICT_DB_PATH}")
 logger.info(f"DB_PATH: {DB_PATH}")
 logger.info(f"PyInstaller 环境: {getattr(sys, 'frozen', False)}")
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):

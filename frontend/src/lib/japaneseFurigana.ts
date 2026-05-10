@@ -12,6 +12,7 @@ export function createPlainFuriganaAnnotation(text: string): FuriganaAnnotation 
   return {
     text,
     segments: [{ type: "text", text }],
+    lookup_segments: [],
     has_furigana: false,
   };
 }

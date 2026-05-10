@@ -3,6 +3,9 @@
 import { useEffect, useState, useRef, useMemo, memo, useCallback } from "react";
 import DictionaryContent from "./DictionaryContent";
 import { getApiUrl } from "../lib/api";
+import { detectTTSContentLanguage } from "../lib/ttsText";
+import { createLogger } from "../lib/logger";
+import { containsJapaneseText, isJapaneseBookLanguage } from "../lib/japaneseText";
 
 interface Definition {
   definition: string;
@@ -13,6 +16,16 @@ interface Definition {
 interface Meaning {
   partOfSpeech: string;
   definitions: Definition[];
+}
+
+interface JMdictInlineSense {
+  glosses?: string[];
+}
+
+interface JMdictInlineEntry {
+  reading?: string;
+  summary?: string;
+  senses?: JMdictInlineSense[];
 }
 
 interface DictionaryData {
@@ -40,8 +53,11 @@ interface DictionarySidebarProps {
   className?: string;
   bookId?: string;
   currentPage?: number;
+  bookLanguage?: string | null;
   onRefresh?: () => void;
 }
+
+const log = createLogger("DictionarySidebar");
 
 function DictionarySidebar({
   wordData,
@@ -51,6 +67,7 @@ function DictionarySidebar({
   savedWords = [],
   onDeleteWord,
   className = "",
+  bookLanguage,
 }: DictionarySidebarProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [translationMap, setTranslationMap] = useState<{
@@ -67,29 +84,99 @@ function DictionarySidebar({
       ? wordData.lookup_term
       : "";
 
+  const japaneseReadingForTTS = useMemo(() => {
+    const rawReading = (wordData as any)?.raw_data?.entries?.[0]?.reading;
+    if (typeof rawReading === "string" && /[\u3040-\u30ff]/.test(rawReading)) {
+      return rawReading.trim();
+    }
+
+    const phonetic = wordData?.phonetic?.trim();
+    if (phonetic && /[\u3040-\u30ff]/.test(phonetic)) {
+      return phonetic;
+    }
+
+    return "";
+  }, [wordData]);
+
+  const isJapaneseDictionaryWord = useMemo(() => {
+    if (!wordData?.word) return false;
+    if ((wordData as any)?.is_jmdict || wordData?.source?.toLowerCase() === "jmdict") {
+      return true;
+    }
+    if (japaneseReadingForTTS) {
+      return true;
+    }
+    return isJapaneseBookLanguage(bookLanguage) && containsJapaneseText(wordData.word);
+  }, [bookLanguage, japaneseReadingForTTS, wordData]);
+
+  const playTextWithConfiguredTTS = useCallback(async (
+    text: string,
+    options?: { fallbackLanguage?: string | null },
+  ) => {
+    const trimmedText = text.trim();
+    if (!trimmedText) return;
+
+    const { getTTSConfig, streamSpeech } = await import("../lib/api");
+    const config = await getTTSConfig();
+    const detectedLanguage = detectTTSContentLanguage(trimmedText, options?.fallbackLanguage);
+    const provider = config.provider;
+
+    const resolveVoice = () => {
+      if (provider === "qwen3") {
+        if (detectedLanguage === "ja") {
+          return config.qwen3.voice_japanese?.trim() || config.qwen3.voice?.trim() || "塔塔";
+        }
+        return config.qwen3.voice?.trim() || "塔塔";
+      }
+
+      if (provider === "openai_api") {
+        return config.openai_api.voice?.trim() || "alloy";
+      }
+
+      if (detectedLanguage === "ja") {
+        return config.edge.voice_japanese?.trim() || "nanami";
+      }
+      if (detectedLanguage === "zh") {
+        return config.edge.voice_chinese?.trim() || "xiaoxiao";
+      }
+      return config.edge.voice?.trim() || "aria";
+    };
+
+    const resolveSpeed = () => {
+      if (provider === "qwen3") return config.qwen3.speed || 1;
+      if (provider === "openai_api") return config.openai_api.speed || 1;
+      return config.edge.speed || 1;
+    };
+
+    log.debug("播放词典 TTS", {
+      provider,
+      detectedLanguage,
+      textPreview: trimmedText.slice(0, 40),
+    });
+
+    const { blobUrl } = await streamSpeech(
+      trimmedText,
+      resolveVoice(),
+      provider,
+      resolveSpeed(),
+    );
+    const audio = new Audio(blobUrl);
+    audio.onended = () => URL.revokeObjectURL(blobUrl);
+    await audio.play();
+  }, []);
+
   // 播放单词发音（使用Edge TTS）
   const playWordAudio = async () => {
     if (!wordData?.word) return;
 
     try {
-      const { streamSpeech } = await import("../lib/api");
-      // 随机美音voice列表（与playTTSFallback保持一致）
-      const usVoices = [
-        "en-US-MichelleNeural",
-        "en-US-AriaNeural",
-        "en-US-JennyNeural",
-        "en-US-GuyNeural",
-        "en-US-ChristopherNeural",
-        "en-US-EricNeural",
-        "en-US-RogerNeural",
-      ];
-      const randomVoice = usVoices[Math.floor(Math.random() * usVoices.length)];
-      const { blobUrl } = await streamSpeech(wordData.word, randomVoice);
-      const audio = new Audio(blobUrl);
-      audio.onended = () => URL.revokeObjectURL(blobUrl);
-      await audio.play();
+      const textToSpeak = isJapaneseDictionaryWord && japaneseReadingForTTS
+        ? japaneseReadingForTTS
+        : wordData.word;
+      const fallbackLanguage = isJapaneseDictionaryWord ? "ja" : bookLanguage;
+      await playTextWithConfiguredTTS(textToSpeak, { fallbackLanguage });
     } catch (err) {
-      console.error("Failed to play word audio:", err);
+      log.error("播放词条音频失败", err);
     }
   };
 
@@ -291,21 +378,20 @@ function DictionarySidebar({
         if (res.ok) {
           const dicts = await res.json();
           
-          // 只过滤出用户导入的词典(不包括ECDICT内置词典)
-          const importedDicts = dicts
-            .filter((d: any) => d.type === "imported" && d.is_active)
+          // 只给用户导入词典显示标签；内置词典（ECDICT / JMdict）直接显示结果，不单独占标签
+          const switchableDicts = dicts
+            .filter((d: any) => d.is_active && d.type === "imported")
             .map((d: any) => ({ id: d.name, label: d.name }));
 
-          setSources(importedDicts);
+          setSources(switchableDicts);
 
-          if (importedDicts.length > 0) {
-            // 默认选择第一个词典
-            if (!activeTab || !importedDicts.some((s: any) => s.id === activeTab)) {
-              setActiveTab(importedDicts[0].id);
+          if (switchableDicts.length > 0) {
+            if (!activeTab || !switchableDicts.some((s: any) => s.id === activeTab)) {
+              setActiveTab(switchableDicts[0].id);
             }
-          } else {
+          } else if (activeTab && !switchableDicts.some((s: any) => s.id === activeTab)) {
              setActiveTab("");
-          }
+           }
         }
       } catch (e) {
         console.error("Failed to load dicts:", e);
@@ -342,6 +428,34 @@ function DictionarySidebar({
       onSearch(searchTerm.trim(), activeTab);
     }
   };
+
+  const shouldRenderInlineJMdict =
+    !(wordData as any)?.multiple_sources &&
+    (wordData?.source?.toLowerCase() === "jmdict" || (wordData as any)?.is_jmdict);
+
+  const inlineJMdictCard = useMemo(() => {
+    if (!shouldRenderInlineJMdict || !wordData) return null;
+
+    const rawEntry = ((wordData as any).raw_data?.entries?.[0] || null) as JMdictInlineEntry | null;
+    const reading = rawEntry?.reading || wordData.phonetic || "";
+    const summary = rawEntry?.summary?.trim()
+      || wordData.meanings?.[0]?.definitions?.[0]?.definition?.trim()
+      || "";
+
+    const glosses = rawEntry?.senses?.flatMap((sense) => sense.glosses || [])
+      || wordData.meanings?.flatMap((meaning) => meaning.definitions.map((definition) => definition.definition)) 
+      || [];
+
+    const details = glosses
+      .filter((gloss) => gloss && gloss.trim() && gloss.trim() !== summary)
+      .slice(0, 3);
+
+    return {
+      reading,
+      summary,
+      details,
+    };
+  }, [shouldRenderInlineJMdict, wordData]);
 
   const isMdxContent = wordData?.html_content || (wordData as any)?.is_ecdict;
 
@@ -553,30 +667,11 @@ function DictionarySidebar({
                     <button
                       onClick={async () => {
                         try {
-                          const { streamSpeech } = await import("../lib/api");
-                          // Random American English voices
-                          const voices = [
-                            "en-US-AriaNeural",
-                            "en-US-GuyNeural",
-                            "en-US-JennyNeural",
-                            "en-US-ChristopherNeural",
-                            "en-US-EricNeural",
-                            "en-US-MichelleNeural",
-                            "en-US-RogerNeural",
-                            "en-US-SteffanNeural",
-                          ];
-                          const randomVoice =
-                            voices[Math.floor(Math.random() * voices.length)];
-
-                          const { blobUrl } = await streamSpeech(
-                            wordData.context_sentence!,
-                            randomVoice,
-                          );
-                          const audio = new Audio(blobUrl);
-                          audio.onended = () => URL.revokeObjectURL(blobUrl);
-                          await audio.play();
+                          await playTextWithConfiguredTTS(wordData.context_sentence!, {
+                            fallbackLanguage: bookLanguage,
+                          });
                         } catch (e) {
-                          console.error(e);
+                          log.error("播放例句音频失败", e);
                         }
                       }}
                       className="p-1 text-gray-500 hover:text-gray-700 hover:bg-amber-100 rounded transition-colors"
@@ -598,6 +693,41 @@ function DictionarySidebar({
                     </button>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {shouldRenderInlineJMdict && inlineJMdictCard && (
+              <div
+                className="mb-5 rounded-xl border border-sky-200 bg-linear-to-br from-sky-50 to-blue-50 p-4 shadow-sm"
+                data-testid="inline-jmdict-result"
+              >
+                <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest text-sky-600">
+                  <span>简明辞典</span>
+                  <span className="h-1 w-1 rounded-full bg-sky-300" />
+                  <span>JMdict</span>
+                </div>
+                {inlineJMdictCard.reading ? (
+                  <div className="mt-2 text-sm font-medium tracking-wide text-sky-900">
+                    {inlineJMdictCard.reading}
+                  </div>
+                ) : null}
+                {inlineJMdictCard.summary ? (
+                  <div className="mt-2 text-sm leading-relaxed text-gray-800">
+                    {inlineJMdictCard.summary}
+                  </div>
+                ) : null}
+                {inlineJMdictCard.details.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {inlineJMdictCard.details.map((detail) => (
+                      <span
+                        key={detail}
+                        className="rounded-full bg-white/80 px-2.5 py-1 text-xs text-sky-800 ring-1 ring-sky-100"
+                      >
+                        {detail}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             )}
 
@@ -636,7 +766,7 @@ function DictionarySidebar({
 
             {/* Content Display */}
             {/* 当没有启用的导入词典时，显示提示 */}
-            {sources.length === 0 && !(wordData as any)?.multiple_sources && !(wordData as any)?.is_ai ? (
+            {shouldRenderInlineJMdict ? null : sources.length === 0 && !isMdxContent && !(wordData.meanings && wordData.meanings.length > 0) && !(wordData as any)?.multiple_sources && !(wordData as any)?.is_ai ? (
               <div className="min-h-[200px] flex flex-col items-center justify-center text-center py-12">
                 <div className="w-16 h-16 mb-4 text-gray-300">
                   <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -712,13 +842,13 @@ function DictionarySidebar({
                   return (
                     <div className="pb-6">
                       {/* 检查是否是 MDX 内容 */}
-                      {selectedResult.html_content ? (
-                        <div className="prose prose-sm max-w-none">
-                          <DictionaryContent
-                            word={wordData.word}
-                            source={selectedResult.source_label}
-                            htmlContent={selectedResult.html_content}
-                            rawData={selectedResult.raw_data}
+                       {selectedResult.html_content || selectedResult.is_ecdict || selectedResult.is_jmdict ? (
+                         <div className="prose prose-sm max-w-none">
+                           <DictionaryContent
+                             word={wordData.word}
+                             source={selectedResult.source_label}
+                             htmlContent={selectedResult.html_content}
+                             rawData={selectedResult.raw_data}
                           />
                         </div>
                       ) : selectedResult.meanings && selectedResult.meanings.length > 0 ? (
@@ -770,7 +900,14 @@ function DictionarySidebar({
                   word={wordData.word}
                   source={wordData.source || activeTab}
                   htmlContent={wordData.html_content!}
-                  rawData={wordData.source?.toLowerCase() === 'ecdict' || (wordData as any).is_ecdict ? (wordData as any).raw_data : undefined}
+                  rawData={
+                    wordData.source?.toLowerCase() === 'ecdict'
+                    || wordData.source?.toLowerCase() === 'jmdict'
+                    || (wordData as any).is_ecdict
+                    || (wordData as any).is_jmdict
+                      ? (wordData as any).raw_data
+                      : undefined
+                  }
                 />
               </div>
             ) : wordData.meanings && wordData.meanings.length > 0 ? (

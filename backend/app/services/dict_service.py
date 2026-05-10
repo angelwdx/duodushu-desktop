@@ -7,8 +7,11 @@ from ..services import (
     cache_service,
     gemini_service,
     ecdict_service,
+    jmdict_service,
     open_dict_service,
 )
+from ..services.book_language_service import contains_japanese_text
+from ..services.japanese_text_service import get_japanese_lookup_terms
 from ..utils.lookup_normalizer import normalize_lookup_word
 from app import config
 import requests
@@ -37,6 +40,7 @@ def get_dict_manager():
 logger = logging.getLogger(__name__)
 
 FREE_DICT_API = "https://api.dictionaryapi.dev/api/v2/entries/en/{word}"
+JMDICT_SOURCE = "JMdict"
 
 # 例外词列表：以常见后缀结尾但本身是完整词的词
 # 这些词不应进行词形还原
@@ -313,6 +317,22 @@ def _candidate_exists(candidate: str) -> bool:
     return bool(dict_manager and dict_manager.word_exists(candidate))
 
 
+def _is_japanese_lookup(word: str) -> bool:
+    return contains_japanese_text(word)
+
+
+def _lookup_jmdict_terms(original_word: str, lookup_terms: List[str]) -> Optional[Dict]:
+    for term in lookup_terms:
+        result = jmdict_service.get_word_details(term)
+        if not result:
+            continue
+        result["lookup_term"] = original_word
+        if term != original_word:
+            result["lemma_from"] = term
+        return result
+    return None
+
+
 def _get_lemma_candidates(word: str, validate_candidates: bool = True) -> List[str]:
     """
     生成可能的原型词列表。
@@ -547,6 +567,9 @@ def _annotate_lookup_result(
 
 
 def _get_lookup_terms(word: str, prefer_lemma: bool = True) -> List[str]:
+    if _is_japanese_lookup(word):
+        return get_japanese_lookup_terms(word)
+
     lemma_candidates = _get_lemma_candidates(word, validate_candidates=True)
     if not prefer_lemma:
         terms = [word]
@@ -579,17 +602,14 @@ def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
         return None
 
     original_word = word
+    is_japanese_lookup = _is_japanese_lookup(original_word)
 
     # 获取所有启用的词典
     dict_manager = get_dict_manager()
     try:
         dicts = dict_manager.get_dicts()
-        # 过滤出启用的导入词典（排除 ECDICT）
+        # 过滤出启用的导入词典（排除内置词典）
         active_imported_dicts = [d["name"] for d in dicts if d.get("type") == "imported" and d.get("is_active", True)]
-
-        if not active_imported_dicts:
-            # 没有启用的导入词典，直接跳过，后续会回退到 ECDICT
-            pass
 
         lookup_terms = _get_lookup_terms(original_word, prefer_lemma=True)
 
@@ -640,7 +660,15 @@ def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
                 logger.warning(f"Failed to lookup in {dict_name}: {e}")
                 continue
 
+        if is_japanese_lookup:
+            jmdict_result = _lookup_jmdict_terms(original_word, lookup_terms)
+            if jmdict_result:
+                results.append({"source_label": JMDICT_SOURCE, "source": JMDICT_SOURCE, **jmdict_result})
+
         if not results:
+            if is_japanese_lookup:
+                return None
+
             # 所有导入词典都没找到，优先返回原型的 ECDICT 结果，再回退原词。
             for term in lookup_terms:
                 ecdict_data = ecdict_service.get_word_details(term)
@@ -819,8 +847,12 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
 
     # 保存原始查询词，用于后续词形还原
     original_word = word
+    is_japanese_lookup = _is_japanese_lookup(original_word)
 
     lookup_terms = _get_lookup_terms(original_word, prefer_lemma=True)
+
+    if source == JMDICT_SOURCE or (is_japanese_lookup and source == ""):
+        return _lookup_jmdict_terms(original_word, lookup_terms)
 
     # 1. Try Imported MDX Dictionaries FIRST
     imported_res = None
@@ -872,6 +904,21 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
                 lemma_from=matched_word if matched_word and matched_word.lower() != original_word.lower() else None,
             )
             return imported_res
+
+    if is_japanese_lookup:
+        jmdict_res = _lookup_jmdict_terms(original_word, lookup_terms)
+        if jmdict_res:
+            return jmdict_res
+        if source:
+            logger.info("No definition found for Japanese word '%s' in source '%s'", word, source)
+            return None
+        return {
+            "word": lookup_terms[0] if lookup_terms else original_word,
+            "lookup_term": original_word,
+            "lemma_from": lookup_terms[1] if len(lookup_terms) > 1 else None,
+            "meanings": [],
+            "source": "None",
+        }
 
     # 2. Search Database Cache (before ECDICT, to avoid redundant lookups)
     if not source or source == "AI":
@@ -1040,4 +1087,8 @@ def get_word_sources(word: str) -> Dict[str, bool]:
     Returns:
         Dict mapping source name to availability boolean
     """
-    return get_dict_manager().check_sources(word)
+    normalized_word = normalize_lookup_word(word)
+    sources = get_dict_manager().check_sources(normalized_word)
+    if _is_japanese_lookup(normalized_word):
+        sources[JMDICT_SOURCE] = bool(_lookup_jmdict_terms(normalized_word, get_japanese_lookup_terms(normalized_word)))
+    return sources

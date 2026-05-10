@@ -50,6 +50,8 @@ TTS_PRESERVE_SURFACES = {
 }
 NUMBER_LIKE_SURFACES = set("0123456789〇一二三四五六七八九十百千万億兆")
 COUNTER_SURFACES = {"号"}
+LOOKUP_EXCLUDED_POS1 = {"助詞", "助動詞", "補助記号", "記号"}
+LOOKUP_EXCLUDED_POS2 = {"非自立可能"}
 
 
 def _is_hiragana(char: str) -> bool:
@@ -112,6 +114,21 @@ def _build_reading_token(
         "reading": reading,
         "pos1": pos1,
         "pos2": pos2,
+    }
+
+
+def _build_lookup_segment(
+    text: str,
+    start: int,
+    end: int,
+    *,
+    lookup_text: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "text": text,
+        "lookup_text": lookup_text or text,
+        "start": start,
+        "end": end,
     }
 
 
@@ -219,6 +236,49 @@ def _get_fugashi_tagger():
         raise RuntimeError("Failed to initialize fugashi tagger") from exc
 
 
+def get_japanese_lookup_terms(text: str) -> list[str]:
+    normalized_text, _ = _normalize_text_for_analysis(text)
+    normalized_text = normalized_text.strip()
+    if not normalized_text:
+        return []
+
+    candidates: list[str] = [normalized_text]
+
+    try:
+        tagger = _get_fugashi_tagger()
+    except RuntimeError:
+        return candidates
+
+    content_lemmas: list[str] = []
+    for token in tagger(normalized_text):
+        surface = token.surface.strip()
+        if not surface:
+            continue
+
+        pos1 = getattr(token.feature, "pos1", None)
+        if pos1 in LOOKUP_EXCLUDED_POS1:
+            continue
+
+        lemma = getattr(token.feature, "lemma", None) or getattr(token.feature, "orthBase", None) or surface
+        if not lemma or lemma == "*":
+            lemma = surface
+        content_lemmas.append(str(lemma))
+
+    if content_lemmas:
+        candidates.append("".join(content_lemmas))
+        if len(content_lemmas) == 1:
+            candidates.append(content_lemmas[0])
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            deduped.append(candidate)
+
+    return deduped
+
+
 def _split_ruby_segments(surface: str, reading: str) -> list[dict[str, Any]]:
     if not surface or not reading or not any(_is_kanji(ch) for ch in surface):
         return [_build_text_segment(surface)]
@@ -275,6 +335,7 @@ def _build_annotation_result(text: str, segments: list[dict[str, Any]]) -> dict[
     return {
         "text": text,
         "segments": normalized_segments,
+        "lookup_segments": build_japanese_lookup_segments(text),
         "has_furigana": any(segment["type"] == "ruby" for segment in normalized_segments),
     }
 
@@ -387,6 +448,28 @@ def _tokenize_plain_chunk_with_fugashi(text: str) -> list[dict[str, str | None]]
         tokens.append(_build_reading_token(text[current_index:], None))
 
     return tokens
+
+
+def _get_lookup_word_entries_from_plain_chunk(
+    text: str,
+    *,
+    start_offset: int = 0,
+) -> list[dict[str, Any]]:
+    lookup_words: list[dict[str, Any]] = []
+
+    for word in _get_plain_chunk_fugashi_words(text):
+        lookup_words.append(
+            _build_fugashi_word_entry(
+                word["surface"],
+                word["reading"],
+                start=word["start"] + start_offset,
+                end=word["end"] + start_offset,
+                pos1=word["pos1"],
+                pos2=word["pos2"],
+            )
+        )
+
+    return lookup_words
 
 
 def _should_merge_fugashi_words(
@@ -567,6 +650,168 @@ def _tokenize_with_fugashi(text: str) -> list[dict[str, str | None]]:
     return tokens
 
 
+def _get_lookup_word_entries(text: str) -> list[dict[str, Any]]:
+    words: list[dict[str, Any]] = []
+    chunk_start = 0
+    current_index = 0
+
+    while current_index < len(text):
+        matched_override = _match_reading_override(text, current_index)
+        if matched_override is None:
+            current_index += 1
+            continue
+
+        if chunk_start < current_index:
+            words.extend(
+                _get_lookup_word_entries_from_plain_chunk(
+                    text[chunk_start:current_index],
+                    start_offset=chunk_start,
+                )
+            )
+
+        override_surface, override_reading = matched_override
+        words.append(
+            _build_fugashi_word_entry(
+                override_surface,
+                override_reading,
+                start=current_index,
+                end=current_index + len(override_surface),
+                pos1="override",
+                pos2="override",
+            )
+        )
+        current_index += len(override_surface)
+        chunk_start = current_index
+
+    if chunk_start < len(text):
+        words.extend(
+            _get_lookup_word_entries_from_plain_chunk(
+                text[chunk_start:],
+                start_offset=chunk_start,
+            )
+        )
+
+    return words
+
+
+def _should_merge_lookup_words(
+    previous_word: dict[str, Any],
+    current_word: dict[str, Any],
+) -> bool:
+    if previous_word["end"] != current_word["start"]:
+        return False
+
+    previous_pos1 = previous_word["pos1"] or ""
+    current_pos1 = current_word["pos1"] or ""
+
+    if previous_pos1 == "接頭辞" and current_pos1 not in LOOKUP_EXCLUDED_POS1:
+        return True
+
+    if current_pos1 == "接尾辞" and previous_pos1 not in LOOKUP_EXCLUDED_POS1:
+        return True
+
+    return False
+
+
+def _merge_lookup_word_entries(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+
+    for word in words:
+        if not merged:
+            merged.append(word.copy())
+            continue
+
+        previous_word = merged[-1]
+        if not _should_merge_lookup_words(previous_word, word):
+            merged.append(word.copy())
+            continue
+
+        previous_word["surface"] += word["surface"]
+        previous_word["reading"] = (
+            (previous_word["reading"] or "") + (word["reading"] or "")
+        ) or None
+        previous_word["end"] = word["end"]
+        if (previous_word["pos1"] or "") == "接頭辞" and (word["pos1"] or "") != "接尾辞":
+            previous_word["pos1"] = word["pos1"]
+            previous_word["pos2"] = word["pos2"]
+
+    return merged
+
+
+def _should_include_lookup_word(word: dict[str, Any]) -> bool:
+    surface = word["surface"] or ""
+    pos1 = word["pos1"] or ""
+    pos2 = word["pos2"] or ""
+
+    if not surface.strip():
+        return False
+
+    if pos1 in LOOKUP_EXCLUDED_POS1:
+        return False
+
+    if pos2 in LOOKUP_EXCLUDED_POS2 and pos1 == "動詞" and not word["reading"]:
+        return False
+
+    return any(_is_japanese_analysis_char(char) for char in surface)
+
+
+def _project_lookup_segments_to_original_text(
+    original_text: str,
+    normalized_lookup_segments: list[dict[str, Any]],
+    normalized_index_map: list[int],
+) -> list[dict[str, Any]]:
+    projected_segments: list[dict[str, Any]] = []
+
+    for segment in normalized_lookup_segments:
+        segment_length = segment["end"] - segment["start"]
+        if segment_length <= 0:
+            continue
+
+        original_start = normalized_index_map[segment["start"]]
+        original_end = normalized_index_map[segment["end"] - 1] + 1
+        projected_segments.append(
+            _build_lookup_segment(
+                original_text[original_start:original_end],
+                original_start,
+                original_end,
+                lookup_text=segment["lookup_text"],
+            )
+        )
+
+    return projected_segments
+
+
+def build_japanese_lookup_segments(text: str) -> list[dict[str, Any]]:
+    original_text = text or ""
+    if not original_text or not contains_japanese_text(original_text):
+        return []
+
+    normalized_text, normalized_index_map = _normalize_text_for_analysis(original_text)
+    if not normalized_text:
+        return []
+
+    lookup_words = _merge_lookup_word_entries(_get_lookup_word_entries(normalized_text))
+    normalized_segments = [
+        _build_lookup_segment(
+            word["surface"],
+            word["start"],
+            word["end"],
+            lookup_text=word["surface"],
+        )
+        for word in lookup_words
+        if _should_include_lookup_word(word)
+    ]
+
+    if normalized_text == original_text:
+        return normalized_segments
+
+    return _project_lookup_segments_to_original_text(
+        original_text,
+        normalized_segments,
+        normalized_index_map,
+    )
+
+
 def _is_number_like_token(token: dict[str, str | None]) -> bool:
     surface = token["surface"] or ""
     pos2 = token["pos2"] or ""
@@ -676,12 +921,18 @@ def _annotate_with_fugashi(text: str) -> dict[str, Any]:
 def annotate_japanese_text(text: str) -> dict[str, Any]:
     original_text = text or ""
     if not original_text:
-        return {"text": original_text, "segments": [], "has_furigana": False}
+        return {
+            "text": original_text,
+            "segments": [],
+            "lookup_segments": [],
+            "has_furigana": False,
+        }
 
     if not contains_japanese_text(original_text):
         return {
             "text": original_text,
             "segments": [_build_text_segment(original_text)],
+            "lookup_segments": [],
             "has_furigana": False,
         }
 
@@ -690,6 +941,7 @@ def annotate_japanese_text(text: str) -> dict[str, Any]:
         return {
             "text": original_text,
             "segments": [_build_text_segment(original_text)],
+            "lookup_segments": [],
             "has_furigana": False,
         }
 
@@ -720,6 +972,7 @@ def annotate_japanese_texts(texts: list[str], db: Session) -> list[dict[str, Any
     results: list[dict[str, Any]] = []
     pending_cache_rows: list[CacheFurigana] = []
     computed_annotations: dict[str, dict[str, Any]] = {}
+    computed_lookup_segments: dict[str, list[dict[str, Any]]] = {}
     normalized_items = [(text or "", build_japanese_reading_cache_key(text or "")) for text in texts]
     unique_hashes = list(dict.fromkeys(text_hash for _, text_hash in normalized_items))
     cached_rows = (
@@ -733,12 +986,18 @@ def annotate_japanese_texts(texts: list[str], db: Session) -> list[dict[str, Any
     }
 
     for normalized_text, text_hash in normalized_items:
+        lookup_segments = computed_lookup_segments.get(normalized_text)
+        if lookup_segments is None:
+            lookup_segments = build_japanese_lookup_segments(normalized_text)
+            computed_lookup_segments[normalized_text] = lookup_segments
+
         cached = cached_map.get(text_hash)
         if cached is not None and cached.text == normalized_text:
             results.append(
                 {
                     "text": normalized_text,
                     "segments": cached.segments,
+                    "lookup_segments": lookup_segments,
                     "has_furigana": bool(cached.has_furigana),
                 }
             )

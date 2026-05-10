@@ -99,3 +99,15 @@ class TestConfigECDICT_DB_PATH:
     def test_ecdict_db_path_filename(self):
         """测试 ECDICT_DB_PATH 文件名正确"""
         assert config.ECDICT_DB_PATH.name == "ecdict.db"
+
+
+class TestConfigJMDICT_DB_PATH:
+    """测试 JMDICT_DB_PATH 配置"""
+
+    def test_jmdict_db_path_is_path(self):
+        """测试 JMDICT_DB_PATH 是 Path 对象"""
+        assert isinstance(config.JMDICT_DB_PATH, Path)
+
+    def test_jmdict_db_path_filename(self):
+        """测试 JMDICT_DB_PATH 文件名正确"""
+        assert config.JMDICT_DB_PATH.name == "jmdict.db"

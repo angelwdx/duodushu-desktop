@@ -19,3 +19,8 @@ def test_normalize_lookup_word_preserves_contractions():
 def test_extract_lookup_segments_splits_dashed_tokens():
     assert extract_lookup_segments("sand—hits") == ["sand", "hits"]
     assert extract_lookup_segments("dust-usually") == ["dust", "usually"]
+
+
+def test_normalize_lookup_word_preserves_japanese_terms():
+    assert normalize_lookup_word(" 一軒家 ") == "一軒家"
+    assert normalize_lookup_word("「夜 市」") == "夜市"

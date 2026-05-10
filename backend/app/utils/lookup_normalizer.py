@@ -3,6 +3,9 @@ from typing import List
 
 
 LOOKUP_SEGMENT_RE = re.compile(r"[A-Za-zÀ-ÿ]+(?:['’][A-Za-zÀ-ÿ]+)*")
+JAPANESE_CHAR_RE = re.compile(r"[\u3040-\u30FF\u3400-\u9FFF\uF900-\uFAFF々〆ヵヶ]")
+JAPANESE_EDGE_PUNCTUATION_RE = re.compile(r"^[\s\u3000「」『』【】（）()［］｛｝〈〉《》〔〕〝〟'\"、。！？・…]+|[\s\u3000「」『』【】（）()［］｛｝〈〉《》〔〕〝〟'\"、。！？・…]+$")
+JAPANESE_INLINE_SPACE_RE = re.compile(r"[ \t\u3000]+")
 CONTRACTION_SUFFIXES = ("n't", "'m", "'re", "'ve", "'ll", "'d")
 CONTRACTION_WORDS = {
     "it's",
@@ -34,6 +37,11 @@ def normalize_lookup_word(raw: str) -> str:
     word = raw.strip().replace("\u2019", "'").replace("\u2018", "'")
     if not word:
         return ""
+
+    if JAPANESE_CHAR_RE.search(word):
+        normalized = JAPANESE_EDGE_PUNCTUATION_RE.sub("", word)
+        normalized = JAPANESE_INLINE_SPACE_RE.sub("", normalized)
+        return normalized.strip()
 
     full_match = LOOKUP_SEGMENT_RE.fullmatch(word)
     if not full_match:

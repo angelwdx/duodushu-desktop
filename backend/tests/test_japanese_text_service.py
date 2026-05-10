@@ -14,6 +14,7 @@ from app.services import japanese_text_service
 from app.services.japanese_text_service import (
     annotate_japanese_text,
     annotate_japanese_texts,
+    build_japanese_lookup_segments,
     normalize_japanese_text_for_tts,
 )
 
@@ -122,6 +123,9 @@ def test_annotate_japanese_text_handles_counter_compound_home_words():
     assert result["segments"] == [
         {"type": "ruby", "base": "一軒家", "reading": "いっけんや"},
     ]
+    assert result["lookup_segments"] == [
+        {"text": "一軒家", "lookup_text": "一軒家", "start": 0, "end": 3},
+    ]
 
 
 def test_annotate_japanese_text_merges_kanji_suffix_compounds():
@@ -172,6 +176,29 @@ def test_normalize_japanese_text_for_tts_normalizes_particles_and_punctuation():
     assert normalize_japanese_text_for_tts("山/川(谷)") == "山、川、谷"
 
 
+def test_build_japanese_lookup_segments_skips_particles_and_merges_honorifics():
+    assert build_japanese_lookup_segments("彼は学校へ行く。") == [
+        {"text": "彼", "lookup_text": "彼", "start": 0, "end": 1},
+        {"text": "学校", "lookup_text": "学校", "start": 2, "end": 4},
+        {"text": "行く", "lookup_text": "行く", "start": 5, "end": 7},
+    ]
+    assert build_japanese_lookup_segments("お母さんが帰ってきた。") == [
+        {"text": "お母さん", "lookup_text": "お母さん", "start": 0, "end": 4},
+        {"text": "帰っ", "lookup_text": "帰っ", "start": 5, "end": 7},
+    ]
+    assert build_japanese_lookup_segments("こんにちは、ありがとう。") == [
+        {"text": "こんにちは", "lookup_text": "こんにちは", "start": 0, "end": 5},
+        {"text": "ありがとう", "lookup_text": "ありがとう", "start": 6, "end": 11},
+    ]
+
+
+def test_build_japanese_lookup_segments_projects_spaced_tokens_back_to_original_text():
+    assert build_japanese_lookup_segments("女 の 夜 市") == [
+        {"text": "女", "lookup_text": "女", "start": 0, "end": 1},
+        {"text": "夜 市", "lookup_text": "夜市", "start": 4, "end": 7},
+    ]
+
+
 def test_annotate_japanese_texts_reuses_cached_duplicates_in_one_batch(db_session, monkeypatch):
     call_count = 0
     original_annotate = japanese_text_service.annotate_japanese_text
@@ -187,5 +214,6 @@ def test_annotate_japanese_texts_reuses_cached_duplicates_in_one_batch(db_sessio
 
     assert [item["text"] for item in results] == ["一軒家", "一軒家"]
     assert results[0]["segments"] == results[1]["segments"]
+    assert results[0]["lookup_segments"] == results[1]["lookup_segments"]
     assert call_count == 1
     assert db_session.query(CacheFurigana).count() == 1

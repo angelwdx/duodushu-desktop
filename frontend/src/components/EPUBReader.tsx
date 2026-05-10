@@ -6,7 +6,7 @@ import { useFullTextTTS } from '../hooks/useFullTextTTS';
 import TTSLoadingDots from './TTSLoadingDots';
 import { saveEpubState, getEpubState } from '../lib/epubCache';
 import { createLogger } from '../lib/logger';
-import { getApiUrl, type FuriganaAnnotation } from '../lib/api';
+import { getApiUrl, type FuriganaAnnotation, type JapaneseLookupSegment } from '../lib/api';
 import { containsJapaneseText, isJapaneseBookLanguage } from '../lib/japaneseText';
 import { ensureFuriganaAnnotations } from '../lib/japaneseFurigana';
 import { preprocessTTSPlainText } from '../lib/ttsText';
@@ -40,6 +40,10 @@ interface EpubLayoutState {
   isVertical: boolean;
   pageProgression: 'ltr' | 'rtl';
 }
+
+type AnnotationDisplayPiece =
+  | { type: 'text'; text: string; start: number; end: number }
+  | { type: 'ruby'; base: string; reading: string; start: number; end: number };
 
 const LOOKUP_WORD_CHAR_PATTERN = /[\w\u00C0-\u024F\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヵヶー'-]/;
 const LOOKUP_WORD_EDGE_PATTERN = /^[^A-Za-z0-9\u00C0-\u024F\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヵヶー'-]+|[^A-Za-z0-9\u00C0-\u024F\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヵヶー'-]+$/g;
@@ -327,43 +331,8 @@ export default function EPUBReader({
     });
   }, []);
 
-  const createFuriganaWrapper = useCallback((
-    doc: Document,
-    annotation: FuriganaAnnotation,
-    originalText: string,
-  ) => {
-    const wrapper = doc.createElement('span');
-    wrapper.dataset.duodushuFurigana = 'true';
-    wrapper.dataset.originalText = originalText;
-
-    annotation.segments.forEach((segment) => {
-      if (segment.type === 'text') {
-        wrapper.appendChild(doc.createTextNode(segment.text));
-        return;
-      }
-
-      const ruby = doc.createElement('ruby');
-      ruby.className = 'duodushu-ruby';
-      ruby.appendChild(doc.createTextNode(segment.base));
-
-      const rt = doc.createElement('rt');
-      rt.className = 'duodushu-ruby-rt';
-      rt.textContent = segment.reading;
-      ruby.appendChild(rt);
-      wrapper.appendChild(ruby);
-    });
-
-    return wrapper;
-  }, []);
-
-  // 注意：此函数通过 furiganaEnabledRef.current（而非闭包中的 showFurigana）读取假名开关，
-  // 保证被 epub.js hooks 注册的旧引用也能拿到最新状态。
-  const applyFuriganaToDocument = useCallback(async (doc: Document | null | undefined) => {
-    if (!doc?.body) return;
-
-    restoreFuriganaInDocument(doc);
-    // 使用 ref 而非闭包中的 showFurigana，避免 hook 注册时捕获旧闭包导致假名不持久
-    if (!furiganaEnabledRef.current) return;
+  const collectLookupCandidateTextNodes = useCallback((doc: Document | null | undefined) => {
+    if (!doc?.body) return [] as Text[];
 
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
     const candidates: Text[] = [];
@@ -381,7 +350,6 @@ export default function EPUBReader({
         parentTag === 'RT' ||
         parentTag === 'RP' ||
         parentTag === 'RUBY' ||
-        // epub 自带 ruby 可能有 <rb> 等中间层，用 closest 检测任意祖先
         parent?.closest('ruby') != null ||
         parent?.closest('[data-duodushu-furigana="true"]') != null;
 
@@ -392,30 +360,12 @@ export default function EPUBReader({
       currentNode = walker.nextNode();
     }
 
-    if (candidates.length === 0) return;
+    return candidates;
+  }, []);
 
-    await ensureFuriganaAnnotations(
-      candidates.map((node) => node.nodeValue ?? ''),
-      furiganaCacheRef.current,
-    );
-
-    candidates.forEach((node) => {
-      const originalText = node.nodeValue ?? '';
-      const annotation = furiganaCacheRef.current.get(originalText);
-      if (!annotation?.has_furigana || !node.parentNode) return;
-      node.parentNode.replaceChild(createFuriganaWrapper(doc, annotation, originalText), node);
-    });
-  }, [createFuriganaWrapper, restoreFuriganaInDocument]);
-
-  // Ref 始终指向最新的 applyFuriganaToDocument，供 epub.js hook（旧闭包中）调用
-  const applyFuriganaToDocumentRef = useRef(applyFuriganaToDocument);
-  useEffect(() => {
-    applyFuriganaToDocumentRef.current = applyFuriganaToDocument;
-  }, [applyFuriganaToDocument]);
-
-  const extractPlainTextFromBody = useCallback((body: HTMLElement | null | undefined) => {
-    if (!body) return '';
-    const clone = body.cloneNode(true) as HTMLElement;
+  const extractPlainTextFromElement = useCallback((element: Element | null | undefined) => {
+    if (!element) return '';
+    const clone = element.cloneNode(true) as HTMLElement;
     clone.querySelectorAll<HTMLElement>('[data-duodushu-furigana="true"]').forEach((wrapper) => {
       const originalText = wrapper.dataset.originalText ?? wrapper.textContent ?? '';
       wrapper.replaceWith(clone.ownerDocument.createTextNode(originalText));
@@ -444,6 +394,10 @@ export default function EPUBReader({
     clone.querySelectorAll('rt, rp').forEach((node) => node.remove());
     return clone.innerText || clone.textContent || '';
   }, []);
+
+  const extractPlainTextFromBody = useCallback((body: HTMLElement | null | undefined) => {
+    return extractPlainTextFromElement(body);
+  }, [extractPlainTextFromElement]);
 
   const getCurrentContentsFallbackText = useCallback(() => {
     const contentsList = renditionRef.current?.getContents?.() ?? [];
@@ -656,8 +610,240 @@ export default function EPUBReader({
           .replace(LOOKUP_WORD_EDGE_QUOTES_PATTERN, '');
 
       if (!trimmed) return '';
-      return containsJapaneseText(trimmed) ? trimmed : trimmed.toLowerCase();
+      if (containsJapaneseText(trimmed)) {
+          return trimmed.replace(/[ \t\u3000]+/g, '');
+      }
+      return trimmed.toLowerCase();
   }, []);
+
+  const getDisplayPiecesFromAnnotation = useCallback((annotation: FuriganaAnnotation): AnnotationDisplayPiece[] => {
+      const pieces: AnnotationDisplayPiece[] = [];
+      let cursor = 0;
+
+      annotation.segments.forEach((segment) => {
+          if (segment.type === 'text') {
+              const end = cursor + segment.text.length;
+              pieces.push({ type: 'text', text: segment.text, start: cursor, end });
+              cursor = end;
+              return;
+          }
+
+          const end = cursor + segment.base.length;
+          pieces.push({
+              type: 'ruby',
+              base: segment.base,
+              reading: segment.reading,
+              start: cursor,
+              end,
+          });
+          cursor = end;
+      });
+
+      return pieces;
+  }, []);
+
+  const appendAnnotationPieceRange = useCallback((
+      parent: HTMLElement,
+      doc: Document,
+      piece: AnnotationDisplayPiece,
+      startOffset: number,
+      endOffset: number,
+      lookupWord?: string,
+  ) => {
+      if (endOffset <= startOffset) return;
+
+      const attachLookupDataset = (element: HTMLElement) => {
+          if (!lookupWord) return;
+          element.dataset.duodushuLookup = 'true';
+          element.dataset.duodushuLookupWord = lookupWord;
+      };
+
+      if (piece.type === 'text') {
+          const textContent = piece.text.slice(startOffset, endOffset);
+          if (!textContent) return;
+
+          if (!lookupWord) {
+              parent.appendChild(doc.createTextNode(textContent));
+              return;
+          }
+
+          const span = doc.createElement('span');
+          attachLookupDataset(span);
+          span.textContent = textContent;
+          parent.appendChild(span);
+          return;
+      }
+
+      if (startOffset !== 0 || endOffset !== piece.base.length) {
+          const fallback = piece.base.slice(startOffset, endOffset);
+          if (!fallback) return;
+          if (!lookupWord) {
+              parent.appendChild(doc.createTextNode(fallback));
+              return;
+          }
+          const span = doc.createElement('span');
+          attachLookupDataset(span);
+          span.textContent = fallback;
+          parent.appendChild(span);
+          return;
+      }
+
+      const ruby = doc.createElement('ruby');
+      ruby.className = 'duodushu-ruby';
+      attachLookupDataset(ruby);
+      ruby.appendChild(doc.createTextNode(piece.base));
+
+      const rt = doc.createElement('rt');
+      rt.className = 'duodushu-ruby-rt';
+      rt.textContent = piece.reading;
+      ruby.appendChild(rt);
+      parent.appendChild(ruby);
+  }, []);
+
+  const appendAnnotationContentRange = useCallback((
+      parent: HTMLElement,
+      doc: Document,
+      pieces: AnnotationDisplayPiece[],
+      start: number,
+      end: number,
+      lookupWord?: string,
+  ) => {
+      pieces.forEach((piece) => {
+          if (piece.end <= start || piece.start >= end) return;
+          appendAnnotationPieceRange(
+              parent,
+              doc,
+              piece,
+              Math.max(start, piece.start) - piece.start,
+              Math.min(end, piece.end) - piece.start,
+              lookupWord,
+          );
+      });
+  }, [appendAnnotationPieceRange]);
+
+  const createFuriganaWrapper = useCallback((
+      doc: Document,
+      annotation: FuriganaAnnotation,
+      originalText: string,
+  ) => {
+      const wrapper = doc.createElement('span');
+      wrapper.dataset.duodushuFurigana = 'true';
+      wrapper.dataset.originalText = originalText;
+      const displayPieces = getDisplayPiecesFromAnnotation(annotation);
+      const lookupSegments = annotation.lookup_segments || [];
+      let cursor = 0;
+
+      lookupSegments.forEach((segment) => {
+          if (cursor < segment.start) {
+              appendAnnotationContentRange(wrapper, doc, displayPieces, cursor, segment.start);
+          }
+          const lookupWord = normalizeLookupWord(segment.lookup_text || segment.text);
+          appendAnnotationContentRange(
+              wrapper,
+              doc,
+              displayPieces,
+              segment.start,
+              segment.end,
+              lookupWord || undefined,
+          );
+          cursor = segment.end;
+      });
+
+      if (cursor < originalText.length) {
+          appendAnnotationContentRange(wrapper, doc, displayPieces, cursor, originalText.length);
+      }
+
+      return wrapper;
+  }, [appendAnnotationContentRange, getDisplayPiecesFromAnnotation, normalizeLookupWord]);
+
+  // 注意：此函数通过 furiganaEnabledRef.current（而非闭包中的 showFurigana）读取假名开关，
+  // 保证被 epub.js hooks 注册的旧引用也能拿到最新状态。
+  const applyFuriganaToDocument = useCallback(async (doc: Document | null | undefined) => {
+      if (!doc?.body) return;
+
+      restoreFuriganaInDocument(doc);
+      const candidates = collectLookupCandidateTextNodes(doc);
+
+      if (candidates.length === 0) return;
+
+      await ensureFuriganaAnnotations(
+          candidates.map((node) => node.nodeValue ?? ''),
+          furiganaCacheRef.current,
+      );
+
+      if (!furiganaEnabledRef.current) return;
+
+      candidates.forEach((node) => {
+          const originalText = node.nodeValue ?? '';
+          const annotation = furiganaCacheRef.current.get(originalText);
+          if (!annotation?.has_furigana || !node.parentNode) return;
+          node.parentNode.replaceChild(createFuriganaWrapper(doc, annotation, originalText), node);
+      });
+  }, [collectLookupCandidateTextNodes, createFuriganaWrapper, restoreFuriganaInDocument]);
+
+  // Ref 始终指向最新的 applyFuriganaToDocument，供 epub.js hook（旧闭包中）调用
+  const applyFuriganaToDocumentRef = useRef(applyFuriganaToDocument);
+  useEffect(() => {
+      applyFuriganaToDocumentRef.current = applyFuriganaToDocument;
+  }, [applyFuriganaToDocument]);
+
+  const findLookupSegmentAtOffset = useCallback((
+      lookupSegments: JapaneseLookupSegment[],
+      offset: number,
+  ): JapaneseLookupSegment | null => {
+      if (!lookupSegments.length) return null;
+
+      const normalizedOffset = Math.max(0, offset);
+      return (
+          lookupSegments.find((segment) => normalizedOffset >= segment.start && normalizedOffset < segment.end) ||
+          lookupSegments.find((segment) => normalizedOffset > 0 && normalizedOffset - 1 >= segment.start && normalizedOffset - 1 < segment.end) ||
+          null
+      );
+  }, []);
+
+  const getLookupElementRect = useCallback((lookupElement: HTMLElement): DOMRect | null => {
+      if (lookupElement.tagName !== 'RUBY') {
+          return lookupElement.getBoundingClientRect();
+      }
+
+      const range = lookupElement.ownerDocument.createRange();
+      const contentNodes = Array.from(lookupElement.childNodes).filter((node) => {
+          return !(node.nodeType === Node.ELEMENT_NODE && ['RT', 'RP'].includes((node as Element).tagName));
+      });
+
+      if (contentNodes.length === 0) {
+          return lookupElement.getBoundingClientRect();
+      }
+
+      try {
+          range.setStartBefore(contentNodes[0]);
+          range.setEndAfter(contentNodes[contentNodes.length - 1]);
+          return getRangeVisualRect(range);
+      } catch {
+          return lookupElement.getBoundingClientRect();
+      }
+  }, [getRangeVisualRect]);
+
+  const getLookupTargetFromNode = useCallback((target: Node | null | undefined) => {
+      let element: Element | null = null;
+      if (target?.nodeType === Node.ELEMENT_NODE) {
+          element = target as Element;
+      } else if (target?.parentElement) {
+          element = target.parentElement;
+      }
+
+      const lookupElement = element?.closest('[data-duodushu-lookup="true"]') as HTMLElement | null;
+      if (!lookupElement) return null;
+
+      const lookupWord = normalizeLookupWord(lookupElement.dataset.duodushuLookupWord || '');
+      if (!lookupWord) return null;
+
+      return {
+          lookupWord,
+          rect: getLookupElementRect(lookupElement),
+          sourceNode: lookupElement,
+      };
+  }, [getLookupElementRect, normalizeLookupWord]);
 
   const extractContextSentence = useCallback((rawText: string, target: string): string => {
       const fullText = rawText.replace(/\s+/g, ' ').trim();
@@ -678,6 +864,30 @@ export default function EPUBReader({
 
       return fullText.length > 200 ? `${fullText.substring(0, 200).trim()}...` : fullText;
   }, []);
+
+  const extractContextSentenceFromNode = useCallback((sourceNode: Node | null | undefined, target: string): string => {
+      if (!sourceNode) return '';
+
+      let contextNode: Element | null =
+          sourceNode.nodeType === Node.TEXT_NODE
+              ? sourceNode.parentElement
+              : sourceNode.nodeType === Node.ELEMENT_NODE
+                  ? sourceNode as Element
+                  : null;
+
+      while (contextNode && !['P', 'DIV', 'SECTION', 'ARTICLE', 'BODY'].includes(contextNode.tagName)) {
+          contextNode = contextNode.parentElement;
+      }
+
+      if (!contextNode) return '';
+
+      const widerNode =
+          contextNode.tagName === 'P'
+              ? (contextNode.parentElement ?? contextNode)
+              : contextNode;
+      const plainText = extractPlainTextFromElement(widerNode);
+      return extractContextSentence(plainText, target);
+  }, [extractContextSentence, extractPlainTextFromElement]);
 
   const getContentsViewportPoint = useCallback((contents: any, event: MouseEvent) => {
       const doc = contents?.document as Document | undefined;
@@ -714,6 +924,18 @@ export default function EPUBReader({
       if (!text) return null;
 
       const offset = Math.min(Math.max(0, sourceRange.startOffset), text.length);
+      const annotation = furiganaCacheRef.current.get(text);
+      const lookupSegment = annotation
+          ? findLookupSegmentAtOffset(annotation.lookup_segments || [], offset)
+          : null;
+
+      if (lookupSegment) {
+          const expandedRange = doc.createRange();
+          safeSetRangeStart(expandedRange, textNode, lookupSegment.start);
+          safeSetRangeEnd(expandedRange, textNode, lookupSegment.end);
+          return expandedRange;
+      }
+
       const anchorIndex =
           offset < text.length && LOOKUP_WORD_CHAR_PATTERN.test(text[offset])
               ? offset
@@ -740,7 +962,7 @@ export default function EPUBReader({
       safeSetRangeStart(expandedRange, textNode, start);
       safeSetRangeEnd(expandedRange, textNode, end);
       return expandedRange;
-  }, []);
+  }, [findLookupSegmentAtOffset]);
 
   // 辅助函数：处理文本搜索和高亮
   const handleTextSearch = useCallback(async (text: string, word?: string, maxAttempts = 15, pageOffset = 0, retryLevel = 0) => {
@@ -1632,10 +1854,16 @@ export default function EPUBReader({
                    return;
                }
 
-               // Word Highlighting Logic
-               // Use standard browser API to get range at point
-               let range: Range | null = null;
-               const point = getContentsViewportPoint(contents, e);
+               const directLookupTarget = getLookupTargetFromNode(e.target as Node | null);
+               if (directLookupTarget) {
+                   positionOverlayElement(overlay, directLookupTarget.rect);
+                   return;
+               }
+
+                // Word Highlighting Logic
+                // Use standard browser API to get range at point
+                let range: Range | null = null;
+                const point = getContentsViewportPoint(contents, e);
                 if (doc.caretRangeFromPoint) {
                     range = doc.caretRangeFromPoint(point.x, point.y);
                 } else if (doc.caretPositionFromPoint) {
@@ -1656,7 +1884,17 @@ export default function EPUBReader({
                if (range) {
                    try {
                         const wordRange = expandRangeToWord(doc, range);
-                        const word = normalizeLookupWord(wordRange?.toString() ?? '');
+                        const textNode = wordRange?.startContainer.nodeType === Node.TEXT_NODE
+                            ? wordRange.startContainer as Text
+                            : null;
+                        const textAnnotation = textNode
+                            ? furiganaCacheRef.current.get(textNode.textContent ?? '')
+                            : null;
+                        const offset = textNode ? wordRange!.startOffset : -1;
+                        const lookupSegment = textAnnotation
+                            ? findLookupSegmentAtOffset(textAnnotation.lookup_segments || [], offset)
+                            : null;
+                        const word = normalizeLookupWord(lookupSegment?.lookup_text || wordRange?.toString() || '');
 
                         if (wordRange && word) {
                             positionOverlayElement(overlay, getRangeVisualRect(wordRange));
@@ -2125,6 +2363,16 @@ export default function EPUBReader({
             // Click-to-lookup logic
             const selection = contents.window.getSelection();
             if (onWordClick && (!selection || selection.isCollapsed)) {
+                const directLookupTarget = getLookupTargetFromNode(e.target as Node | null);
+                if (directLookupTarget) {
+                    const contextSentence = extractContextSentenceFromNode(
+                        directLookupTarget.sourceNode,
+                        directLookupTarget.lookupWord,
+                    );
+                    onWordClick(directLookupTarget.lookupWord, contextSentence || undefined);
+                    return;
+                }
+
                 // Try to identify word at click position
                 // Note: We access the document inside the iframe
                 const doc = contents.document;
@@ -2152,7 +2400,17 @@ export default function EPUBReader({
                             lookupRange = range;
                         }
 
-                        const cleanWord = normalizeLookupWord(lookupRange?.toString() ?? '');
+                        const textNode = lookupRange?.startContainer.nodeType === Node.TEXT_NODE
+                            ? lookupRange.startContainer as Text
+                            : null;
+                        const textAnnotation = textNode
+                            ? furiganaCacheRef.current.get(textNode.textContent ?? '')
+                            : null;
+                        const offset = textNode ? lookupRange!.startOffset : -1;
+                        const lookupSegment = textAnnotation
+                            ? findLookupSegmentAtOffset(textAnnotation.lookup_segments || [], offset)
+                            : null;
+                        const cleanWord = normalizeLookupWord(lookupSegment?.lookup_text || lookupRange?.toString() || '');
                         const minLookupLength = containsJapaneseText(cleanWord) ? 1 : 2;
 
                         if (cleanWord && cleanWord.length >= minLookupLength) {
@@ -2161,21 +2419,8 @@ export default function EPUBReader({
                                 // Extract context sentence from iframe
                                 let contextSentence = '';
                                 try {
-                                    // Get text content around the clicked word
                                     const node = lookupRange?.commonAncestorContainer ?? range.commonAncestorContainer;
-                                    // Walk up to find a paragraph or div
-                                    let contextNode: Element | null = node.nodeType === 3 ? node.parentElement : node as Element;
-                                    while (contextNode && !['P', 'DIV', 'SECTION', 'ARTICLE', 'BODY'].includes(contextNode.tagName)) {
-                                        contextNode = contextNode.parentElement;
-                                    }
-                                    if (contextNode) {
-                                        // 优先用父容器的 textContent，确保跨段落句子（如句首在上一个 <p>）能被完整捕获
-                                        const widerNode: Element | null =
-                                            contextNode.tagName === 'P'
-                                                ? (contextNode.parentElement ?? contextNode)
-                                                : contextNode;
-                                        contextSentence = extractContextSentence(widerNode.textContent || '', cleanWord);
-                                    }
+                                    contextSentence = extractContextSentenceFromNode(node, cleanWord);
                                 } catch (e) { 
                                     log.warn('Context extraction failed:', e); 
                                 }

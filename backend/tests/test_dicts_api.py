@@ -37,11 +37,16 @@ class TestGetDicts:
         data = response.json()
         assert isinstance(data, list)
 
-        # 至少应该有 ECDICT
+        # 至少应该有 ECDICT 和 JMdict
         ecdict = next((d for d in data if d["name"] == "ECDICT"), None)
         assert ecdict is not None
         assert ecdict["type"] == "builtin"
         assert ecdict["is_builtin"] is True
+
+        jmdict = next((d for d in data if d["name"] == "JMdict"), None)
+        assert jmdict is not None
+        assert jmdict["type"] == "builtin"
+        assert jmdict["is_builtin"] is True
 
 
 class TestImportDict:

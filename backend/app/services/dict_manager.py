@@ -16,6 +16,7 @@ import threading
 logger = logging.getLogger(__name__)
 
 from .mdx_parser import MDXParser
+from . import jmdict_service
 
 
 class DictManager:
@@ -495,9 +496,10 @@ class DictManager:
         result = []
 
         # 使用配置中的 ECDICT 路径
-        from ..config import ECDICT_DB_PATH
+        from ..config import ECDICT_DB_PATH, JMDICT_DB_PATH
 
         ecdict_size = ECDICT_DB_PATH.stat().st_size if ECDICT_DB_PATH.exists() else 0
+        jmdict_size = JMDICT_DB_PATH.stat().st_size if JMDICT_DB_PATH.exists() else 0
 
         # 首先添加 ECDICT
         result.append(
@@ -510,6 +512,17 @@ class DictManager:
                 "is_builtin": True,
             }
         )
+        if JMDICT_DB_PATH.exists():
+            result.append(
+                {
+                    "name": "JMdict",
+                    "type": "builtin",
+                    "size": jmdict_size,
+                    "word_count": jmdict_service.get_entry_count(),
+                    "is_active": True,
+                    "is_builtin": True,
+                }
+            )
 
         # 获取所有已注册的导入词典名
         registered_dict_names = set(self.config.get("dicts", {}).keys())

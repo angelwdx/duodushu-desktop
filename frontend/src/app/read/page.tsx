@@ -12,6 +12,7 @@ import SelectionToolbar from "../../components/SelectionToolbar";
 import { useGlobalTextSelection } from "../../hooks/useGlobalTextSelection";
 
 import { getApiUrl, trackWordQuery } from "../../lib/api";
+import { containsJapaneseText } from "../../lib/japaneseText";
 import { createLogger } from "../../lib/logger";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
@@ -604,11 +605,18 @@ function ReaderContent() {
       setSidebarMode("dictionary");
       setRightSidebarCollapsed(false); // 自动展开右侧栏
 
-      // Strip punctuation
-      const word = rawWord
-        .replace(/^[^\w]+|[^\w]+$/g, "")
-        .replace(/[—–]/g, "-")
-        .toLowerCase();
+      const word = containsJapaneseText(rawWord)
+        ? rawWord
+            .trim()
+            .replace(
+              /^[\s"'“”‘’「」『』（）()【】〔〕［］｛｝〈〉《》、。！？・…—–-]+|[\s"'“”‘’「」『』（）()【】〔〕［］｛｝〈〉《》、。！？・…—–-]+$/g,
+              "",
+            )
+            .replace(/[ \t\u3000]+/g, "")
+        : rawWord
+            .replace(/^[^\w]+|[^\w]+$/g, "")
+            .replace(/[—–]/g, "-")
+            .toLowerCase();
 
       if (!word) return;
 
@@ -1150,6 +1158,7 @@ function ReaderContent() {
                   onDeleteWord={handleDeleteWord}
                   bookId={id}
                   currentPage={currentPage}
+                  bookLanguage={book?.language}
                   onRefresh={loadVocabulary}
                   className="h-full"
                 />

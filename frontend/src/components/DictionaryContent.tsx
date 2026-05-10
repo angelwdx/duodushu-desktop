@@ -7,6 +7,7 @@ const LongmanDictionary = lazy(() => import('./dictionary/LongmanDictionary'));
 const OxfordDictionary = lazy(() => import('./dictionary/OxfordDictionary'));
 const WebsterDictionary = lazy(() => import('./dictionary/WebsterDictionary'));
 const ECDICTDictionary = lazy(() => import('./dictionary/ECDICTDictionary'));
+const JMDICTDictionary = lazy(() => import('./dictionary/JMDICTDictionary'));
 
 interface DictionaryContentProps {
   word: string;
@@ -28,12 +29,17 @@ function DictionaryContent({
     if (s.includes('牛津') || s.includes('oxford') || s.includes('oald')) return OxfordDictionary;
     if (s.includes('韦氏') || s.includes('webster') || s.includes('m-w')) return WebsterDictionary;
     if (s === 'ecdict') return ECDICTDictionary;
+    if (s === 'jmdict') return JMDICTDictionary;
     return null;
   };
 
   let Component = getDictionaryComponent(source);
   if (!Component) {
-    Component = source === 'ECDICT' ? ECDICTDictionary : LongmanDictionary;
+    Component = source === 'ECDICT'
+      ? ECDICTDictionary
+      : source === 'JMdict'
+        ? JMDICTDictionary
+        : LongmanDictionary;
   }
   const DictionaryComponent = Component as any;
 

@@ -21,6 +21,7 @@ interface ContextAwareLayoutProps {
   currentPage?: number;
   pageContent?: string;
   bookTitle?: string;
+  bookLanguage?: string | null;
   rightSidebarMode?: 'dictionary' | 'ai' | 'notes';
   onSidebarModeChange?: (mode: 'dictionary' | 'ai' | 'notes') => void;
   savedWords?: any[];
@@ -54,6 +55,7 @@ export default function ContextAwareLayout({
   currentPage = 1,
   pageContent = "",
   bookTitle = "",
+  bookLanguage,
   rightSidebarMode = 'dictionary',
   onSidebarModeChange,
   savedWords = [],
@@ -292,6 +294,7 @@ export default function ContextAwareLayout({
                   onDeleteWord={onDeleteWord}
                   bookId={bookId}
                   currentPage={currentPage}
+                  bookLanguage={bookLanguage}
                   onRefresh={onRefresh}
                   className="h-full"
                 />

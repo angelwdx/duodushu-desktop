@@ -192,6 +192,13 @@ export function DictManager() {
                     <div className="mt-3 space-y-1 text-sm text-gray-600">
                       <div>单词数：{dict.word_count.toLocaleString()}</div>
                       <div>大小：{formatSize(dict.size)}</div>
+                      {dict.name === 'JMdict' && (
+                        <div className="text-xs text-gray-500 pt-1">
+                          数据来源 <a href="https://www.edrdg.org/wiki/index.php/JMdict-EDICT_Dictionary_Project" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">JMdict / EDRDG</a> ·
+                          {" "}
+                          <a href="https://www.edrdg.org/edrdg/licence.html" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">CC BY-SA 4.0</a>
+                        </div>
+                      )}
                     </div>
                   </div>
 

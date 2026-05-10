@@ -75,3 +75,19 @@ class TestOPEN_DICT_DB_PATH:
     def test_open_dict_db_path_absolute(self):
         """测试 OPEN_DICT_DB_PATH 是绝对路径"""
         assert config.OPEN_DICT_DB_PATH.is_absolute()
+
+
+class TestJMDICT_DB_PATH:
+    """测试 JMDICT_DB_PATH 配置"""
+
+    def test_jmdict_db_path_configured(self):
+        """测试 JMDICT_DB_PATH 正确配置"""
+        assert isinstance(config.JMDICT_DB_PATH, Path)
+
+    def test_jmdict_db_path_filename(self):
+        """测试 JMDICT_DB_PATH 文件名正确"""
+        assert config.JMDICT_DB_PATH.name == "jmdict.db"
+
+    def test_jmdict_db_path_absolute(self):
+        """测试 JMDICT_DB_PATH 是绝对路径"""
+        assert config.JMDICT_DB_PATH.is_absolute()

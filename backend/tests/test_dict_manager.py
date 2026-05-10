@@ -39,14 +39,19 @@ def test_get_dicts_empty(dict_manager: DictManager):
     dicts = dict_manager.get_dicts()
 
     assert isinstance(dicts, list)
-    # 至少应该有 ECDICT
-    assert len(dicts) >= 1
+    # 至少应该有 ECDICT 和 JMdict
+    assert len(dicts) >= 2
 
     # ECDICT 应该是内置词典
     ecdict = next((d for d in dicts if d["name"] == "ECDICT"), None)
     assert ecdict is not None
     assert ecdict["type"] == "builtin"
     assert ecdict["is_builtin"] is True
+
+    jmdict = next((d for d in dicts if d["name"] == "JMdict"), None)
+    assert jmdict is not None
+    assert jmdict["type"] == "builtin"
+    assert jmdict["is_builtin"] is True
 
 
 def test_create_index_db(dict_manager: DictManager):

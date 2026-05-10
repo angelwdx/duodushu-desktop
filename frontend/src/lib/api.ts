@@ -403,9 +403,17 @@ export type FuriganaSegment =
   | { type: "text"; text: string }
   | { type: "ruby"; base: string; reading: string };
 
+export interface JapaneseLookupSegment {
+  text: string;
+  lookup_text: string;
+  start: number;
+  end: number;
+}
+
 export interface FuriganaAnnotation {
   text: string;
   segments: FuriganaSegment[];
+  lookup_segments: JapaneseLookupSegment[];
   has_furigana: boolean;
 }
 

@@ -5,6 +5,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services import dict_service
+from app.services import jmdict_service
 
 
 @pytest.fixture(autouse=True)
@@ -223,3 +224,24 @@ def test_lookup_word_prefers_lemma_before_original(monkeypatch):
     assert result["word"] == "spot"
     assert result["lookup_term"] == "spotted"
     assert result["lemma_from"] == "spot"
+
+
+def test_jmdict_service_returns_known_japanese_entry():
+    result = jmdict_service.get_word_details("一軒家")
+
+    assert result is not None
+    assert result["word"] == "一軒家"
+    assert result["source"] == "JMdict"
+    assert result["is_jmdict"] is True
+    assert result["phonetic"] == "いっけんや"
+    assert result["meanings"]
+
+
+def test_lookup_word_uses_japanese_lemma_for_jmdict():
+    result = dict_service.lookup_word(db=None, word="行った", source="JMdict")
+
+    assert result is not None
+    assert result["word"] == "行く"
+    assert result["lookup_term"] == "行った"
+    assert result["lemma_from"] == "行く"
+    assert result["source"] == "JMdict"
