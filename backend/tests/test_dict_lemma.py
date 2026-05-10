@@ -135,6 +135,7 @@ def test_lookup_word_all_sources_tries_lemma_per_dictionary(monkeypatch):
     assert result["word"] == "fleck"
     assert result["lookup_term"] == "flecks"
     assert result["multiple_sources"] is True
+    assert result["preferred_source"] == "LemmaDict"
     assert len(result["results"]) == 2
     lemma_result = next(item for item in result["results"] if item["source"] == "LemmaDict")
     assert lemma_result["word"] == "fleck"

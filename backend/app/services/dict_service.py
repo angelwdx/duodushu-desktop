@@ -812,6 +812,7 @@ Return ONLY the JSON, no other text."""
             "lookup_term": original_word,
             "lemma_from": preferred_result.get("lemma_from") if preferred_result else None,
             "multiple_sources": True,
+            "preferred_source": preferred_result.get("source_label") if preferred_result else None,
             "results": results,
             "phonetic": phonetic,
             "chinese_translation": chinese_translation,

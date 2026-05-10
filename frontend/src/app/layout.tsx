@@ -5,6 +5,8 @@ import "../styles/dictionary/variables.css";
 import "../styles/dictionary/longman.css";
 import "../styles/dictionary/oxford.css";
 import "../styles/dictionary/webster.css";
+import "../styles/dictionary/djs.css";
+import "../styles/dictionary/rhsjcd.css";
 import GlobalMenuHandler from "../components/GlobalMenuHandler";
 import UpdateNotifier from "../components/UpdateNotifier";
 import GlobalFileDropHandler from "../components/GlobalFileDropHandler";

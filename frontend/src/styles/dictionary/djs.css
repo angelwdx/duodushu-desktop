@@ -1,0 +1,293 @@
+.dictionary-scope-djs {
+  font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic",
+    "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.85;
+  color: #1f2937;
+  background: #ffffff;
+  word-break: break-word;
+  overflow-x: hidden;
+  padding-bottom: 40px;
+}
+
+.dictionary-scope-djs *,
+.dictionary-scope-djs *::before,
+.dictionary-scope-djs *::after {
+  box-sizing: border-box;
+}
+
+.dictionary-scope-djs header,
+.dictionary-scope-djs headertitle,
+.dictionary-scope-djs contents,
+.dictionary-scope-djs entry-index,
+.dictionary-scope-djs mg,
+.dictionary-scope-djs meaning,
+.dictionary-scope-djs exg,
+.dictionary-scope-djs subitem,
+.dictionary-scope-djs subitemh,
+.dictionary-scope-djs subitemc,
+.dictionary-scope-djs .見出G,
+.dictionary-scope-djs .解説G,
+.dictionary-scope-djs .djs-appendix-block {
+  display: block;
+}
+
+.dictionary-scope-djs header {
+  margin-bottom: 12px;
+}
+
+.dictionary-scope-djs headertitle {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.dictionary-scope-djs header.DJSP headertitle {
+  background: #f5f3ff;
+  color: #7c3aed;
+}
+
+.dictionary-scope-djs entry-index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.dictionary-scope-djs entry-index a {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #334155;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.dictionary-scope-djs .見出G {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+}
+
+.dictionary-scope-djs headword.見出 {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: #111827;
+}
+
+.dictionary-scope-djs .表記,
+.dictionary-scope-djs .原綴 {
+  color: #64748b;
+}
+
+.dictionary-scope-djs .原綴 {
+  font-style: italic;
+}
+
+.dictionary-scope-djs hinshi {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #ecfeff;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dictionary-scope-djs mg {
+  margin: 12px 0;
+}
+
+.dictionary-scope-djs rect[class*="L"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  vertical-align: text-top;
+}
+
+.dictionary-scope-djs meaning {
+  color: #1f2937;
+}
+
+.dictionary-scope-djs meaning.C {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 13px;
+}
+
+.dictionary-scope-djs exg {
+  margin-top: 8px;
+  margin-left: 18px;
+  padding: 8px 12px;
+  border-left: 3px solid #93c5fd;
+  border-radius: 0 12px 12px 0;
+  background: #eff6ff;
+  color: #374151;
+}
+
+.dictionary-scope-djs exg::before {
+  content: "例";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dictionary-scope-djs subitem {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.dictionary-scope-djs subitemh {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.dictionary-scope-djs subitemh headword.見出 {
+  font-size: 20px;
+}
+
+.dictionary-scope-djs maccentaudiog {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.dictionary-scope-djs maccentm {
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.dictionary-scope-djs maccentslash {
+  color: #94a3b8;
+}
+
+.dictionary-scope-djs .補足ロゴG {
+  display: inline-flex;
+  align-items: center;
+}
+
+.dictionary-scope-djs .補足ロゴ {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #0369a1;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dictionary-scope-djs a[href^="entry://"],
+.dictionary-scope-djs a.blue {
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.dictionary-scope-djs a[href^="entry://"]:hover,
+.dictionary-scope-djs a.blue:hover,
+.dictionary-scope-djs entry-index a:hover {
+  text-decoration: underline;
+}
+
+.dictionary-scope-djs a[href^="sound://"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  margin-left: 4px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
+  cursor: pointer;
+  text-decoration: none;
+  vertical-align: middle;
+  transition: all 0.2s ease;
+}
+
+.dictionary-scope-djs a[href^="sound://"]::before {
+  content: "🔊";
+  font-size: 13px;
+  line-height: 1;
+}
+
+.dictionary-scope-djs a[href^="sound://"]:hover {
+  transform: translateY(-1px);
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.dictionary-scope-djs img.audio,
+.dictionary-scope-djs .djs-broken-image {
+  display: none !important;
+}
+
+.dictionary-scope-djs wari {
+  color: #64748b;
+  font-size: 0.9em;
+}
+
+.dictionary-scope-djs hhyphen {
+  color: #94a3b8;
+}
+
+.dictionary-scope-djs .常外M {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.dictionary-scope-djs .djs-appendix-title {
+  margin: 16px 0 8px;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.4;
+  color: #111827;
+}
+
+.dictionary-scope-djs .djs-appendix-example {
+  margin-top: 10px;
+}

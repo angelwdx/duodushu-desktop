@@ -78,7 +78,7 @@ function DictionarySidebar({
   const inputRef = useRef<HTMLInputElement>(null);
   const translateAbortControllerRef = useRef<AbortController | null>(null);
   const translateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const queryWord = wordData?.word || wordData?.lookup_term || "";
+  const queryWord = wordData?.lookup_term || wordData?.word || "";
   const clickedWord =
     wordData?.lookup_term && wordData.lookup_term !== wordData.word
       ? wordData.lookup_term
@@ -369,6 +369,7 @@ function DictionarySidebar({
   const [sources, setSources] = useState<{ id: string; label: string }[]>([]);
 
   const [activeTab, setActiveTab] = useState<string>("");
+  const lastLookupKeyRef = useRef<string>("");
 
   // 加载词典列表
   useEffect(() => {
@@ -406,14 +407,47 @@ function DictionarySidebar({
     return () => clearInterval(interval);
   }, [activeTab]);
 
+  const currentLookupKey = `${wordData?.lookup_term || wordData?.word || ""}::${
+    (wordData as any)?.multiple_sources ? "multi" : "single"
+  }`;
+  const multiSourceResultIds = useMemo(
+    () =>
+      (((wordData as any)?.results || []) as any[])
+        .map((result) => result?.source_label || result?.source)
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0),
+    [wordData],
+  );
+
   // 同步 activeTab
   useEffect(() => {
+    const isNewLookup = currentLookupKey !== lastLookupKeyRef.current;
+    if (currentLookupKey) {
+      lastLookupKeyRef.current = currentLookupKey;
+    }
+
+    if ((wordData as any)?.multiple_sources) {
+      if (multiSourceResultIds.length === 0) {
+        return;
+      }
+
+      const preferredSource = (wordData as any)?.preferred_source;
+      const nextTab =
+        (preferredSource && multiSourceResultIds.includes(preferredSource) && preferredSource) ||
+        multiSourceResultIds[0];
+
+      if (isNewLookup || !multiSourceResultIds.includes(activeTab)) {
+        setActiveTab(nextTab);
+      }
+      return;
+    }
+
     // 单词典结果时,同步到对应的词典标签
     if (wordData?.source && sources.some((s) => s.id === wordData.source)) {
-      setActiveTab(wordData.source);
+      if (isNewLookup || activeTab !== wordData.source) {
+        setActiveTab(wordData.source);
+      }
     }
-    // 注意:不再在 multiple_sources 时清空 activeTab,保持用户选择
-  }, [wordData?.source, sources]);
+  }, [activeTab, currentLookupKey, multiSourceResultIds, sources, wordData]);
 
   // 同步 Search Term
   useEffect(() => {
@@ -425,7 +459,7 @@ function DictionarySidebar({
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchTerm.trim()) {
-      onSearch(searchTerm.trim(), activeTab);
+      onSearch(searchTerm.trim());
     }
   };
 
@@ -741,7 +775,7 @@ function DictionarySidebar({
                     onClick={() => {
                       if (activeTab === source.id) return;
                       setActiveTab(source.id);
-                      if (queryWord) {
+                      if (queryWord && !(wordData as any)?.multiple_sources) {
                         onSearch(queryWord, source.id);
                       }
                     }}
@@ -835,7 +869,7 @@ function DictionarySidebar({
                   if (!selectedResult) {
                     return (
                       <div className="text-center text-gray-400 py-8">
-                        <p>请选择词典标签查看释义</p>
+                        <p>该词典暂无此词条</p>
                       </div>
                     );
                   }

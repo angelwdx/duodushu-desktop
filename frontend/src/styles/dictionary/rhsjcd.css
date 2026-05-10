@@ -1,0 +1,135 @@
+.dictionary-scope-rhsjcd {
+  font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic",
+    "Noto Sans JP", "Microsoft YaHei", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.85;
+  color: #1f2937;
+  background: #ffffff;
+}
+
+.dictionary-scope-rhsjcd .rhsjcd-entry {
+  padding: 14px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.dictionary-scope-rhsjcd .rhsjcd-entry + .rhsjcd-entry {
+  margin-top: 16px;
+}
+
+.dictionary-scope-rhsjcd p {
+  margin: 0;
+}
+
+.dictionary-scope-rhsjcd .head {
+  margin-bottom: 8px;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #111827;
+}
+
+.dictionary-scope-rhsjcd .tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.dictionary-scope-rhsjcd type,
+.dictionary-scope-rhsjcd kan,
+.dictionary-scope-rhsjcd label {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dictionary-scope-rhsjcd type {
+  background: #ecfeff;
+  color: #0f766e;
+}
+
+.dictionary-scope-rhsjcd kan {
+  background: #f3e8ff;
+  color: #7c3aed;
+}
+
+.dictionary-scope-rhsjcd label {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.dictionary-scope-rhsjcd .def2,
+.dictionary-scope-rhsjcd .defn {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.dictionary-scope-rhsjcd .exam {
+  margin-top: 8px;
+  margin-left: 12px;
+  padding: 8px 12px;
+  border-left: 3px solid #93c5fd;
+  border-radius: 0 12px 12px 0;
+  background: #eff6ff;
+}
+
+.dictionary-scope-rhsjcd .note,
+.dictionary-scope-rhsjcd .syns,
+.dictionary-scope-rhsjcd .anti {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fefce8;
+  color: #713f12;
+}
+
+.dictionary-scope-rhsjcd num {
+  display: inline-block;
+  margin-right: 6px;
+  font-weight: 700;
+  color: #2563eb;
+}
+
+.dictionary-scope-rhsjcd tri {
+  display: inline-block;
+  margin-right: 6px;
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.dictionary-scope-rhsjcd dfjp,
+.dictionary-scope-rhsjcd exjp {
+  color: #111827;
+}
+
+.dictionary-scope-rhsjcd dfzh,
+.dictionary-scope-rhsjcd exzh,
+.dictionary-scope-rhsjcd x {
+  color: #475569;
+}
+
+.dictionary-scope-rhsjcd sep {
+  display: inline-block;
+  margin: 0 8px;
+  color: #94a3b8;
+}
+
+.dictionary-scope-rhsjcd a {
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.dictionary-scope-rhsjcd a:hover {
+  text-decoration: underline;
+}
