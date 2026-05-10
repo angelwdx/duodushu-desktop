@@ -2,8 +2,12 @@
 
 import { useMemo, useEffect, useState, useRef, useCallback } from "react";
 import type { FuriganaAnnotation } from "../lib/api";
-import { generateJapaneseFurigana } from "../lib/api";
-import { isJapaneseBookLanguage, containsJapaneseText } from "../lib/japaneseText";
+import { isJapaneseBookLanguage } from "../lib/japaneseText";
+import {
+  createPlainFuriganaAnnotation,
+  ensureFuriganaAnnotations,
+  getCachedFuriganaAnnotation,
+} from "../lib/japaneseFurigana";
 import { useFullTextTTS } from "../hooks/useFullTextTTS";
 import TTSLoadingDots from "./TTSLoadingDots";
 import FuriganaText from "./FuriganaText";
@@ -22,14 +26,6 @@ interface TXTReaderProps {
 }
 
 const FURIGANA_PREFERENCE_KEY = "reader_japanese_furigana_enabled";
-
-function createPlainAnnotation(text: string): FuriganaAnnotation {
-  return {
-    text,
-    segments: [{ type: "text", text }],
-    has_furigana: false,
-  };
-}
 
 export default function TXTReader({
   textContent,
@@ -111,48 +107,23 @@ export default function TXTReader({
       }
 
       if (!isJapaneseBook || !showFurigana) {
-        setFuriganaLines(rawLines.map((line) => createPlainAnnotation(line)));
+        setFuriganaLines(rawLines.map((line) => createPlainFuriganaAnnotation(line)));
         return;
       }
 
-      const uniqueTexts = Array.from(
-        new Set(rawLines.filter((line) => line.trim() && containsJapaneseText(line))),
-      ).filter((line) => !furiganaCacheRef.current.has(line));
-
-      if (uniqueTexts.length > 0) {
-        let index = 0;
-        while (index < uniqueTexts.length) {
-          const batch: string[] = [];
-          let charCount = 0;
-
-          while (
-            index < uniqueTexts.length &&
-            batch.length < 120 &&
-            charCount + uniqueTexts[index].length <= 24000
-          ) {
-            batch.push(uniqueTexts[index]);
-            charCount += uniqueTexts[index].length;
-            index += 1;
-          }
-
-          const items = await generateJapaneseFurigana(batch);
-          items.forEach((item) => {
-            furiganaCacheRef.current.set(item.text, item);
-          });
-        }
-      }
+      await ensureFuriganaAnnotations(rawLines, furiganaCacheRef.current);
 
       if (cancelled) return;
 
       setFuriganaLines(
-        rawLines.map((line) => furiganaCacheRef.current.get(line) ?? createPlainAnnotation(line)),
+        rawLines.map((line) => getCachedFuriganaAnnotation(line, furiganaCacheRef.current)),
       );
     };
 
     loadFurigana().catch((error) => {
       log.warn("加载假名失败，回退到原文显示", error);
       if (!cancelled) {
-        setFuriganaLines(rawLines.map((line) => createPlainAnnotation(line)));
+        setFuriganaLines(rawLines.map((line) => createPlainFuriganaAnnotation(line)));
       }
     });
 
@@ -367,7 +338,8 @@ export default function TXTReader({
                   ? rawLines.map((lineText, lineIndex) => {
                       const lineStart = lineOffsets[lineIndex] ?? 0;
                       const annotation =
-                        furiganaLines[lineIndex] ?? createPlainAnnotation(rawLines[lineIndex] ?? "");
+                        furiganaLines[lineIndex] ??
+                        createPlainFuriganaAnnotation(rawLines[lineIndex] ?? "");
 
                       return (
                         <p key={lineIndex} className={lineText.trim() ? "mb-6 indent-8 break-words" : "mb-6 h-6"}>

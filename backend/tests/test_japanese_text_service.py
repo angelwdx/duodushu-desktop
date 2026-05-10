@@ -1,10 +1,35 @@
 from pathlib import Path
 import sys
 
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.models.database import Base
+from app.models.models import CacheFurigana
 from app.services.book_language_service import detect_book_language, normalize_book_language
-from app.services.japanese_text_service import annotate_japanese_text, normalize_japanese_text_for_tts
+from app.services import japanese_text_service
+from app.services.japanese_text_service import (
+    annotate_japanese_text,
+    annotate_japanese_texts,
+    normalize_japanese_text_for_tts,
+)
+
+
+@pytest.fixture
+def db_session():
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine, tables=[CacheFurigana.__table__])
+    session = SessionLocal()
+
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
 
 
 def test_normalize_book_language_handles_common_values():
@@ -90,6 +115,15 @@ def test_annotate_japanese_text_handles_contextual_compound_nouns():
     ]
 
 
+def test_annotate_japanese_text_handles_counter_compound_home_words():
+    result = annotate_japanese_text("一軒家")
+
+    assert result["has_furigana"] is True
+    assert result["segments"] == [
+        {"type": "ruby", "base": "一軒家", "reading": "いっけんや"},
+    ]
+
+
 def test_annotate_japanese_text_merges_kanji_suffix_compounds():
     result = annotate_japanese_text("住宅街は街灯もまばらで")
 
@@ -116,6 +150,7 @@ def test_normalize_japanese_text_for_tts_reuses_furigana_readings():
 def test_normalize_japanese_text_for_tts_handles_spacing_and_contextual_readings():
     assert normalize_japanese_text_for_tts("女 の 夜 市") == "女のよるいち"
     assert normalize_japanese_text_for_tts("石田村百姓") == "いしだむらびゃくしょう"
+    assert normalize_japanese_text_for_tts("一軒家に帰る") == "いっけんやに帰る"
     assert normalize_japanese_text_for_tts("勇は 上 石 原") == "いさみはかみいしはら"
     assert normalize_japanese_text_for_tts("環 状 八 号 線") == "環状八号線"
     assert normalize_japanese_text_for_tts("二十分ほどしか離れていない") == "二十分ほどしか離れていない"
@@ -135,3 +170,22 @@ def test_normalize_japanese_text_for_tts_keeps_valid_tsu_verbs():
 def test_normalize_japanese_text_for_tts_normalizes_particles_and_punctuation():
     assert normalize_japanese_text_for_tts("彼は、海へ本を持っていく...") == "彼は、海へ本を持っていく。"
     assert normalize_japanese_text_for_tts("山/川(谷)") == "山、川、谷"
+
+
+def test_annotate_japanese_texts_reuses_cached_duplicates_in_one_batch(db_session, monkeypatch):
+    call_count = 0
+    original_annotate = japanese_text_service.annotate_japanese_text
+
+    def counting_annotate(text: str):
+        nonlocal call_count
+        call_count += 1
+        return original_annotate(text)
+
+    monkeypatch.setattr(japanese_text_service, "annotate_japanese_text", counting_annotate)
+
+    results = annotate_japanese_texts(["一軒家", "一軒家"], db_session)
+
+    assert [item["text"] for item in results] == ["一軒家", "一軒家"]
+    assert results[0]["segments"] == results[1]["segments"]
+    assert call_count == 1
+    assert db_session.query(CacheFurigana).count() == 1

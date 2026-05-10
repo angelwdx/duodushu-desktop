@@ -6,8 +6,9 @@ import { useFullTextTTS } from '../hooks/useFullTextTTS';
 import TTSLoadingDots from './TTSLoadingDots';
 import { saveEpubState, getEpubState } from '../lib/epubCache';
 import { createLogger } from '../lib/logger';
-import { generateJapaneseFurigana, getApiUrl, type FuriganaAnnotation } from '../lib/api';
+import { getApiUrl, type FuriganaAnnotation } from '../lib/api';
 import { containsJapaneseText, isJapaneseBookLanguage } from '../lib/japaneseText';
+import { ensureFuriganaAnnotations } from '../lib/japaneseFurigana';
 import { preprocessTTSPlainText } from '../lib/ttsText';
 
 const log = createLogger('EPUBReader');
@@ -393,34 +394,10 @@ export default function EPUBReader({
 
     if (candidates.length === 0) return;
 
-    const missingTexts = Array.from(
-      new Set(
-        candidates
-          .map((node) => node.nodeValue ?? '')
-          .filter((text) => text.trim() && !furiganaCacheRef.current.has(text)),
-      ),
+    await ensureFuriganaAnnotations(
+      candidates.map((node) => node.nodeValue ?? ''),
+      furiganaCacheRef.current,
     );
-
-    let index = 0;
-    while (index < missingTexts.length) {
-      const batch: string[] = [];
-      let charCount = 0;
-
-      while (
-        index < missingTexts.length &&
-        batch.length < 120 &&
-        charCount + missingTexts[index].length <= 24000
-      ) {
-        batch.push(missingTexts[index]);
-        charCount += missingTexts[index].length;
-        index += 1;
-      }
-
-      const items = await generateJapaneseFurigana(batch);
-      items.forEach((item) => {
-        furiganaCacheRef.current.set(item.text, item);
-      });
-    }
 
     candidates.forEach((node) => {
       const originalText = node.nodeValue ?? '';

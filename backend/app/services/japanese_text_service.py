@@ -10,7 +10,7 @@ from app.services.book_language_service import contains_japanese_text
 
 KANJI_CHARACTERS = set("々〆ヵヶ")
 INLINE_JAPANESE_SPACING_RE = re.compile(r"[ \t\u3000]+")
-JAPANESE_READING_VERSION = "fugashi-unidic-lite-v8"
+JAPANESE_READING_VERSION = "fugashi-unidic-lite-v9"
 JAPANESE_PAUSE_RE = re.compile(r"[、]{2,}")
 JAPANESE_ELLIPSIS_RE = re.compile(r"(?:\.{3,}|…{2,}|‥{2,})")
 JAPANESE_BRACKETS_RE = re.compile(r"[()\[\]{}（）［］｛｝【】〈〉《》]")
@@ -19,6 +19,8 @@ READING_OVERRIDES: tuple[tuple[str, str], ...] = (
     ("土方歳三", "ひじかたとしぞう"),
     ("近藤勇", "こんどういさみ"),
     ("石田村百姓", "いしだむらびゃくしょう"),
+    ("一軒家", "いっけんや"),
+    ("一軒", "いっけん"),
     ("勇", "いさみ"),
     ("新選組", "しんせんぐみ"),
     ("上石原", "かみいしはら"),
@@ -717,13 +719,22 @@ def normalize_japanese_text_for_tts(text: str) -> str:
 def annotate_japanese_texts(texts: list[str], db: Session) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     pending_cache_rows: list[CacheFurigana] = []
+    computed_annotations: dict[str, dict[str, Any]] = {}
+    normalized_items = [(text or "", build_japanese_reading_cache_key(text or "")) for text in texts]
+    unique_hashes = list(dict.fromkeys(text_hash for _, text_hash in normalized_items))
+    cached_rows = (
+        db.query(CacheFurigana).filter(CacheFurigana.text_hash.in_(unique_hashes)).all()
+        if unique_hashes
+        else []
+    )
+    cached_map = {
+        row.text_hash: row
+        for row in cached_rows
+    }
 
-    for text in texts:
-        normalized_text = text or ""
-        text_hash = build_japanese_reading_cache_key(normalized_text)
-        cached = db.query(CacheFurigana).filter(CacheFurigana.text_hash == text_hash).first()
-
-        if cached and cached.text == normalized_text:
+    for normalized_text, text_hash in normalized_items:
+        cached = cached_map.get(text_hash)
+        if cached is not None and cached.text == normalized_text:
             results.append(
                 {
                     "text": normalized_text,
@@ -733,16 +744,22 @@ def annotate_japanese_texts(texts: list[str], db: Session) -> list[dict[str, Any
             )
             continue
 
-        annotated = annotate_japanese_text(normalized_text)
+        annotated = computed_annotations.get(normalized_text)
+        if annotated is None:
+            annotated = annotate_japanese_text(normalized_text)
+            computed_annotations[normalized_text] = annotated
+
         results.append(annotated)
-        pending_cache_rows.append(
-            CacheFurigana(
-                text_hash=text_hash,
-                text=normalized_text,
-                segments=annotated["segments"],
-                has_furigana=1 if annotated["has_furigana"] else 0,
+        if text_hash not in cached_map:
+            pending_cache_rows.append(
+                CacheFurigana(
+                    text_hash=text_hash,
+                    text=normalized_text,
+                    segments=annotated["segments"],
+                    has_furigana=1 if annotated["has_furigana"] else 0,
+                )
             )
-        )
+            cached_map[text_hash] = pending_cache_rows[-1]
 
     if pending_cache_rows:
         for row in pending_cache_rows:
