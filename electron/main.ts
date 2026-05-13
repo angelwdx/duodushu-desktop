@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, protocol, net, Tray, Menu, nativeImage, globalShortcut } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, protocol, net, Tray, Menu, nativeImage, globalShortcut, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
@@ -55,12 +55,33 @@ let pythonProcess: ChildProcess | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let appProtocolRegistered = false;
+let mainWindowStateSaveTimer: NodeJS.Timeout | null = null;
 
 // 定义常量
 // 使用 app.isPackaged 判定是否为生产环境（更可靠）
 const IS_DEV = !app.isPackaged;
 const PY_DIST_FOLDER = 'backend'; // 打包后 Python 可执行文件所在目录名称
 const STARTUP_TIMEOUT_SECONDS = 60;
+const DEFAULT_MAIN_WINDOW_BOUNDS = {
+  width: 1280,
+  height: 800,
+};
+const MAIN_WINDOW_STATE_FILE = path.join(app.getPath('userData'), 'main-window-state.json');
+
+type WindowBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type MainWindowState = {
+  width: number;
+  height: number;
+  x?: number;
+  y?: number;
+  isMaximized?: boolean;
+};
 
 logToFile(`IS_DEV: ${IS_DEV} (app.isPackaged: ${app.isPackaged})`);
 
@@ -277,6 +298,170 @@ function resolveTrayIconPath() {
   return candidates.find((candidate) => fs.existsSync(candidate)) || '';
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isPositiveNumber(value: unknown): value is number {
+  return isFiniteNumber(value) && value > 0;
+}
+
+function normalizeMainWindowState(value: unknown): MainWindowState | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  if (!isPositiveNumber(candidate.width) || !isPositiveNumber(candidate.height)) {
+    return null;
+  }
+
+  const state: MainWindowState = {
+    width: Math.round(candidate.width),
+    height: Math.round(candidate.height),
+  };
+
+  if (isFiniteNumber(candidate.x) && isFiniteNumber(candidate.y)) {
+    state.x = Math.round(candidate.x);
+    state.y = Math.round(candidate.y);
+  }
+
+  if (typeof candidate.isMaximized === 'boolean') {
+    state.isMaximized = candidate.isMaximized;
+  }
+
+  return state;
+}
+
+function loadMainWindowState(): MainWindowState | null {
+  if (!fs.existsSync(MAIN_WINDOW_STATE_FILE)) {
+    return null;
+  }
+
+  try {
+    const fileContent = fs.readFileSync(MAIN_WINDOW_STATE_FILE, 'utf-8');
+    const parsed = JSON.parse(fileContent) as unknown;
+    const state = normalizeMainWindowState(parsed);
+
+    if (!state) {
+      logErrorToFile(`Main window state is invalid: ${fileContent}`);
+      return null;
+    }
+
+    return state;
+  } catch (error) {
+    logErrorToFile('Failed to read main window state', error);
+    return null;
+  }
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function rectsOverlap(a: WindowBounds, b: WindowBounds) {
+  return (
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
+}
+
+function getFittedWindowBounds(state: MainWindowState): MainWindowState {
+  const displays = screen.getAllDisplays();
+  const primaryWorkArea = screen.getPrimaryDisplay().workArea;
+  const hasStoredPosition = state.x !== undefined && state.y !== undefined;
+
+  const baseWorkArea = hasStoredPosition
+    ? displays.find((display) => rectsOverlap({
+      x: state.x!,
+      y: state.y!,
+      width: state.width,
+      height: state.height,
+    }, display.workArea))?.workArea ?? primaryWorkArea
+    : primaryWorkArea;
+
+  const width = Math.min(state.width, baseWorkArea.width);
+  const height = Math.min(state.height, baseWorkArea.height);
+  const fittedState: MainWindowState = {
+    width,
+    height,
+    isMaximized: state.isMaximized,
+  };
+
+  if (!hasStoredPosition) {
+    return fittedState;
+  }
+
+  const visibleOnSomeDisplay = displays.some((display) => rectsOverlap({
+    x: state.x!,
+    y: state.y!,
+    width,
+    height,
+  }, display.workArea));
+
+  if (!visibleOnSomeDisplay) {
+    fittedState.x = baseWorkArea.x + Math.round((baseWorkArea.width - width) / 2);
+    fittedState.y = baseWorkArea.y + Math.round((baseWorkArea.height - height) / 2);
+    return fittedState;
+  }
+
+  fittedState.x = clamp(state.x!, baseWorkArea.x, baseWorkArea.x + baseWorkArea.width - width);
+  fittedState.y = clamp(state.y!, baseWorkArea.y, baseWorkArea.y + baseWorkArea.height - height);
+  return fittedState;
+}
+
+function getInitialMainWindowState(): MainWindowState {
+  const savedState = loadMainWindowState();
+  if (!savedState) {
+    return { ...DEFAULT_MAIN_WINDOW_BOUNDS };
+  }
+
+  return getFittedWindowBounds(savedState);
+}
+
+function writeMainWindowState(window: BrowserWindow) {
+  if (window.isDestroyed()) {
+    return;
+  }
+
+  const bounds = window.isMaximized() ? window.getNormalBounds() : window.getBounds();
+  const state: MainWindowState = {
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    isMaximized: window.isMaximized(),
+  };
+
+  try {
+    fs.writeFileSync(MAIN_WINDOW_STATE_FILE, JSON.stringify(state, null, 2));
+  } catch (error) {
+    logErrorToFile('Failed to write main window state', error);
+  }
+}
+
+function scheduleMainWindowStateSave(window: BrowserWindow) {
+  if (mainWindowStateSaveTimer) {
+    clearTimeout(mainWindowStateSaveTimer);
+  }
+
+  mainWindowStateSaveTimer = setTimeout(() => {
+    mainWindowStateSaveTimer = null;
+    writeMainWindowState(window);
+  }, 200);
+}
+
+function flushMainWindowStateSave(window: BrowserWindow) {
+  if (mainWindowStateSaveTimer) {
+    clearTimeout(mainWindowStateSaveTimer);
+    mainWindowStateSaveTimer = null;
+  }
+
+  writeMainWindowState(window);
+}
+
 function buildStartupPageHtml(options: {
   title: string;
   message: string;
@@ -368,9 +553,12 @@ async function loadStartupPage(options: {
 
 async function createWindow() {
   logToFile('createWindow called');
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+  const initialWindowState = getInitialMainWindowState();
+  const window = new BrowserWindow({
+    width: initialWindowState.width,
+    height: initialWindowState.height,
+    x: initialWindowState.x,
+    y: initialWindowState.y,
     show: false,
     backgroundColor: '#ffffff',
     webPreferences: {
@@ -380,8 +568,13 @@ async function createWindow() {
       webSecurity: false,
     },
   });
+  mainWindow = window;
 
-  mainWindow.once('ready-to-show', () => {
+  if (initialWindowState.isMaximized) {
+    window.maximize();
+  }
+
+  window.once('ready-to-show', () => {
     if (!mainWindow) return;
     mainWindow.show();
     if (process.platform === 'darwin') {
@@ -390,10 +583,11 @@ async function createWindow() {
   });
 
   // 创建应用菜单
-  createApplicationMenu(mainWindow);
+  createApplicationMenu(window);
 
   // 拦截关闭事件，实现最小化到托盘
-  mainWindow.on('close', (event) => {
+  window.on('close', (event) => {
+    flushMainWindowStateSave(window);
     if (!isQuitting) {
       event.preventDefault();
       mainWindow?.hide();
@@ -403,6 +597,11 @@ async function createWindow() {
       logToFile('Window hidden to tray');
     }
   });
+
+  window.on('resize', () => scheduleMainWindowStateSave(window));
+  window.on('move', () => scheduleMainWindowStateSave(window));
+  window.on('maximize', () => scheduleMainWindowStateSave(window));
+  window.on('unmaximize', () => scheduleMainWindowStateSave(window));
 
   // 等待后端就绪的逻辑
   const checkBackendReady = async (retries = 20): Promise<boolean> => {
@@ -424,8 +623,8 @@ async function createWindow() {
 
   if (IS_DEV) {
     logToFile('Loading development URL: http://localhost:3000');
-    mainWindow.loadURL('http://localhost:3000');
-    mainWindow.webContents.openDevTools();
+    window.loadURL('http://localhost:3000');
+    window.webContents.openDevTools();
   } else {
     registerAppProtocol();
     await loadStartupPage({
@@ -438,7 +637,7 @@ async function createWindow() {
 
     if (isReady) {
       logToFile('Loading URL: app://./index.html');
-      await mainWindow.loadURL('app://./index.html');
+      await window.loadURL('app://./index.html');
     } else {
       logErrorToFile('Backend failed to start within timeout');
       await loadStartupPage({
