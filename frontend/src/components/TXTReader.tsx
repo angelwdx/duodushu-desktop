@@ -45,6 +45,7 @@ export default function TXTReader({
   ] as const;
   const isJapaneseBook = useMemo(() => isJapaneseBookLanguage(bookLanguage), [bookLanguage]);
   const [showFurigana, setShowFurigana] = useState(true);
+  const [furiganaPreferenceReady, setFuriganaPreferenceReady] = useState(!isJapaneseBook);
   const furiganaCacheRef = useRef<Map<string, FuriganaAnnotation>>(new Map());
 
   const rawLines = useMemo(() => textContent?.split("\n") ?? [], [textContent]);
@@ -83,17 +84,20 @@ export default function TXTReader({
   useEffect(() => {
     if (!isJapaneseBook) {
       setShowFurigana(false);
+      setFuriganaPreferenceReady(true);
       return;
     }
 
+    setFuriganaPreferenceReady(false);
     const saved = window.localStorage.getItem(FURIGANA_PREFERENCE_KEY);
     setShowFurigana(saved === null ? true : saved === "true");
+    setFuriganaPreferenceReady(true);
   }, [isJapaneseBook]);
 
   useEffect(() => {
-    if (!isJapaneseBook) return;
+    if (!isJapaneseBook || !furiganaPreferenceReady) return;
     window.localStorage.setItem(FURIGANA_PREFERENCE_KEY, String(showFurigana));
-  }, [isJapaneseBook, showFurigana]);
+  }, [furiganaPreferenceReady, isJapaneseBook, showFurigana]);
 
   const [furiganaLines, setFuriganaLines] = useState<FuriganaAnnotation[]>([]);
 

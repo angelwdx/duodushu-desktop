@@ -248,6 +248,11 @@ function getFrontendOutPath(...segments: string[]) {
   return path.join(__dirname, '../frontend/out', ...segments);
 }
 
+function isDocumentLikeAppRequest(pathName: string) {
+  const extension = path.extname(pathName);
+  return extension === '' || extension === '.html';
+}
+
 function registerAppProtocol() {
   if (IS_DEV || appProtocolRegistered) {
     return;
@@ -275,6 +280,16 @@ function registerAppProtocol() {
     }
 
     if (!filePath) {
+      if (!isDocumentLikeAppRequest(normalizedPath)) {
+        logErrorToFile(`Missing packaged asset for app:// request: ${reqUrl}`);
+        return new Response('Not Found', {
+          status: 404,
+          headers: {
+            'content-type': 'text/plain; charset=utf-8',
+          },
+        });
+      }
+
       const fallback404 = getFrontendOutPath('404.html');
       filePath = fs.existsSync(fallback404) ? fallback404 : getFrontendOutPath('index.html');
     }
@@ -669,9 +684,9 @@ async function createWindow() {
     return filePath;
   });
 
-  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-    logErrorToFile(`Page failed to load: ${errorCode} - ${errorDescription}`);
-    if (!IS_DEV) {
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    logErrorToFile(`Page failed to load: ${errorCode} - ${errorDescription} - ${validatedURL} (mainFrame=${isMainFrame})`);
+    if (!IS_DEV && isMainFrame && errorCode !== -3) {
       loadStartupPage({
         title: 'Duodushu Failed To Load The Desktop UI',
         message: 'The packaged frontend could not be opened. This usually means a static asset path is missing or the packaged files are incomplete.',

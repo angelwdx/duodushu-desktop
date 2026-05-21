@@ -13,7 +13,7 @@ const DB_NAME = "epub-cache";
 const DB_VERSION = 2; // Increment version to add new store
 const STORE_NAME = "epubFiles";
 const PROGRESS_STORE_NAME = "epubProgress";
-const EPUB_PROGRESS_LAYOUT_VERSION = 2;
+const EPUB_PROGRESS_LAYOUT_VERSION = 3;
 
 interface CacheEntry {
   url: string;
@@ -34,6 +34,8 @@ interface ProgressEntry {
   bookId: string;
   cfi?: string; // Optional now because we might save only settings
   percentage?: number;
+  sectionIndex?: number;
+  sectionPage?: number;
   settings?: EpubSettings;
   layoutVersion?: number;
   timestamp: number;
@@ -186,6 +188,8 @@ export async function saveEpubState(
   state: {
     cfi?: string;
     percentage?: number;
+    sectionIndex?: number;
+    sectionPage?: number;
     settings?: EpubSettings;
   }
 ): Promise<void> {

@@ -44,6 +44,7 @@ export default function UniversalReader(props: ReaderProps) {
           fileUrl={props.fileUrl}
           bookId={props.bookId}
           bookLanguage={props.bookLanguage}
+          initialChapter={props.pageNumber}
           onWordClick={props.onWordClick}
           onOutlineChange={props.onOutlineChange}
           onPageChange={props.onPageChange}
