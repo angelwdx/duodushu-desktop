@@ -305,7 +305,7 @@ export default function EPUBReader({
     return displayedPage;
   }, []);
 
-  const extractVisibleTextFromCurrentContents = useCallback(() => {
+  const extractVisibleTextFromCurrentContents = useCallback((pageOffset = 0) => {
     const contentsList = renditionRef.current?.getContents?.() ?? [];
     const segments: string[] = [];
 
@@ -313,6 +313,17 @@ export default function EPUBReader({
       const doc = contents?.document as Document | undefined;
       const win = contents?.window as Window | undefined;
       if (!doc?.body || !win) return;
+
+      const { isVertical, pageProgression } = contentLayoutRef.current;
+      const direction = pageProgression === 'rtl' ? -1 : 1;
+      const viewportWidth = win.innerWidth || 1;
+      const viewportHeight = win.innerHeight || 1;
+      const targetLeft = isVertical ? 0 : pageOffset * direction * viewportWidth;
+      const targetRight = isVertical ? viewportWidth : targetLeft + viewportWidth;
+      const targetTop = isVertical ? pageOffset * viewportHeight : 0;
+      const targetBottom = isVertical ? targetTop + viewportHeight : viewportHeight;
+      const minLeft = Math.min(targetLeft, targetRight);
+      const maxRight = Math.max(targetLeft, targetRight);
 
       const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
       let currentNode = walker.nextNode();
@@ -338,10 +349,10 @@ export default function EPUBReader({
               (rect) =>
                 rect.width > 0 &&
                 rect.height > 0 &&
-                rect.right > 0 &&
-                rect.left < win.innerWidth &&
-                rect.bottom > 0 &&
-                rect.top < win.innerHeight,
+                rect.right > minLeft &&
+                rect.left < maxRight &&
+                rect.bottom > targetTop &&
+                rect.top < targetBottom,
             );
 
             if (isVisible) {
@@ -3074,20 +3085,9 @@ export default function EPUBReader({
   }, [fontSize]);
 
   // ─── 全文朗读 ─────────────────────────────────────────────────────────────
-  // EPUB 按章节朗读。每次 onPageChange 调用 renditionRef.next() 跳到下一章。
-  // 当 rendition 无法再进行时（最后一章），getPageText 返回空字符串，朗读循环将自动结束。
+  // EPUB 按当前可见页朗读。读完后调用 rendition.next() 翻到下一屏，
+  // 等待 relocated 同步出新页面文本后继续朗读。
   const epubPageRef = useRef(1); // 用于模拟页码计数，触发 onPageChange
-
-  const getEpubPageText = useCallback((): string => {
-    try {
-      const contents = renditionRef.current?.getContents();
-      const body = contents?.[0]?.document?.body;
-      const rawText = extractPlainTextFromBody(body);
-      return preprocessTTSPlainText(rawText.trim(), bookLanguage);
-    } catch {
-      return '';
-    }
-  }, [bookLanguage, extractPlainTextFromBody]);
 
   const getCurrentEpubPageText = useCallback((): string => {
     try {
@@ -3136,21 +3136,56 @@ export default function EPUBReader({
     return preprocessTTSPlainText(visiblePageTextForTTS.trim(), bookLanguage);
   }, [bookLanguage, extractPlainTextFromBody, visiblePageTextForTTS]);
 
-  const handleEpubTTSPageChange = useCallback((page: number) => {
-    // 第 1 页是当前章节，不需要翻页；后续页都调用 next()
-    if (page > 1) {
-      void renditionRef.current?.next();
+  const getNextEpubPageText = useCallback((): string => {
+    try {
+      const nextText = extractVisibleTextFromCurrentContents(1);
+      if (nextText) {
+        return preprocessTTSPlainText(nextText, bookLanguage);
+      }
+    } catch (error) {
+      log.debug("Next EPUB page text extraction failed:", error);
+    }
+
+    return '';
+  }, [bookLanguage, extractVisibleTextFromCurrentContents]);
+
+  const handleEpubTTSPageChange = useCallback(async (page: number) => {
+    if (page <= 1 || !renditionRef.current) {
+      epubPageRef.current = page;
+      return true;
+    }
+
+    const beforeLocation = renditionRef.current.currentLocation?.();
+    const beforeCfi = beforeLocation?.start?.cfi;
+    hasUserProgressChangeRef.current = true;
+    await renditionRef.current.next();
+
+    let afterLocation = renditionRef.current.currentLocation?.();
+    for (let i = 0; i < 12 && afterLocation?.start?.cfi === beforeCfi; i += 1) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+      afterLocation = renditionRef.current.currentLocation?.();
+    }
+
+    const afterCfi = afterLocation?.start?.cfi;
+    if (afterCfi && afterCfi !== beforeCfi) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
     }
     epubPageRef.current = page;
+    return !!afterCfi && afterCfi !== beforeCfi;
   }, []);
 
   const tts = useFullTextTTS({
-    getPageText: getEpubPageText,
+    getPageText: getCurrentEpubPageText,
     getCurrentPageText: getCurrentEpubPageText,
+    getNextPageText: getNextEpubPageText,
     totalPages: 9999, // EPUB 章节数不确定，依赖空页检测终止
     currentPage: 1,   // 始终从当前章节开始
     onPageChange: handleEpubTTSPageChange,
-    pageChangeDelay: 1200, // epub.js 加载新章节需约 1s
+    pageChangeDelay: 0,
     bookLanguage,
   });
 
@@ -3437,9 +3472,9 @@ export default function EPUBReader({
           {!tts.isPlaying && !tts.isPaused ? (
             <div className="flex items-center gap-1">
               <button
-                onClick={tts.playCurrentPage}
+                onClick={tts.play}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-blue-50 hover:bg-blue-100 text-blue-600 transition-colors border border-blue-200/50"
-                title="朗读当前页面"
+                title="从当前页开始连续朗读"
               >
                 <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M8 5v14l11-7z" />

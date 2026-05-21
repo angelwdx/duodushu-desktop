@@ -28,6 +28,8 @@ const MAX_CONSECUTIVE_EMPTY = 3;
 const PREFETCH_DEPTH_DEFAULT = 1;
 const PREFETCH_DEPTH_QWEN3 = 2;
 const PREFETCH_DEPTH_JAPANESE = 2;
+const PAGE_OVERLAP_WINDOW = 1200;
+const PAGE_OVERLAP_MIN = 24;
 
 const EDGE_VOICES_EN = [
   // en-US
@@ -78,9 +80,10 @@ export type TTSVoiceOption = {
 export interface UseFullTextTTSOptions {
   getPageText: (page: number) => string;
   getCurrentPageText?: () => string;
+  getNextPageText?: (page: number) => string;
   totalPages: number;
   currentPage: number;
-  onPageChange: (page: number) => void;
+  onPageChange: (page: number) => void | boolean | Promise<void | boolean>;
   bookLanguage?: string | null;
   /** 翻页后等待内容加载的时间（ms），PDF ≈ 400，EPUB ≈ 1000 */
   pageChangeDelay?: number;
@@ -292,13 +295,63 @@ function splitTextIntoChunksForJapanese(text: string, maxLen = MAX_CHUNK_JAPANES
   return chunks;
 }
 
-const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+const delay = (ms: number) => (
+  ms <= 0 ? Promise.resolve() : new Promise<void>(r => setTimeout(r, ms))
+);
+
+function normalizeOverlapText(text: string): string {
+  return text
+    .replace(/\s+/g, ' ')
+    .replace(/[“”„]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .trim()
+    .toLowerCase();
+}
+
+function trimRepeatedPagePrefix(text: string, previousText: string): string {
+  const current = text.trim();
+  const previous = previousText.trim();
+  if (!current || !previous) return current;
+
+  const previousWindow = previous.slice(-PAGE_OVERLAP_WINDOW);
+  const currentWindow = current.slice(0, PAGE_OVERLAP_WINDOW);
+  const normalizedPrevious = normalizeOverlapText(previousWindow);
+  const normalizedCurrent = normalizeOverlapText(currentWindow);
+
+  const maxOverlap = Math.min(normalizedPrevious.length, normalizedCurrent.length);
+  for (let length = maxOverlap; length >= PAGE_OVERLAP_MIN; length -= 1) {
+    const prefix = normalizedCurrent.slice(0, length);
+    if (normalizedPrevious.endsWith(prefix)) {
+      const rawPrefix = currentWindow;
+      let rawCut = 0;
+      let normalizedCount = 0;
+
+      while (rawCut < rawPrefix.length && normalizedCount < length) {
+        const char = rawPrefix[rawCut];
+        const normalizedChar = normalizeOverlapText(char);
+        if (normalizedChar) normalizedCount += normalizedChar.length;
+        rawCut += 1;
+      }
+
+      return current.slice(rawCut).trim();
+    }
+  }
+
+  return current;
+}
+
+function getTextFingerprint(text: string): string {
+  return normalizeOverlapText(text)
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .slice(0, 160);
+}
 
 // ─── Hook ──────────────────────────────────────────────────────────────────
 
 export function useFullTextTTS({
   getPageText,
   getCurrentPageText,
+  getNextPageText,
   totalPages,
   currentPage,
   onPageChange,
@@ -343,12 +396,21 @@ export function useFullTextTTS({
   // ── 最新值引用（避免异步闭包过时） ──
   const getPageTextRef     = useRef(getPageText);
   const getCurrentPageTextRef = useRef(getCurrentPageText);
+  const getNextPageTextRef = useRef(getNextPageText);
   const totalPagesRef      = useRef(totalPages);
   const onPageChangeRef    = useRef(onPageChange);
   const voiceRef           = useRef(ttsLanguage === 'ja' ? 'nanami' : ttsLanguage === 'zh' ? 'xiaoxiao' : 'aria');
   const pageChangeDelayRef = useRef(pageChangeDelay);
   const pageStepRef        = useRef(pageStep);
   const speedRef           = useRef(speed);
+  const lastSpokenPageTextRef = useRef('');
+  const prefetchedPageAudioRef = useRef<{
+    page: number;
+    text: string;
+    firstChunk: string;
+    firstChunkFingerprint: string;
+    firstAudio: Promise<{ blobUrl: string; synthesisSpeed: number } | null>;
+  } | null>(null);
 
   const getCurrentAudioPlaybackRate = useCallback(() => {
     const synthesisSpeed = currentAudioSynthesisSpeedRef.current || 1;
@@ -365,6 +427,7 @@ export function useFullTextTTS({
 
   useEffect(() => { getPageTextRef.current     = getPageText;     }, [getPageText]);
   useEffect(() => { getCurrentPageTextRef.current = getCurrentPageText; }, [getCurrentPageText]);
+  useEffect(() => { getNextPageTextRef.current = getNextPageText; }, [getNextPageText]);
   useEffect(() => { totalPagesRef.current      = totalPages;      }, [totalPages]);
   useEffect(() => { onPageChangeRef.current    = onPageChange;    }, [onPageChange]);
   useEffect(() => {
@@ -534,6 +597,8 @@ export function useFullTextTTS({
   // ── 停止音频（不改 state，调用方负责 state 更新） ──
   const stopAudio = useCallback(() => {
     shouldPlayRef.current = false;
+    lastSpokenPageTextRef.current = '';
+    prefetchedPageAudioRef.current = null;
     audioRef.current?.pause();
     audioRef.current = null;
     currentAudioSynthesisSpeedRef.current = 1;
@@ -601,29 +666,50 @@ export function useFullTextTTS({
     });
   }, [getCurrentAudioPlaybackRate, revokeBlobUrl]);
 
+  const splitTextForCurrentProvider = useCallback((text: string): string[] => {
+    const isQwen3 = providerRef.current === 'qwen3';
+    return isQwen3
+      ? splitTextIntoChunksForQwen3(text)
+      : isJapaneseTTSLanguage
+        ? splitTextIntoChunksForJapanese(text)
+        : splitTextIntoChunks(text);
+  }, [isJapaneseTTSLanguage]);
+
   // ── 朗读一整页（可能分多个 chunk），返回是否有内容 ──
-  const playText = useCallback(async (rawText: string): Promise<boolean> => {
+  const playText = useCallback(async (
+    rawText: string,
+    prefetchedFirstAudio?: {
+      firstChunk: string;
+      firstChunkFingerprint: string;
+      firstAudio: Promise<{ blobUrl: string; synthesisSpeed: number } | null>;
+    },
+  ): Promise<boolean> => {
     if (!shouldPlayRef.current) return false;
     const normalizedText = rawText.trim();
     if (!normalizedText) return false;
+    const chunks = splitTextForCurrentProvider(normalizedText);
     const isQwen3 = providerRef.current === 'qwen3';
-    const chunks = isQwen3
-      ? splitTextIntoChunksForQwen3(normalizedText)
-      : isJapaneseTTSLanguage
-        ? splitTextIntoChunksForJapanese(normalizedText)
-        : splitTextIntoChunks(normalizedText);
     const prefetchDepth = isQwen3
       ? PREFETCH_DEPTH_QWEN3
       : isJapaneseTTSLanguage
         ? PREFETCH_DEPTH_JAPANESE
         : PREFETCH_DEPTH_DEFAULT;
-    const blobQueue: Array<Promise<{ blobUrl: string; synthesisSpeed: number }>> = [];
+    const blobQueue: Array<Promise<{ blobUrl: string; synthesisSpeed: number } | null>> = [];
     const enqueueNext = (chunkIndex: number) => {
       if (chunkIndex >= chunks.length) return;
       blobQueue.push(loadChunkAudio(chunks[chunkIndex]));
     };
 
-    for (let i = 0; i < Math.min(prefetchDepth, chunks.length); i++) {
+    let initialPrefetchOffset = 0;
+    if (
+      prefetchedFirstAudio &&
+      getTextFingerprint(chunks[0]) === prefetchedFirstAudio.firstChunkFingerprint
+    ) {
+      blobQueue.push(prefetchedFirstAudio.firstAudio);
+      initialPrefetchOffset = 1;
+    }
+
+    for (let i = initialPrefetchOffset; i < Math.min(prefetchDepth, chunks.length); i++) {
       enqueueNext(i);
     }
 
@@ -634,7 +720,10 @@ export function useFullTextTTS({
         return true;
       }
 
-      const preparedAudio = await blobQueue.shift()!;
+      let preparedAudio = await blobQueue.shift()!;
+      if (!preparedAudio) {
+        preparedAudio = await loadChunkAudio(chunk);
+      }
       enqueueNext(i + prefetchDepth);
 
       // 高亮当前正在朗读的片段
@@ -643,12 +732,46 @@ export function useFullTextTTS({
     }
     setTimeout(() => setCurrentChunkText(null), 0);
     return true;
-  }, [isJapaneseTTSLanguage, loadChunkAudio, playPreparedChunk]);
+  }, [isJapaneseTTSLanguage, loadChunkAudio, playPreparedChunk, splitTextForCurrentProvider]);
 
   const playPage = useCallback(async (page: number): Promise<boolean> => {
     const rawText = getPageTextRef.current(page);
-    return playText(rawText);
-  }, [playText]);
+    const text = trimRepeatedPagePrefix(rawText, lastSpokenPageTextRef.current);
+    const prefetched =
+      prefetchedPageAudioRef.current?.page === page
+        ? prefetchedPageAudioRef.current
+        : null;
+    prefetchedPageAudioRef.current = null;
+
+    const nextPage = page + pageStepRef.current;
+    if (nextPage <= totalPagesRef.current && getNextPageTextRef.current) {
+      try {
+        const nextRawText = getNextPageTextRef.current(nextPage);
+        const nextText = trimRepeatedPagePrefix(nextRawText, rawText);
+        const nextChunks = splitTextForCurrentProvider(nextText.trim());
+        if (nextChunks[0]) {
+          prefetchedPageAudioRef.current = {
+            page: nextPage,
+            text: nextText,
+            firstChunk: nextChunks[0],
+            firstChunkFingerprint: getTextFingerprint(nextChunks[0]),
+            firstAudio: loadChunkAudio(nextChunks[0]).catch((error) => {
+              log.debug('Next page first chunk prefetch failed:', error);
+              return null;
+            }),
+          };
+        }
+      } catch (error) {
+        log.debug('Next page TTS prefetch failed:', error);
+      }
+    }
+
+    const hadContent = await playText(text, prefetched ?? undefined);
+    if (hadContent) {
+      lastSpokenPageTextRef.current = rawText.trim();
+    }
+    return hadContent;
+  }, [loadChunkAudio, playText, splitTextForCurrentProvider]);
 
   const playPageRef = useRef(playPage);
   useEffect(() => { playPageRef.current = playPage; }, [playPage]);
@@ -682,7 +805,8 @@ export function useFullTextTTS({
         page += pageStepRef.current;
         if (page > totalPagesRef.current) break;
 
-        onPageChangeRef.current(page);
+        const pageChanged = await onPageChangeRef.current(page);
+        if (pageChanged === false) break;
         await delay(pageChangeDelayRef.current);
       }
     } catch (err) {
