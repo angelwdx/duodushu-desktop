@@ -10,9 +10,10 @@ import { createLogger } from './logger';
 const log = createLogger('EPUBCache');
 
 const DB_NAME = "epub-cache";
-const DB_VERSION = 2; // Increment version to add new store
+const DB_VERSION = 3; // Increment version to add new store
 const STORE_NAME = "epubFiles";
 const PROGRESS_STORE_NAME = "epubProgress";
+const LOCATIONS_STORE_NAME = "epubLocations";
 const EPUB_PROGRESS_LAYOUT_VERSION = 3;
 
 interface CacheEntry {
@@ -41,6 +42,12 @@ interface ProgressEntry {
   timestamp: number;
 }
 
+interface LocationsEntry {
+  key: string;
+  locations: string;
+  timestamp: number;
+}
+
 /**
  * 打开或创建 IndexedDB 数据库
  */
@@ -62,6 +69,12 @@ function openDB(): Promise<IDBDatabase> {
           keyPath: "bookId",
         });
         progressStore.createIndex("timestamp", "timestamp", { unique: false });
+      }
+      if (!db.objectStoreNames.contains(LOCATIONS_STORE_NAME)) {
+        const locationsStore = db.createObjectStore(LOCATIONS_STORE_NAME, {
+          keyPath: "key",
+        });
+        locationsStore.createIndex("timestamp", "timestamp", { unique: false });
       }
     };
   });
@@ -180,6 +193,53 @@ export async function getEpubCacheStats(): Promise<{
 }
 
 /**
+ * 获取 EPUB locations 表。locations 与版式无关，用于稳定位置编号和百分比恢复。
+ */
+export async function getEpubLocations(key: string): Promise<string | null> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(LOCATIONS_STORE_NAME, "readonly");
+      const store = transaction.objectStore(LOCATIONS_STORE_NAME);
+      const request = store.get(key);
+
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const entry = request.result as LocationsEntry | undefined;
+        resolve(entry?.locations ?? null);
+      };
+    });
+  } catch (error) {
+    log.warn('Failed to get EPUB locations:', error);
+    return null;
+  }
+}
+
+/**
+ * 保存 EPUB locations 表，避免每次打开重新全书扫描。
+ */
+export async function saveEpubLocations(key: string, locations: string): Promise<void> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(LOCATIONS_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(LOCATIONS_STORE_NAME);
+      const entry: LocationsEntry = {
+        key,
+        locations,
+        timestamp: Date.now(),
+      };
+
+      const request = store.put(entry);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    });
+  } catch (error) {
+    log.warn('Failed to save EPUB locations:', error);
+  }
+}
+
+/**
  * 保存 EPUB 阅读状态（进度、设置等）
  * 支持部分更新（合并现有状态）
  */
@@ -224,6 +284,13 @@ export async function saveEpubState(
         const putRequest = store.put(entry);
         putRequest.onerror = () => reject(putRequest.error);
         putRequest.onsuccess = () => {
+          log.info(`Saved EPUB state for ${bookId}`, {
+            hasCfi: !!entry.cfi,
+            cfi: entry.cfi?.substring(0, 50),
+            percentage: entry.percentage,
+            sectionIndex: entry.sectionIndex,
+            sectionPage: entry.sectionPage
+          });
           resolve();
         };
       };
@@ -265,7 +332,14 @@ export async function getEpubState(
             });
             return;
           }
-          log.debug(`Progress found for ${bookId}: ${entry.percentage}%`);
+          log.info(`Progress found for ${bookId}`, {
+            percentage: entry.percentage,
+            hasCfi: !!entry.cfi,
+            cfi: entry.cfi?.substring(0, 50),
+            sectionIndex: entry.sectionIndex,
+            sectionPage: entry.sectionPage,
+            layoutVersion: entry.layoutVersion
+          });
           resolve(entry);
         } else {
           log.debug(`No progress found for ${bookId}`);

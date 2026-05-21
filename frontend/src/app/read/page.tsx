@@ -186,11 +186,18 @@ function ReaderContent() {
               word: targetWord || undefined,
               ts: Date.now()
             };
-            log.info('Setting jumpRequest:', newJumpRequest);
+            log.info('Setting jumpRequest from URL param:', newJumpRequest);
             setJumpRequest(newJumpRequest);
           }
         } else if (data.last_page && data.last_page > 0) {
+          // 恢复历史进度时，清除任何残留的 jumpRequest
+          log.info('Restoring last_page, clearing jumpRequest:', { last_page: data.last_page });
+          setJumpRequest(null);
           setCurrentPage(data.last_page);
+        } else {
+          // 没有 URL 参数也没有历史进度时，清除 jumpRequest
+          log.info('No last_page, clearing jumpRequest');
+          setJumpRequest(null);
         }
       })
       .catch((err) => log.error("Failed to load book status", err));
