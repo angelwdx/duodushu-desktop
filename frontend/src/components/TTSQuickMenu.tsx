@@ -23,14 +23,12 @@ interface TTSQuickMenuProps {
 
 function getCompactVoiceLabel(label: string): string {
   // label 格式: "Provider · Name（描述）"
-  // 提取名字和 provider，重排为 "Name · Provider"
+  // 折叠时只显示名字，去掉 provider 前缀和括号描述
   const sep = " · ";
   const sepIdx = label.indexOf(sep);
-  let provider = "";
   let name = label;
 
   if (sepIdx >= 0) {
-    provider = label.slice(0, sepIdx).trim();
     name = label.slice(sepIdx + sep.length).trim();
   }
 
@@ -40,16 +38,7 @@ function getCompactVoiceLabel(label: string): string {
     .replace(/\([^)]*\)/g, "")
     .trim();
 
-  if (!name) return label;
-
-  // provider 缩短：取关键部分
-  const shortProvider = provider
-    .replace(/^Edge\s+TTS$/, "Edge")
-    .replace(/^自定义\s*API$/, "API")
-    .replace(/^本地\s*Qwen3$/, "Qwen3");
-
-  const result = shortProvider ? `${name} · ${shortProvider}` : name;
-  return result.length > 14 ? `${result.slice(0, 14)}…` : result;
+  return name || label;
 }
 
 export default function TTSQuickMenu({
