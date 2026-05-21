@@ -30,6 +30,7 @@ interface LeftSidebarProps {
   width?: number;
   collapsed?: boolean;
   onCollapse?: (collapsed: boolean) => void;
+  enableThumbnails?: boolean;
   className?: string;
 }
 
@@ -46,6 +47,7 @@ export default function LeftSidebar({
   width = 256,
   collapsed = false,
   onCollapse,
+  enableThumbnails = true,
   className = "",
 }: LeftSidebarProps) {
   const [mode, setMode] = useState<LeftSidebarMode>('toc');
@@ -81,6 +83,12 @@ export default function LeftSidebar({
       loadBookmarks();
     }
   }, [mode, bookId, bookmarksRefreshKey, loadBookmarks]);
+
+  useEffect(() => {
+    if (!enableThumbnails && mode === 'thumbnails') {
+      setMode('toc');
+    }
+  }, [enableThumbnails, mode]);
 
   const handleDeleteBookmark = async (bookmarkId: number) => {
     try {
@@ -273,20 +281,22 @@ export default function LeftSidebar({
               </svg>
               书签
             </button>
-            <button
-              onClick={() => setMode('thumbnails')}
-              className={`flex-1 px-2 py-1.5 rounded text-xs font-medium transition-all ${
-                mode === 'thumbnails'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-600 hover:bg-gray-100'
-              }`}
-              title="缩略图"
-            >
-              <svg className="w-4 h-4 mx-auto mb-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-              缩略图
-            </button>
+            {enableThumbnails && (
+              <button
+                onClick={() => setMode('thumbnails')}
+                className={`flex-1 px-2 py-1.5 rounded text-xs font-medium transition-all ${
+                  mode === 'thumbnails'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+                title="缩略图"
+              >
+                <svg className="w-4 h-4 mx-auto mb-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                缩略图
+              </button>
+            )}
           </div>
           <button
             onClick={() => onCollapse?.(true)}

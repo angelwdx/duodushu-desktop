@@ -253,16 +253,22 @@ export default function TXTReader({
   }, []);
 
   useEffect(() => {
+    window.addEventListener("resize", updateVisibleOffsets);
+
+    return () => {
+      window.removeEventListener("resize", updateVisibleOffsets);
+    };
+  }, [updateVisibleOffsets]);
+
+  useEffect(() => {
     const timer = setTimeout(updateVisibleOffsets, 80);
     const rafId = requestAnimationFrame(updateVisibleOffsets);
-    window.addEventListener("resize", updateVisibleOffsets);
 
     return () => {
       clearTimeout(timer);
       cancelAnimationFrame(rafId);
-      window.removeEventListener("resize", updateVisibleOffsets);
     };
-  }, [innerPage, textContent, colWidth, contentHeight, updateVisibleOffsets, furiganaLines]);
+  }, [innerPage, textContent, colWidth, contentHeight, furiganaLines, updateVisibleOffsets]);
 
   const getPageText = useCallback(() => {
     if (!textContent?.trim()) return "";

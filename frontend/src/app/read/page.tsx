@@ -482,6 +482,10 @@ function ReaderContent() {
   // --- Outline State ---
   const [outline, setOutline] = useState<any[]>([]);
 
+  useEffect(() => {
+    setTotalPages(null);
+  }, [id]);
+
   // Load vocabulary list for this book
   const loadVocabulary = useCallback(async () => {
     if (!id) return;
@@ -908,6 +912,7 @@ function ReaderContent() {
             width={leftSidebarWidth}
             collapsed={leftSidebarCollapsed}
             onCollapse={setLeftSidebarCollapsed}
+            enableThumbnails={book?.format?.toLowerCase() === "pdf"}
             className={`${leftSidebarCollapsed ? "w-0" : ""}`}
           />
 

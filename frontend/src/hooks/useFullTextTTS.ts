@@ -77,6 +77,7 @@ export type TTSVoiceOption = {
 // ─── 类型 ──────────────────────────────────────────────────────────────────
 export interface UseFullTextTTSOptions {
   getPageText: (page: number) => string;
+  getCurrentPageText?: () => string;
   totalPages: number;
   currentPage: number;
   onPageChange: (page: number) => void;
@@ -297,6 +298,7 @@ const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 export function useFullTextTTS({
   getPageText,
+  getCurrentPageText,
   totalPages,
   currentPage,
   onPageChange,
@@ -340,6 +342,7 @@ export function useFullTextTTS({
   const persistReadyRef        = useRef(false);
   // ── 最新值引用（避免异步闭包过时） ──
   const getPageTextRef     = useRef(getPageText);
+  const getCurrentPageTextRef = useRef(getCurrentPageText);
   const totalPagesRef      = useRef(totalPages);
   const onPageChangeRef    = useRef(onPageChange);
   const voiceRef           = useRef(ttsLanguage === 'ja' ? 'nanami' : ttsLanguage === 'zh' ? 'xiaoxiao' : 'aria');
@@ -361,6 +364,7 @@ export function useFullTextTTS({
   }, [getCurrentAudioPlaybackRate]);
 
   useEffect(() => { getPageTextRef.current     = getPageText;     }, [getPageText]);
+  useEffect(() => { getCurrentPageTextRef.current = getCurrentPageText; }, [getCurrentPageText]);
   useEffect(() => { totalPagesRef.current      = totalPages;      }, [totalPages]);
   useEffect(() => { onPageChangeRef.current    = onPageChange;    }, [onPageChange]);
   useEffect(() => {
@@ -598,16 +602,16 @@ export function useFullTextTTS({
   }, [getCurrentAudioPlaybackRate, revokeBlobUrl]);
 
   // ── 朗读一整页（可能分多个 chunk），返回是否有内容 ──
-  const playPage = useCallback(async (page: number): Promise<boolean> => {
+  const playText = useCallback(async (rawText: string): Promise<boolean> => {
     if (!shouldPlayRef.current) return false;
-    const rawText = getPageTextRef.current(page).trim();
-    if (!rawText) return false;
+    const normalizedText = rawText.trim();
+    if (!normalizedText) return false;
     const isQwen3 = providerRef.current === 'qwen3';
     const chunks = isQwen3
-      ? splitTextIntoChunksForQwen3(rawText)
+      ? splitTextIntoChunksForQwen3(normalizedText)
       : isJapaneseTTSLanguage
-        ? splitTextIntoChunksForJapanese(rawText)
-        : splitTextIntoChunks(rawText);
+        ? splitTextIntoChunksForJapanese(normalizedText)
+        : splitTextIntoChunks(normalizedText);
     const prefetchDepth = isQwen3
       ? PREFETCH_DEPTH_QWEN3
       : isJapaneseTTSLanguage
@@ -640,6 +644,11 @@ export function useFullTextTTS({
     setTimeout(() => setCurrentChunkText(null), 0);
     return true;
   }, [isJapaneseTTSLanguage, loadChunkAudio, playPreparedChunk]);
+
+  const playPage = useCallback(async (page: number): Promise<boolean> => {
+    const rawText = getPageTextRef.current(page);
+    return playText(rawText);
+  }, [playText]);
 
   const playPageRef = useRef(playPage);
   useEffect(() => { playPageRef.current = playPage; }, [playPage]);
@@ -710,7 +719,8 @@ export function useFullTextTTS({
     readingPageRef.current = page;
     setTimeout(() => setCurrentReadingPage(page), 0);
     try {
-      await playPageRef.current(page);
+      const rawText = getCurrentPageTextRef.current?.() ?? getPageTextRef.current(page);
+      await playText(rawText);
     } catch (err) {
       log.error('playCurrentPage error', err);
     } finally {
@@ -720,7 +730,7 @@ export function useFullTextTTS({
       setTimeout(() => setCurrentReadingPage(null), 0);
       setTimeout(() => setCurrentChunkText(null), 0);
     }
-  }, [stopAudio, currentPage]);
+  }, [stopAudio, currentPage, playText]);
 
   /**
    * 暂停：只暂停音频，while 循环保持挂起（等待 onended）

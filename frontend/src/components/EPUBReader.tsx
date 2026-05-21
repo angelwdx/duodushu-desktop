@@ -51,6 +51,7 @@ const LOOKUP_WORD_EDGE_QUOTES_PATTERN = /^['-]+|['-]+$/g;
 const SENTENCE_SPLIT_PATTERN = /[^。！？.!?\n]+[。！？.!?]*/g;
 const FORCE_HORIZONTAL_LAYOUT_STYLE_ID = 'duodushu-force-horizontal-layout';
 const EPUB_STAGE_OVERRIDE_STYLE_ID = 'duodushu-epub-stage-overrides';
+const FURIGANA_IGNORE_CLASS = 'duodushu-furigana-ignore';
 
 interface EPUBReaderProps {
   initialProgress?: number;
@@ -81,6 +82,7 @@ export default function EPUBReader({
 }: EPUBReaderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bookRef = useRef<any>(null);
+  const bookBufferRef = useRef<ArrayBuffer | null>(null);
   const renditionRef = useRef<any>(null);
   const saveProgressTimeout = useRef<NodeJS.Timeout | null>(null);
   const currentCfiRef = useRef<string | null>(null);
@@ -95,6 +97,9 @@ export default function EPUBReader({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  const [displayPage, setDisplayPage] = useState<number | null>(null);
+  const [displayTotalPages, setDisplayTotalPages] = useState<number | null>(null);
+  const [visiblePageTextForTTS, setVisiblePageTextForTTS] = useState("");
   const [fontSize, setFontSize] = useState(100);
   const [fontFamily, setFontFamily] = useState<'serif' | 'sans'>('serif');
   const [lineHeight, setLineHeight] = useState(1.6);
@@ -110,6 +115,13 @@ export default function EPUBReader({
   const appearanceMenuRef = useRef<HTMLDivElement>(null);
   const lastProcessedJumpTs = useRef<number>(0);
   const jumpRequestedBeforeReadyRef = useRef<{ dest: string | number; text?: string; word?: string; ts: number } | null>(null);
+  const lastReportedChapterRef = useRef<number | null>(null);
+  const displayPageOffsetsRef = useRef<number[]>([]);
+  const displayPaginationCacheRef = useRef(
+    new Map<string, { totalPages: number; offsets: number[] }>(),
+  );
+  const displayPaginationMeasureTokenRef = useRef(0);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const isJapaneseBook = useMemo(() => isJapaneseBookLanguage(bookLanguage), [bookLanguage]);
   const [showFurigana, setShowFurigana] = useState(false);
   const furiganaCacheRef = useRef<Map<string, FuriganaAnnotation>>(new Map());
@@ -130,6 +142,160 @@ export default function EPUBReader({
   useEffect(() => {
     settingsRef.current = { fontFamily, lineHeight, fontSize };
   }, [fontFamily, lineHeight, fontSize]);
+
+  const waitForDocumentLayoutStable = useCallback(async (doc: Document) => {
+    const fontsReady = (doc as Document & {
+      fonts?: { ready?: Promise<unknown> };
+    }).fonts?.ready;
+
+    if (fontsReady) {
+      await Promise.race([
+        fontsReady.catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, 300)),
+      ]);
+    }
+
+    const pendingImages = Array.from(doc.images ?? []).filter((image) => !image.complete);
+    if (pendingImages.length > 0) {
+      await Promise.race([
+        Promise.all(
+          pendingImages.map(
+            (image) =>
+              new Promise<void>((resolve) => {
+                const done = () => resolve();
+                image.addEventListener("load", done, { once: true });
+                image.addEventListener("error", done, { once: true });
+                setTimeout(done, 300);
+              }),
+          ),
+        ),
+        new Promise((resolve) => setTimeout(resolve, 400)),
+      ]);
+    }
+
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+  }, []);
+
+  const resolveChapterPage = useCallback((cfi: string | null | undefined, fallbackIndex?: number) => {
+    if (!cfi) {
+      return typeof fallbackIndex === "number" && fallbackIndex >= 0 ? fallbackIndex + 1 : 0;
+    }
+
+    try {
+      const spineItem = bookRef.current?.spine?.get(cfi);
+      if (spineItem && typeof spineItem.index === "number") {
+        return spineItem.index + 1;
+      }
+    } catch {
+      // ignore
+    }
+
+    return typeof fallbackIndex === "number" && fallbackIndex >= 0 ? fallbackIndex + 1 : 0;
+  }, []);
+
+  const updateDisplayedPagination = useCallback((
+    location: any,
+    offsets: number[] = displayPageOffsetsRef.current,
+    totalPages: number | null = displayTotalPages,
+  ) => {
+    const displayedPage = location?.start?.displayed?.page;
+    const displayedTotal = location?.start?.displayed?.total;
+    const sectionIndex = typeof location?.start?.index === "number" ? location.start.index : -1;
+
+    if (!(displayedPage > 0)) return;
+
+    if (sectionIndex >= 0 && totalPages && offsets[sectionIndex] !== undefined) {
+      const globalPage = offsets[sectionIndex] + displayedPage;
+      setDisplayPage((prev) => (prev === globalPage ? prev : globalPage));
+      setDisplayTotalPages((prev) => (prev === totalPages ? prev : totalPages));
+      return;
+    }
+
+    setDisplayPage((prev) => (prev === displayedPage ? prev : displayedPage));
+    if (displayedTotal > 0 && !totalPages) {
+      setDisplayTotalPages((prev) => (prev === displayedTotal ? prev : displayedTotal));
+    }
+  }, [displayTotalPages]);
+
+  const extractVisibleTextFromCurrentContents = useCallback(() => {
+    const contentsList = renditionRef.current?.getContents?.() ?? [];
+    const segments: string[] = [];
+
+    contentsList.forEach((contents: any) => {
+      const doc = contents?.document as Document | undefined;
+      const win = contents?.window as Window | undefined;
+      if (!doc?.body || !win) return;
+
+      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+      let currentNode = walker.nextNode();
+
+      while (currentNode) {
+        const textNode = currentNode as Text;
+        const rawText = textNode.nodeValue ?? "";
+        const parent = textNode.parentElement;
+        const parentTag = parent?.tagName ?? "";
+        const blockedParent =
+          parentTag === "SCRIPT" ||
+          parentTag === "STYLE" ||
+          parentTag === "NOSCRIPT" ||
+          parentTag === "RT" ||
+          parentTag === "RP";
+
+        if (!blockedParent && rawText.trim()) {
+          try {
+            const range = doc.createRange();
+            range.selectNodeContents(textNode);
+            const rects = Array.from(range.getClientRects());
+            const isVisible = rects.some(
+              (rect) =>
+                rect.width > 0 &&
+                rect.height > 0 &&
+                rect.right > 0 &&
+                rect.left < win.innerWidth &&
+                rect.bottom > 0 &&
+                rect.top < win.innerHeight,
+            );
+
+            if (isVisible) {
+              segments.push(rawText);
+            }
+          } catch (error) {
+            log.debug("Visible text range extraction failed:", error);
+          }
+        }
+
+        currentNode = walker.nextNode();
+      }
+    });
+
+    return segments.join("").replace(/\s+/g, " ").trim();
+  }, []);
+
+  const resolveCurrentPageTextForTTS = useCallback((candidateText: string) => {
+    const visibleText = extractVisibleTextFromCurrentContents();
+    if (visibleText.length >= 10) {
+      return visibleText;
+    }
+
+    return candidateText.trim();
+  }, [extractVisibleTextFromCurrentContents]);
+
+  const publishVisibleContent = useCallback((text: string) => {
+    setVisiblePageTextForTTS(resolveCurrentPageTextForTTS(text));
+    onContentChange?.(text);
+  }, [onContentChange, resolveCurrentPageTextForTTS]);
+
+  useEffect(() => {
+    setProgress(0);
+    setDisplayPage(null);
+    setDisplayTotalPages(null);
+    setVisiblePageTextForTTS("");
+    currentCfiRef.current = null;
+    lastReportedChapterRef.current = null;
+    displayPageOffsetsRef.current = [];
+  }, [bookId, fileUrl]);
 
   useEffect(() => {
     if (!isJapaneseBook) {
@@ -729,6 +895,7 @@ export default function EPUBReader({
       const wrapper = doc.createElement('span');
       wrapper.dataset.duodushuFurigana = 'true';
       wrapper.dataset.originalText = originalText;
+      wrapper.classList.add(FURIGANA_IGNORE_CLASS);
       const displayPieces = getDisplayPiecesFromAnnotation(annotation);
       const lookupSegments = annotation.lookup_segments || [];
       let cursor = 0;
@@ -1697,6 +1864,8 @@ export default function EPUBReader({
         await cacheEpub(fileUrl, arrayBuffer);
       }
 
+      bookBufferRef.current = arrayBuffer.slice(0);
+
       book = ePub(arrayBuffer);
       bookRef.current = book;
       await book.ready;
@@ -2049,7 +2218,7 @@ export default function EPUBReader({
       }
       
       // 新增：初始化完成后立即同步一次内容
-      if (!isCancelled && onContentChange && rendition) {
+      if (!isCancelled && rendition) {
           // Use IIFE or simple promise chain for init sync
           Promise.resolve().then(async () => {
              try {
@@ -2097,7 +2266,7 @@ export default function EPUBReader({
                                  }
                                   const resolvedText = resolveVisibleContentText(text);
                                   log.debug('INIT SYNC - Text length:', resolvedText.length);
-                                  onContentChange(resolvedText);
+                                  publishVisibleContent(resolvedText);
                               } catch (rangeOpErr) {
                                   log.debug('INIT SYNC - Range operation failed (offsets may be stale):', rangeOpErr);
                                   // Fallback: Safe truncation
@@ -2105,9 +2274,9 @@ export default function EPUBReader({
                                   // 手动清理假名
                                   startText = startText.replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
                                   if (startText.length > 2000) {
-                                      onContentChange(resolveVisibleContentText(startText.substring(0, 2000) + "\n...(truncated)"));
+                                      publishVisibleContent(resolveVisibleContentText(startText.substring(0, 2000) + "\n...(truncated)"));
                                   } else {
-                                      onContentChange(resolveVisibleContentText(startText));
+                                      publishVisibleContent(resolveVisibleContentText(startText));
                                   }
                               }
                           } else {
@@ -2117,9 +2286,9 @@ export default function EPUBReader({
                               // 手动清理假名
                               const combined = (sText + "\n...\n" + eText).replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
                               if (combined.length > 5000) {
-                                  onContentChange(resolveVisibleContentText(combined.substring(0, 5000) + "\n...(truncated)"));
+                                  publishVisibleContent(resolveVisibleContentText(combined.substring(0, 5000) + "\n...(truncated)"));
                               } else {
-                                  onContentChange(resolveVisibleContentText(combined));
+                                  publishVisibleContent(resolveVisibleContentText(combined));
                               }
                               log.debug('INIT SYNC (Fallback) - Text length truncated check used');
                           }
@@ -2129,9 +2298,9 @@ export default function EPUBReader({
                           // 手动清理假名
                           startText = startText.replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
                           if (startText.length > 3000) {
-                              onContentChange(resolveVisibleContentText(startText.substring(0, 2000) + "\n...(truncated)"));
+                              publishVisibleContent(resolveVisibleContentText(startText.substring(0, 2000) + "\n...(truncated)"));
                           } else {
-                              onContentChange(resolveVisibleContentText(startText));
+                              publishVisibleContent(resolveVisibleContentText(startText));
                           }
                       }
                     } catch (err) {
@@ -2143,19 +2312,19 @@ export default function EPUBReader({
                           // 手动清理假名
                           let text = range.toString().trim();
                           text = text.replace(/〔([^〕]+)〕/g, '').replace(/（[^()]*?[ぁ-んァ-ヶ]+[^\(\）]*?）/g, '').trim();
-                          onContentChange(resolveVisibleContentText(text));
+                          publishVisibleContent(resolveVisibleContentText(text));
                         } else {
-                          onContentChange(resolveVisibleContentText(''));
+                          publishVisibleContent(resolveVisibleContentText(''));
                         }
                       } catch (finalErr) {
                         log.debug('Final getRange fallback failed:', finalErr);
-                        onContentChange(resolveVisibleContentText(''));
+                        publishVisibleContent(resolveVisibleContentText(''));
                       }
                     }
                  }
               } catch (e) {
                  log.debug('Init sync failed:', e);
-                 onContentChange(resolveVisibleContentText(''));
+                 publishVisibleContent(resolveVisibleContentText(''));
               }
            });
        }
@@ -2182,7 +2351,7 @@ export default function EPUBReader({
                         const currentProgress = book.locations.percentageFromCfi(currentCfiRef.current);
                         setProgress(Math.round(currentProgress * 100));
                     } catch {}
-               }
+                }
 
             }).catch(() => {
                if (!isCancelled) {
@@ -2202,43 +2371,24 @@ export default function EPUBReader({
             }
             setForceSave(prev => prev + 1);
 
-            // Sync page number: Prioritize virtual page location, fallback to chapter index
-             if (onPageChange) {
-                let pageNum = 0;
-                // Try to get precise page number from locations
-                if (locationsReady && book.locations.length() > 0) {
-                    try {
-                        const virtualLocation = book.locations.locationFromCfi(cfi);
-                        if (virtualLocation >= 0) {
-                          pageNum = virtualLocation + 1;
-                        }
-                    } catch {
-                         // ignore
-                    }
-                }
-                
-                // Fallback to chapter index if location not available
-                if ((!pageNum || pageNum <= 0) && typeof location.start.index === 'number') {
-                    // Start chapter numbering from 10000 to distinguish? No, just use simple index + 1
-                    // But if we mix, it might be confusing. 
-                    // However, standard flow is: if locations generated, we get 1, 2, 3...
-                    // If not, we get 1, 2, 3 (chapters).
-                    pageNum = location.start.index + 1;
-                }
+            updateDisplayedPagination(location);
 
-                if (pageNum > 0) {
-                    onPageChange(pageNum);
-                }
+            if (onPageChange) {
+              const chapterPage = resolveChapterPage(cfi, location.start.index);
+              if (chapterPage > 0 && lastReportedChapterRef.current !== chapterPage) {
+                lastReportedChapterRef.current = chapterPage;
+                onPageChange(chapterPage);
+              }
             }
 
             // 新增：提取并回传当前页可见内容（带防抖）
-            if (onContentChange) {
-              if (contentSyncTimeoutRef.current) clearTimeout(contentSyncTimeoutRef.current);
+            setVisiblePageTextForTTS("");
+            if (contentSyncTimeoutRef.current) clearTimeout(contentSyncTimeoutRef.current);
 
-              contentSyncTimeoutRef.current = setTimeout(async () => {
-                try {
-                  const start = location.start.cfi;
-                  const end = location.end.cfi;
+            contentSyncTimeoutRef.current = setTimeout(async () => {
+              try {
+                const start = location.start.cfi;
+                const end = location.end.cfi;
 
                   // 1. 尝试主提取方式：基于范围的提取
                   let text = "";
@@ -2346,14 +2496,13 @@ export default function EPUBReader({
                   // 始终调用 onContentChange，即使内容为空
                   const resolvedText = resolveVisibleContentText(text);
                   log.debug('Relocated sync - Final result:', { length: resolvedText.length, hasText: !!resolvedText });
-                  onContentChange(resolvedText);
+                  publishVisibleContent(resolvedText);
                 } catch (e) {
                   log.debug('Content extraction logic encounter error:', e);
                   // 出错时也要调用 onContentChange，避免状态卡住
-                  onContentChange(resolveVisibleContentText(''));
-                }
-              }, 300); // 300ms 防抖，等待排版稳定
-            }
+                publishVisibleContent(resolveVisibleContentText(''));
+              }
+            }, 300); // 300ms 防抖，等待排版稳定
           }
         });
 
@@ -2502,6 +2651,53 @@ export default function EPUBReader({
     }
   }, [bookLanguage, extractPlainTextFromBody]);
 
+  const getCurrentEpubPageText = useCallback((): string => {
+    try {
+      const location = renditionRef.current?.currentLocation?.();
+      const startCfi = location?.start?.cfi;
+      const endCfi = location?.end?.cfi;
+
+      if (startCfi && endCfi) {
+        const startRange = renditionRef.current?.getRange(startCfi, FURIGANA_IGNORE_CLASS);
+        const endRange = renditionRef.current?.getRange(endCfi, FURIGANA_IGNORE_CLASS);
+        const startContainer = startRange?.startContainer;
+        const endContainer = endRange?.endContainer;
+        const doc = startContainer?.ownerDocument;
+
+        if (
+          doc &&
+          startContainer &&
+          endContainer &&
+          doc === endContainer.ownerDocument &&
+          doc.contains(startContainer) &&
+          doc.contains(endContainer)
+        ) {
+          const range = doc.createRange();
+          const maxStart =
+            startContainer.nodeType === 3
+              ? (startContainer.textContent?.length || 0)
+              : startContainer.childNodes.length;
+          const maxEnd =
+            endContainer.nodeType === 3
+              ? (endContainer.textContent?.length || 0)
+              : endContainer.childNodes.length;
+          range.setStart(startContainer, Math.min(startRange.startOffset, maxStart));
+          range.setEnd(endContainer, Math.min(endRange.endOffset, maxEnd));
+          const div = doc.createElement("div");
+          div.appendChild(range.cloneContents());
+          const visibleText = extractPlainTextFromBody(div).trim();
+          if (visibleText) {
+            return preprocessTTSPlainText(visibleText, bookLanguage);
+          }
+        }
+      }
+    } catch (error) {
+      log.debug("Current EPUB page text extraction failed:", error);
+    }
+
+    return preprocessTTSPlainText(visiblePageTextForTTS.trim(), bookLanguage);
+  }, [bookLanguage, extractPlainTextFromBody, visiblePageTextForTTS]);
+
   const handleEpubTTSPageChange = useCallback((page: number) => {
     // 第 1 页是当前章节，不需要翻页；后续页都调用 next()
     if (page > 1) {
@@ -2512,6 +2708,7 @@ export default function EPUBReader({
 
   const tts = useFullTextTTS({
     getPageText: getEpubPageText,
+    getCurrentPageText: getCurrentEpubPageText,
     totalPages: 9999, // EPUB 章节数不确定，依赖空页检测终止
     currentPage: 1,   // 始终从当前章节开始
     onPageChange: handleEpubTTSPageChange,
@@ -2579,8 +2776,8 @@ export default function EPUBReader({
         }
       }
 
-      if (cancelled || !onContentChange) return;
-      onContentChange(resolveVisibleContentText(''));
+      if (cancelled) return;
+      publishVisibleContent(resolveVisibleContentText(''));
     };
 
     void refreshCurrentContents();
@@ -2588,7 +2785,188 @@ export default function EPUBReader({
     return () => {
       cancelled = true;
     };
-  }, [applyFuriganaToDocument, applyReaderStylesToContents, fontFamily, lineHeight, onContentChange, remeasureCurrentEpubViews, renditionReady, resolveVisibleContentText, showFurigana]);
+  }, [applyFuriganaToDocument, applyReaderStylesToContents, fontFamily, lineHeight, publishVisibleContent, remeasureCurrentEpubViews, renditionReady, resolveVisibleContentText, showFurigana]);
+
+  const displayPaginationSignature = useMemo(() => {
+    const width = Math.round(containerSize.width);
+    const height = Math.round(containerSize.height);
+    return [
+      fileUrl,
+      width,
+      height,
+      fontSize,
+      fontFamily,
+      lineHeight,
+      showFurigana ? 1 : 0,
+      isJapaneseBook ? 1 : 0,
+    ].join("|");
+  }, [containerSize.height, containerSize.width, fileUrl, fontFamily, fontSize, isJapaneseBook, lineHeight, showFurigana]);
+
+  useEffect(() => {
+    if (
+      !renditionReady ||
+      !bookBufferRef.current ||
+      containerSize.width <= 0 ||
+      containerSize.height <= 0
+    ) {
+      return;
+    }
+
+    const cached = displayPaginationCacheRef.current.get(displayPaginationSignature);
+    if (cached) {
+      displayPageOffsetsRef.current = cached.offsets;
+      setDisplayTotalPages(cached.totalPages);
+      const currentLocation = renditionRef.current?.currentLocation?.();
+      if (currentLocation) {
+        updateDisplayedPagination(currentLocation, cached.offsets, cached.totalPages);
+      }
+      return;
+    }
+
+    let cancelled = false;
+    const measureToken = ++displayPaginationMeasureTokenRef.current;
+
+    const measureDisplayedPagination = async () => {
+      const ePub = (await import("epubjs")).default;
+      const sourceBuffer = bookBufferRef.current;
+      if (!sourceBuffer || cancelled) return;
+
+      const hiddenContainer = document.createElement("div");
+      hiddenContainer.setAttribute("aria-hidden", "true");
+      hiddenContainer.style.position = "fixed";
+      hiddenContainer.style.left = "-100000px";
+      hiddenContainer.style.top = "0";
+      hiddenContainer.style.width = `${Math.round(containerSize.width)}px`;
+      hiddenContainer.style.height = `${Math.round(containerSize.height)}px`;
+      hiddenContainer.style.opacity = "0";
+      hiddenContainer.style.pointerEvents = "none";
+      hiddenContainer.style.overflow = "hidden";
+      document.body.appendChild(hiddenContainer);
+
+      let measureBook: any = null;
+      let measureRendition: any = null;
+      let measureBookOpened: Promise<unknown> | null = null;
+
+      try {
+        measureBook = ePub(sourceBuffer.slice(0));
+        measureBookOpened = measureBook.opened.catch(() => undefined);
+        await measureBook.ready;
+
+        if (cancelled || displayPaginationMeasureTokenRef.current !== measureToken) return;
+
+        if (isJapaneseBook) {
+          measureBook.package.metadata.direction = "ltr";
+          measureBook.spine.hooks.content.register((doc: Document) => {
+            forceHorizontalWritingModeInDocument(doc);
+          });
+        }
+
+        measureRendition = measureBook.renderTo(hiddenContainer, {
+          width: "100%",
+          height: "100%",
+          manager: "default",
+          spread: "none",
+          flow: "paginated",
+        });
+
+        if (isJapaneseBook) {
+          measureRendition.direction("ltr");
+        }
+        measureRendition.themes.fontSize(`${fontSize}%`);
+        measureRendition.hooks.content.register(async (contents: any) => {
+          applyReaderStylesToContents(contents);
+          await applyFuriganaToDocumentRef.current(contents.document);
+          const displayedViews = measureRendition.manager?.views?.displayed?.() ?? [];
+          displayedViews.forEach((view: any) => {
+            try {
+              view.expand?.();
+            } catch (error) {
+              log.debug("Hidden EPUB view remeasure failed:", error);
+            }
+          });
+          await waitForDocumentLayoutStable(contents.document);
+        });
+
+        const sections: any[] = [];
+        measureBook.spine.each((section: any) => {
+          if (section.linear) {
+            sections.push(section);
+          }
+        });
+
+        const offsets: number[] = [];
+        let totalPages = 0;
+
+        for (const section of sections) {
+          if (cancelled || displayPaginationMeasureTokenRef.current !== measureToken) return;
+
+          offsets[section.index] = totalPages;
+          await measureRendition.display(section.href);
+
+          const currentLocation = measureRendition.currentLocation?.();
+          const sectionPages = Math.max(
+            1,
+            currentLocation?.start?.displayed?.total ??
+              currentLocation?.end?.displayed?.total ??
+              1,
+          );
+          totalPages += sectionPages;
+        }
+
+        if (cancelled || displayPaginationMeasureTokenRef.current !== measureToken) return;
+
+        displayPaginationCacheRef.current.set(displayPaginationSignature, {
+          totalPages,
+          offsets,
+        });
+        displayPageOffsetsRef.current = offsets;
+        setDisplayTotalPages(totalPages);
+
+        const currentLocation = renditionRef.current?.currentLocation?.();
+        if (currentLocation) {
+          updateDisplayedPagination(currentLocation, offsets, totalPages);
+        }
+      } catch (error) {
+        log.warn("EPUB displayed pagination measurement failed:", error);
+      } finally {
+        if (measureBookOpened) {
+          try {
+            await measureBookOpened;
+          } catch {
+            // ignore
+          }
+        }
+        try {
+          measureRendition?.destroy?.();
+        } catch {
+          // ignore
+        }
+        try {
+          measureBook?.destroy?.();
+        } catch {
+          // ignore
+        }
+        hiddenContainer.remove();
+      }
+    };
+
+    void measureDisplayedPagination();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    applyReaderStylesToContents,
+    containerSize.height,
+    containerSize.width,
+    displayPaginationSignature,
+    fontSize,
+    forceHorizontalWritingModeInDocument,
+    isJapaneseBook,
+    renditionReady,
+    updateDisplayedPagination,
+    waitForDocumentLayoutStable,
+  ]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -2651,6 +3029,9 @@ export default function EPUBReader({
         if (renditionRef.current && containerRef.current) {
           const { width, height } = containerRef.current.getBoundingClientRect();
           log.debug('Resizing to:', { width, height });
+          setContainerSize((prev) =>
+            prev.width === width && prev.height === height ? prev : { width, height },
+          );
           
           // Save current location
           let currentCfi = null;
@@ -2699,6 +3080,8 @@ export default function EPUBReader({
     });
 
     resizeObserver.observe(containerRef.current);
+    const { width, height } = containerRef.current.getBoundingClientRect();
+    setContainerSize({ width, height });
 
     return () => {
       resizeObserver.disconnect();
@@ -2863,7 +3246,9 @@ export default function EPUBReader({
         <div className="w-px h-4 bg-gray-300/50"></div>
 
         {/* Progress Info */}
-        <div className="flex items-center gap-2 text-gray-500 font-medium tabular-nums text-xs min-w-[3ch] justify-center">
+        <div className="flex items-center gap-2 text-gray-500 font-medium tabular-nums text-xs justify-center">
+             <span>{displayPage ? `${displayPage}/${displayTotalPages ?? '--'}` : `--/${displayTotalPages ?? '--'}`}</span>
+             <span className="text-gray-300">•</span>
              <span>{progress || 0}%</span>
         </div>
 

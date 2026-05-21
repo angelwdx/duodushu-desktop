@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import DictionarySidebar from "./DictionarySidebar";
 import AITeacherSidebar from "./AITeacherSidebar";
@@ -85,6 +85,7 @@ export default function ContextAwareLayout({
   const router = useRouter();
   const { isMobile } = useMediaQuery();
   const [internalSidebarCollapsed, setInternalSidebarCollapsed] = useState(true);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
 
   // 移动端默认折叠侧边栏，桌面端默认展开
   const [hasInitialized, setHasInitialized] = useState(false);
@@ -123,6 +124,46 @@ export default function ContextAwareLayout({
   const handleDictionaryAdd = useCallback(async (word: string, data: any) => {
     await onAddWord?.(word, data);
   }, [onAddWord]);
+
+  const cleanupResizeListeners = useCallback(() => {
+    resizeCleanupRef.current?.();
+    resizeCleanupRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener("blur", cleanupResizeListeners);
+    return () => {
+      window.removeEventListener("blur", cleanupResizeListeners);
+      cleanupResizeListeners();
+    };
+  }, [cleanupResizeListeners]);
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!onRightSidebarWidthChange) return;
+
+    e.preventDefault();
+    cleanupResizeListeners();
+
+    const startX = e.clientX;
+    const startWidth = rightSidebarWidth;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const newWidth = Math.max(320, Math.min(800, startWidth + (startX - event.clientX)));
+      onRightSidebarWidthChange(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      cleanupResizeListeners();
+    };
+
+    resizeCleanupRef.current = () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+  }, [cleanupResizeListeners, onRightSidebarWidthChange, rightSidebarWidth]);
 
   return (
     <div className={`${className} bg-white flex flex-col overflow-hidden`} data-page-type="vocab-detail">
@@ -170,24 +211,7 @@ export default function ContextAwareLayout({
         {/* 右侧边栏 - 调整大小手柄（移动端隐藏） */}
         {!isSidebarCollapsed && onRightSidebarWidthChange && !isMobile && (
           <div
-            onMouseDown={(e) => {
-              e.preventDefault();
-              const startX = e.clientX;
-              const startWidth = rightSidebarWidth;
-
-              const handleMouseMove = (e: MouseEvent) => {
-                const newWidth = Math.max(320, Math.min(800, startWidth + (startX - e.clientX)));
-                onRightSidebarWidthChange(newWidth);
-              };
-
-              const handleMouseUp = () => {
-                document.removeEventListener('mousemove', handleMouseMove);
-                document.removeEventListener('mouseup', handleMouseUp);
-              };
-
-              document.addEventListener('mousemove', handleMouseMove);
-              document.addEventListener('mouseup', handleMouseUp);
-            }}
+            onMouseDown={handleResizeMouseDown}
             className="w-1 hover:w-1.5 hover:bg-gray-400 cursor-col-resize bg-gray-200 transition-all z-30 shrink-0"
           />
         )}

@@ -17,12 +17,18 @@ export default function GlobalFileDropHandler() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const errorTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const dragDepthRef = useRef(0);
 
   const clearErrorTimeout = useCallback(() => {
     if (errorTimeoutRef.current) {
       clearTimeout(errorTimeoutRef.current);
       errorTimeoutRef.current = null;
     }
+  }, []);
+
+  const resetDragState = useCallback(() => {
+    dragDepthRef.current = 0;
+    setIsDragging(false);
   }, []);
 
   const showTemporaryError = useCallback((message: string) => {
@@ -43,16 +49,18 @@ export default function GlobalFileDropHandler() {
   const handleDragEnter = useCallback((e: DragEvent) => {
     preventDefault(e);
     if (e.dataTransfer?.types.includes('Files')) {
+      dragDepthRef.current += 1;
       setIsDragging(true);
     }
   }, [preventDefault]);
 
   const handleDragLeave = useCallback((e: DragEvent) => {
     preventDefault(e);
-    // 只有当拖拽离开主窗口范围时才取消状态（排除子元素导致的误触发）
-    if (e.clientY === 0 || e.clientX === 0 || 
-        e.clientX === window.innerWidth || e.clientY === window.innerHeight) {
-      setIsDragging(false);
+    if (e.dataTransfer?.types.includes('Files')) {
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0) {
+        setIsDragging(false);
+      }
     }
   }, [preventDefault]);
 
@@ -65,7 +73,7 @@ export default function GlobalFileDropHandler() {
 
   const handleDrop = useCallback(async (e: DragEvent) => {
     preventDefault(e);
-    setIsDragging(false);
+    resetDragState();
 
     const files = e.dataTransfer?.files;
     if (!files || files.length === 0) return;
@@ -98,7 +106,17 @@ export default function GlobalFileDropHandler() {
     } finally {
       setIsUploading(false);
     }
-  }, [preventDefault, router, showTemporaryError]);
+  }, [preventDefault, resetDragState, router, showTemporaryError]);
+
+  const handleWindowBlur = useCallback(() => {
+    resetDragState();
+  }, [resetDragState]);
+
+  const handleVisibilityChange = useCallback(() => {
+    if (document.visibilityState !== 'visible') {
+      resetDragState();
+    }
+  }, [resetDragState]);
 
   useEffect(() => {
     // 在 window 级别注册全局事件
@@ -106,15 +124,31 @@ export default function GlobalFileDropHandler() {
     window.addEventListener('dragleave', handleDragLeave);
     window.addEventListener('dragover', handleDragOver);
     window.addEventListener('drop', handleDrop);
+    window.addEventListener('dragend', resetDragState);
+    window.addEventListener('blur', handleWindowBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       window.removeEventListener('dragenter', handleDragEnter);
       window.removeEventListener('dragleave', handleDragLeave);
       window.removeEventListener('dragover', handleDragOver);
       window.removeEventListener('drop', handleDrop);
+      window.removeEventListener('dragend', resetDragState);
+      window.removeEventListener('blur', handleWindowBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      resetDragState();
       clearErrorTimeout();
     };
-  }, [clearErrorTimeout, handleDragEnter, handleDragLeave, handleDragOver, handleDrop]);
+  }, [
+    clearErrorTimeout,
+    handleDragEnter,
+    handleDragLeave,
+    handleDragOver,
+    handleDrop,
+    handleVisibilityChange,
+    handleWindowBlur,
+    resetDragState,
+  ]);
 
   // 如果什么状态都没有，不渲染任何 DOM
   if (!isDragging && !isUploading && !uploadError) return null;

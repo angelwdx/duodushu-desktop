@@ -164,25 +164,26 @@ def ensure_fts5_index(db_path: str):
             );
         """)
         
-        # 检查是否需要同步数据（仅当 pages_fts 为空且 pages 有数据时）
-        fts_count = cursor.execute("SELECT COUNT(*) FROM pages_fts").fetchone()[0]
+        # 检查是否需要同步数据
+        fts_count = cursor.execute("SELECT COUNT(*) FROM pages_fts_docsize").fetchone()[0]
         pages_count = cursor.execute("SELECT COUNT(*) FROM pages WHERE text_content IS NOT NULL").fetchone()[0]
         
-        if pages_count > 0:
-            if fts_count == 0:
-                logger.info(f"同步 {pages_count} 页到 FTS5 索引...")
-                cursor.execute("""
-                    INSERT OR REPLACE INTO pages_fts(id, book_id, page_number, text_content)
-                    SELECT id, book_id, page_number, text_content
-                    FROM pages
-                    WHERE text_content IS NOT NULL;
-                """)
-                logger.info(f"FTS5 索引同步完成")
-            else:
-                # 即使索引不为空，也执行一次 rebuild 确保索引与内容表完全一致（处理旧版本迁移可能导致的同步问题）
-                logger.info("执行 FTS5 索引重建(rebuild)以确保同步...")
-                cursor.execute("INSERT INTO pages_fts(pages_fts) VALUES('rebuild');")
-                logger.info("FTS5 索引重建完成")
+        if pages_count > 0 and fts_count == 0:
+            logger.info(f"同步 {pages_count} 页到 FTS5 索引...")
+            cursor.execute("""
+                INSERT OR REPLACE INTO pages_fts(id, book_id, page_number, text_content)
+                SELECT id, book_id, page_number, text_content
+                FROM pages
+                WHERE text_content IS NOT NULL;
+            """)
+            logger.info("FTS5 索引同步完成")
+        elif fts_count != pages_count:
+            # 仅在检测到数量不一致时执行 rebuild，兼顾启动性能与旧数据修复
+            logger.info(
+                "检测到 FTS5 索引与 pages 数量不一致，执行重建修复..."
+            )
+            cursor.execute("INSERT INTO pages_fts(pages_fts) VALUES('rebuild');")
+            logger.info("FTS5 索引重建完成")
         
         # 创建自动同步触发器（INSERT）
         cursor.execute("""
