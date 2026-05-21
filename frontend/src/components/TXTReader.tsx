@@ -10,6 +10,7 @@ import {
 } from "../lib/japaneseFurigana";
 import { useFullTextTTS } from "../hooks/useFullTextTTS";
 import TTSLoadingDots from "./TTSLoadingDots";
+import TTSQuickMenu from "./TTSQuickMenu";
 import FuriganaText from "./FuriganaText";
 import { preprocessTTSPlainText } from "../lib/ttsText";
 import { createLogger } from "../lib/logger";
@@ -440,41 +441,17 @@ export default function TXTReader({
             </>
           )}
 
-          <select
-            value={tts.voice}
-            onChange={(e) => tts.setVoice(e.target.value as any)}
-            className="text-xs bg-transparent border border-gray-200/60 rounded-full px-2 py-1 text-gray-500 hover:text-gray-700 hover:border-gray-300 cursor-pointer focus:outline-none transition-colors"
-            title="选择朗读语音"
-          >
-            {tts.voices.map((voiceOption) => (
-              <option key={voiceOption.id} value={voiceOption.id}>
-                {voiceOption.label}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={tts.speed}
-            onChange={(e) => tts.setSpeed(Number(e.target.value))}
-            className="text-xs bg-transparent border border-gray-200/60 rounded-full px-2 py-1 text-gray-500 hover:text-gray-700 hover:border-gray-300 cursor-pointer focus:outline-none transition-colors"
-            title="调整朗读速度"
-          >
-            {SPEED_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+          <TTSQuickMenu
+            voice={tts.voice}
+            voices={tts.voices}
+            onVoiceChange={(voice) => tts.setVoice(voice as any)}
+            speed={tts.speed}
+            speedOptions={SPEED_OPTIONS}
+            onSpeedChange={tts.setSpeed}
+          />
 
           {!tts.isPlaying && !tts.isPaused ? (
             <div className="flex items-center gap-1">
-              <button
-                onClick={handlePlay}
-                className="px-4 py-1.5 rounded-full text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-all"
-                title="从当前页面开始朗读（自动翻页）"
-              >
-                朗读
-              </button>
               <button
                 onClick={() => {
                   updateVisibleOffsets();
@@ -483,9 +460,9 @@ export default function TXTReader({
                   });
                 }}
                 className="px-4 py-1.5 rounded-full text-sm font-medium text-blue-600 hover:bg-blue-50 transition-all"
-                title="只朗读当前页面，读完后停止"
+                title="朗读当前页面"
               >
-                本页
+                朗读
               </button>
             </div>
           ) : (

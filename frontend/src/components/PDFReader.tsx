@@ -4,6 +4,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } fr
 import { useReaderGestures } from "../hooks/useReaderGestures";
 import { useFullTextTTS } from "../hooks/useFullTextTTS";
 import TTSLoadingDots from "./TTSLoadingDots";
+import TTSQuickMenu from "./TTSQuickMenu";
 import { getApiUrl } from "../lib/api";
 import { normalizePdfPageText, preprocessTTSPlainText } from "../lib/ttsText";
 import { getLookupWordFromText, splitTextForWordLookup, splitWordDataForLookup } from "../lib/wordLookup";
@@ -1956,50 +1957,27 @@ export default function PDFReader({
         {/* ── 朗读控制区 ── */}
         <div className="flex items-center gap-2 shrink-0">
           {/* 音色选择：始终可见，朗读前就可以选 */}
-          <select
-            value={tts.voice}
-            onChange={(e) => tts.setVoice(e.target.value as any)}
-            className="text-xs bg-transparent border border-gray-200/60 rounded-full px-2 py-1 text-gray-500 hover:text-gray-700 hover:border-gray-300 cursor-pointer focus:outline-none transition-colors"
-            title="选择朗读语音"
-          >
-            {tts.voices.map(v => (
-              <option key={v.id} value={v.id}>{v.label}</option>
-            ))}
-          </select>
-
-          <select
-            value={tts.speed}
-            onChange={(e) => tts.setSpeed(Number(e.target.value))}
-            className="text-xs bg-transparent border border-gray-200/60 rounded-full px-2 py-1 text-gray-500 hover:text-gray-700 hover:border-gray-300 cursor-pointer focus:outline-none transition-colors"
-            title="调整朗读速度"
-          >
-            {TTS_SPEED_OPTIONS.map(option => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
+          <TTSQuickMenu
+            voice={tts.voice}
+            voices={tts.voices}
+            onVoiceChange={(voice) => tts.setVoice(voice as any)}
+            speed={tts.speed}
+            speedOptions={TTS_SPEED_OPTIONS}
+            onSpeedChange={tts.setSpeed}
+          />
 
           {!tts.isPlaying && !tts.isPaused ? (
             // 初始状态：播放按钮
             <div className="flex items-center gap-1">
               <button
-                onClick={tts.play}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-gray-100/80 hover:bg-gray-200/80 text-gray-700 transition-colors border border-gray-200/50"
-                title="从当前页开始朗读全文（自动翻页）"
+                onClick={tts.playCurrentPage}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-blue-50 hover:bg-blue-100 text-blue-600 transition-colors border border-blue-200/50"
+                title="朗读当前页面"
               >
                 <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M8 5v14l11-7z" />
                 </svg>
                 朗读
-              </button>
-              <button
-                onClick={tts.playCurrentPage}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-blue-50 hover:bg-blue-100 text-blue-600 transition-colors border border-blue-200/50"
-                title="只朗读当前页面，读完后停止"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                本页
               </button>
             </div>
           ) : (
