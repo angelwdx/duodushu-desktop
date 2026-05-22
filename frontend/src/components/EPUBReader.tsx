@@ -137,6 +137,8 @@ export default function EPUBReader({
     sectionIndex: null,
     sectionPage: null,
   });
+  const screenPageTotalsRef = useRef<number[] | null>(null);
+  const screenPageGenerationRef = useRef(0);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const isJapaneseBook = useMemo(() => isJapaneseBookLanguage(bookLanguage), [bookLanguage]);
   const [showFurigana, setShowFurigana] = useState(false);
@@ -256,28 +258,10 @@ export default function EPUBReader({
     });
   }, []);
 
-  const resolveChapterPage = useCallback((cfi: string | null | undefined, fallbackIndex?: number) => {
-    if (!cfi) {
-      return typeof fallbackIndex === "number" && fallbackIndex >= 0 ? fallbackIndex + 1 : 0;
-    }
-
-    try {
-      const spineItem = bookRef.current?.spine?.get(cfi);
-      if (spineItem && typeof spineItem.index === "number") {
-        return spineItem.index + 1;
-      }
-    } catch {
-      // ignore
-    }
-
-    return typeof fallbackIndex === "number" && fallbackIndex >= 0 ? fallbackIndex + 1 : 0;
-  }, []);
-
   const updateDisplayedPagination = useCallback((location: any): number | null => {
     const displayedPage = location?.start?.displayed?.page;
     const displayedTotal = location?.start?.displayed?.total;
     const sectionIndex = typeof location?.start?.index === "number" ? location.start.index : -1;
-    const cfi = location?.start?.cfi;
 
     if (!(displayedPage > 0)) return null;
 
@@ -286,20 +270,22 @@ export default function EPUBReader({
       sectionPage: displayedPage,
     };
 
-    const locations = bookRef.current?.locations;
-    if (cfi && locations?.length?.() > 0) {
-      const locationIndex = locations.locationFromCfi(cfi);
-      const totalLocations = locations.length();
-      if (locationIndex >= 0 && totalLocations > 0) {
-        const stablePage = Math.min(totalLocations, locationIndex + 1);
-        setDisplayPage((prev) => (prev === stablePage ? prev : stablePage));
-        setDisplayTotalPages((prev) => (prev === totalLocations ? prev : totalLocations));
-        return stablePage;
-      }
+    const screenPageTotals = screenPageTotalsRef.current;
+    if (screenPageTotals && sectionIndex >= 0) {
+      const previousPages = screenPageTotals
+        .slice(0, sectionIndex)
+        .reduce((sum, pages) => sum + pages, 0);
+      const currentSectionTotal = screenPageTotals[sectionIndex] || displayedTotal || 1;
+      const totalScreenPages = screenPageTotals.reduce((sum, pages) => sum + pages, 0);
+      const stablePage = previousPages + Math.min(displayedPage, currentSectionTotal);
+
+      setDisplayPage((prev) => (prev === stablePage ? prev : stablePage));
+      setDisplayTotalPages((prev) => (prev === totalScreenPages ? prev : totalScreenPages));
+      return stablePage;
     }
 
     setDisplayPage((prev) => (prev === displayedPage ? prev : displayedPage));
-    if (displayedTotal > 0 && !displayTotalPagesRef.current) {
+    if (displayedTotal > 0) {
       setDisplayTotalPages((prev) => (prev === displayedTotal ? prev : displayedTotal));
     }
     return displayedPage;
@@ -388,6 +374,8 @@ export default function EPUBReader({
     setProgress(0);
     setDisplayPage(null);
     setDisplayTotalPages(null);
+    screenPageTotalsRef.current = null;
+    screenPageGenerationRef.current += 1;
     setVisiblePageTextForTTS("");
     currentCfiRef.current = null;
     preciseProgressRef.current = 0;
@@ -1105,6 +1093,111 @@ export default function EPUBReader({
   useEffect(() => {
       applyFuriganaToDocumentRef.current = applyFuriganaToDocument;
   }, [applyFuriganaToDocument]);
+
+  const calculateScreenPageTotals = useCallback(async (generation: number, width: number, height: number) => {
+    if (!bookBufferRef.current || width <= 0 || height <= 0) return;
+
+    const host = document.createElement('div');
+    host.style.position = 'fixed';
+    host.style.left = '-10000px';
+    host.style.top = '0';
+    host.style.width = `${width}px`;
+    host.style.height = `${height}px`;
+    host.style.visibility = 'hidden';
+    host.style.pointerEvents = 'none';
+    host.style.overflow = 'hidden';
+    document.body.appendChild(host);
+
+    let hiddenBook: any = null;
+    let hiddenRendition: any = null;
+
+    try {
+      const { default: ePub } = await loadEpubJs();
+      if (generation !== screenPageGenerationRef.current) return;
+
+      hiddenBook = ePub(bookBufferRef.current.slice(0));
+      await hiddenBook.ready;
+      if (generation !== screenPageGenerationRef.current) return;
+
+      if (isJapaneseBook) {
+        hiddenBook.package.metadata.direction = 'ltr';
+        hiddenBook.spine.hooks.content.register((doc: Document) => {
+          forceHorizontalWritingModeInDocument(doc);
+        });
+      }
+
+      hiddenRendition = hiddenBook.renderTo(host, {
+        width: '100%',
+        height: '100%',
+        ignoreClass: FURIGANA_IGNORE_CLASS,
+        manager: 'default',
+        spread: 'none',
+        flow: 'paginated',
+      });
+      hiddenRendition.themes.fontSize(`${settingsRef.current.fontSize}%`);
+      if (isJapaneseBook) hiddenRendition.direction('ltr');
+
+      hiddenRendition.hooks.content.register(async (contents: any) => {
+        applyReaderStylesToContents(contents);
+        try {
+          await applyFuriganaToDocumentRef.current(contents?.document);
+        } catch (error) {
+          log.debug('Hidden EPUB pagination furigana failed:', error);
+        }
+        if (isJapaneseBook && contents?.document) {
+          await waitForDocumentLayoutStable(contents.document);
+        }
+      });
+
+      const spineItems: any[] = [];
+      hiddenBook.spine.each((item: any) => {
+        if (typeof item?.index === 'number') spineItems[item.index] = item;
+      });
+
+      const totals = new Array(spineItems.length).fill(1);
+      for (let index = 0; index < spineItems.length; index += 1) {
+        if (generation !== screenPageGenerationRef.current) return;
+        if (!spineItems[index]) continue;
+
+        await hiddenRendition.display(index);
+        if (isJapaneseBook) {
+          await waitForDocumentLayoutStable(
+            hiddenRendition.getContents?.()[0]?.document,
+          );
+        } else {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          });
+        }
+
+        const location = hiddenRendition.currentLocation?.();
+        const total = location?.start?.displayed?.total;
+        totals[index] = total > 0 ? total : 1;
+      }
+
+      if (generation !== screenPageGenerationRef.current) return;
+      screenPageTotalsRef.current = totals;
+      const currentLocation = renditionRef.current?.currentLocation?.();
+      if (currentLocation?.start) {
+        updateDisplayedPagination(currentLocation);
+      }
+    } catch (error) {
+      log.debug('Failed to calculate EPUB screen page totals:', error);
+    } finally {
+      try {
+        renditionRef.current?.getContents?.().forEach((contents: any) => {
+          applyReaderStylesToContents(contents);
+        });
+      } catch {}
+      try {
+        hiddenRendition?.destroy?.();
+      } catch {}
+      try {
+        hiddenBook?.destroy?.();
+      } catch {}
+      host.remove();
+    }
+  }, [applyReaderStylesToContents, forceHorizontalWritingModeInDocument, isJapaneseBook, updateDisplayedPagination, waitForDocumentLayoutStable]);
 
   const findLookupSegmentAtOffset = useCallback((
       lookupSegments: JapaneseLookupSegment[],
@@ -3395,6 +3488,55 @@ export default function EPUBReader({
       if (resizeTimeout) clearTimeout(resizeTimeout);
     };
   }, [normalizeRenderedCfi, renditionReady]);
+
+  useEffect(() => {
+    if (!renditionReady || !containerRef.current || !bookBufferRef.current) return;
+
+    const rect = containerRef.current.getBoundingClientRect();
+    const width = Math.round(containerSize.width || rect.width);
+    const height = Math.round(containerSize.height || rect.height);
+    if (width <= 0 || height <= 0) return;
+
+    screenPageTotalsRef.current = null;
+    const currentLocation = renditionRef.current?.currentLocation?.();
+    if (currentLocation?.start) {
+      updateDisplayedPagination(currentLocation);
+    }
+
+    const generation = ++screenPageGenerationRef.current;
+    const idleWindow = window as IdleCapableWindow;
+    let timeoutHandle: number | null = null;
+    let idleHandle: number | null = null;
+
+    const startCalculation = () => {
+      void calculateScreenPageTotals(generation, width, height);
+    };
+
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+      idleHandle = idleWindow.requestIdleCallback(startCalculation, { timeout: 1200 });
+    } else {
+      timeoutHandle = window.setTimeout(startCalculation, 500);
+    }
+
+    return () => {
+      if (idleHandle !== null) idleWindow.cancelIdleCallback?.(idleHandle);
+      if (timeoutHandle !== null) window.clearTimeout(timeoutHandle);
+      if (screenPageGenerationRef.current === generation) {
+        screenPageGenerationRef.current += 1;
+      }
+    };
+  }, [
+    calculateScreenPageTotals,
+    containerSize.height,
+    containerSize.width,
+    fitMode,
+    fontFamily,
+    fontSize,
+    lineHeight,
+    renditionReady,
+    showFurigana,
+    updateDisplayedPagination,
+  ]);
 
   // 绑定手势翻页
   const gestureBind = useReaderGestures(goPrev, goNext, !loading);
