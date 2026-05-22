@@ -109,7 +109,7 @@ export default function EPUBReader({
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
+  const [, setProgress] = useState(0);
   const [displayPage, setDisplayPage] = useState<number | null>(null);
   const [displayTotalPages, setDisplayTotalPages] = useState<number | null>(null);
   const [visiblePageTextForTTS, setVisiblePageTextForTTS] = useState("");
@@ -3531,26 +3531,21 @@ export default function EPUBReader({
 
         {/* Progress Info */}
         <div className="flex items-center gap-2 text-gray-500 font-medium tabular-nums text-xs justify-center">
-             <span>{displayPage ? `${displayPage}/${displayTotalPages ?? '--'}` : `--/${displayTotalPages ?? '--'}`}</span>
-             <span className="text-gray-300">•</span>
-             <span>{progress || 0}%</span>
-        </div>
-
-        <div className="w-px h-4 bg-gray-300/50"></div>
-
-        {/* Navigation */}
-        <div className="flex items-center gap-4">
           <button
             onClick={goPrev}
-            className="p-1.5 hover:bg-black/5 rounded-full text-gray-600 transition-colors"
+            disabled={loading}
+            className="p-1.5 hover:bg-black/5 rounded-full text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             title="上一页"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
           </button>
-          
+
+          <span className="min-w-[7ch] text-center text-gray-700">{displayPage ? `${displayPage}/${displayTotalPages ?? '--'}` : `--/${displayTotalPages ?? '--'}`}</span>
+
           <button
             onClick={goNext}
-            className="p-1.5 hover:bg-black/5 rounded-full text-gray-600 transition-colors"
+            disabled={loading}
+            className="p-1.5 hover:bg-black/5 rounded-full text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             title="下一页"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
