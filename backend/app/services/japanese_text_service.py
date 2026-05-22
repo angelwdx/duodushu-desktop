@@ -10,11 +10,14 @@ from app.services.book_language_service import contains_japanese_text
 
 KANJI_CHARACTERS = set("々〆ヵヶ")
 INLINE_JAPANESE_SPACING_RE = re.compile(r"[ \t\u3000]+")
-JAPANESE_READING_VERSION = "fugashi-unidic-lite-v9"
+JAPANESE_READING_VERSION = "fugashi-unidic-lite-v10"
 JAPANESE_PAUSE_RE = re.compile(r"[、]{2,}")
 JAPANESE_ELLIPSIS_RE = re.compile(r"(?:\.{3,}|…{2,}|‥{2,})")
 JAPANESE_BRACKETS_RE = re.compile(r"[()\[\]{}（）［］｛｝【】〈〉《》]")
 JAPANESE_PUNCTUATION_SPACING_RE = re.compile(r"\s*([、。！？])\s*")
+JAPANESE_OPEN_QUOTES = "「『"
+JAPANESE_CLOSE_QUOTES = "」』"
+JAPANESE_QUOTE_CONNECTORS = set("とってっのなにへをもはがでだですかねよ")
 READING_OVERRIDES: tuple[tuple[str, str], ...] = (
     ("土方歳三", "ひじかたとしぞう"),
     ("近藤勇", "こんどういさみ"),
@@ -206,6 +209,7 @@ def _normalize_japanese_punctuation_for_tts(text: str) -> str:
     trailing_sentence_pause = bool(re.search(r"(?:\.{3,}|…{2,}|‥{2,}|(?<!\d)\.)\s*$", text))
     normalized = JAPANESE_ELLIPSIS_RE.sub("、", text)
     normalized = JAPANESE_BRACKETS_RE.sub("、", normalized)
+    normalized = _normalize_japanese_quotes_for_tts(normalized)
     normalized = normalized.replace("!", "！").replace("?", "？")
     normalized = re.sub(r"(?<!\d)[/／\\|](?!\d)", "、", normalized)
     normalized = re.sub(r"(?<!\d)[,，;；:：](?!\d)", "、", normalized)
@@ -218,6 +222,40 @@ def _normalize_japanese_punctuation_for_tts(text: str) -> str:
         normalized = re.sub(r"[、\s]*$", "。", normalized)
     normalized = re.sub(r"([。！？])[。！？]+", r"\1", normalized)
     return normalized.strip("、 ")
+
+
+def _normalize_japanese_quotes_for_tts(text: str) -> str:
+    normalized_chars: list[str] = []
+    text_length = len(text)
+
+    for index, char in enumerate(text):
+        if char in JAPANESE_OPEN_QUOTES:
+            continue
+
+        if char not in JAPANESE_CLOSE_QUOTES:
+            normalized_chars.append(char)
+            continue
+
+        previous_char = next(
+            (candidate for candidate in reversed(normalized_chars) if not candidate.isspace()),
+            "",
+        )
+        if previous_char and previous_char in "、。！？":
+            continue
+
+        next_char = ""
+        for next_index in range(index + 1, text_length):
+            candidate = text[next_index]
+            if not candidate.isspace():
+                next_char = candidate
+                break
+
+        if next_char and next_char in "、。！？":
+            continue
+
+        normalized_chars.append("、" if next_char in JAPANESE_QUOTE_CONNECTORS else "。")
+
+    return "".join(normalized_chars)
 
 
 @lru_cache(maxsize=1)

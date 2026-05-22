@@ -251,7 +251,7 @@ function splitLongSentence(text: string, maxLen: number): string[] {
 function splitIntoSentences(text: string): string[] {
   return text
     .replace(/\r\n/g, '\n')
-    .split(/(?<=[。！？!?；;…]|\. |\! |\? |\n)/)
+    .split(/(?<=[。！？!?；;…]|\.(?=\s)|!(?=\s)|\?(?=\s)|[」』](?=\s|$|[「『])|\n)/)
     .map(sentence => sentence.trim())
     .filter(Boolean);
 }

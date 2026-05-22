@@ -176,6 +176,17 @@ def test_normalize_japanese_text_for_tts_normalizes_particles_and_punctuation():
     assert normalize_japanese_text_for_tts("山/川(谷)") == "山、川、谷"
 
 
+def test_normalize_japanese_text_for_tts_turns_dialogue_quotes_into_pauses():
+    assert (
+        normalize_japanese_text_for_tts(
+            "「その言葉、うまいこと言うなといつも思いはするんですが、ひとつ疑問が」\n\n「なんだい」"
+        )
+        == "その言葉、うまいこと言うなといつも思いはするんですが、ひとつ疑問が。なんだい。"
+    )
+    assert normalize_japanese_text_for_tts("「あいかわらず瞬間入浴だな、ハイジ」") == "あいかわらず瞬間入浴だな、ハイジ。"
+    assert normalize_japanese_text_for_tts("「なんだい」と彼は言った。") == "なんだい、と彼は言った。"
+
+
 def test_build_japanese_lookup_segments_skips_particles_and_merges_honorifics():
     assert build_japanese_lookup_segments("彼は学校へ行く。") == [
         {"text": "彼", "lookup_text": "彼", "start": 0, "end": 1},
