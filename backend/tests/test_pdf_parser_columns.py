@@ -351,6 +351,32 @@ class TestDetectColumns:
         caption_word = next(word for word in parsed["words_data"] if word["text"] == "Scientists")
         assert quote_word["block_id"] != caption_word["block_id"]
 
+    def test_drop_cap_does_not_reorder_following_body_lines(self):
+        block = make_text_block(
+            make_line("D", 76, 329, 101, 394),
+            make_line("id you know that the sun is a star, just like the countless", 103, 346, 404, 364),
+            make_line("points of light sparkling in the night sky? In fact, it is", 103, 366, 386, 384),
+            make_line("relatively small compared to some of the other stars in the", 77, 386, 392, 404),
+            make_line("Milky Way. But it’s still the object our little planetary family—", 77, 406, 402, 424),
+            make_line("the solar system—whirls around, and its warmth and light", 77, 426, 387, 444),
+            make_line("make Earth a place where life can exist.", 77, 446, 296, 464),
+        )
+
+        regions = self.parser._split_block_into_regions(block)
+        lines = []
+        for line in regions[0]["lines"]:
+            line_text, _ = self.parser._extract_line_text_and_words(line)
+            lines.append(line_text)
+
+        assert self.parser._merge_drop_cap_lines(lines) == [
+            "Did you know that the sun is a star, just like the countless",
+            "points of light sparkling in the night sky? In fact, it is",
+            "relatively small compared to some of the other stars in the",
+            "Milky Way. But it’s still the object our little planetary family—",
+            "the solar system—whirls around, and its warmth and light",
+            "make Earth a place where life can exist.",
+        ]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

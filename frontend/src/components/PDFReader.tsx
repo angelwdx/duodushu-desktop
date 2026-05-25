@@ -78,6 +78,9 @@ function sortPDFTextItemsByReadingOrder(items: any[], pageWidth: number): any[] 
     const maxHeight = Math.max(aHeight, bHeight);
     const minHeight = Math.min(aHeight, bHeight);
     const heightRatio = maxHeight / Math.max(1, minHeight);
+    if (heightRatio > 2.5 && Math.abs(ay - by) > Math.max(4, minHeight * 0.5)) {
+      return by - ay;
+    }
     const referenceHeight = heightRatio > 1.5 ? minHeight : maxHeight;
     const lineThreshold = Math.max(4, referenceHeight * 0.65);
     if (Math.abs(ay - by) > lineThreshold) return by - ay; // y desc（高处先读）
@@ -206,6 +209,25 @@ function shouldInsertSpaceBetweenPDFItems(prev: any, curr: any): boolean {
   return gap > threshold;
 }
 
+function mergePDFDropCapLines(lines: string[]): string[] {
+  const merged: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const current = lines[i]?.trim() || "";
+    const next = lines[i + 1]?.trim() || "";
+    if (
+      current.length === 1 &&
+      /^[A-Z]$/.test(current) &&
+      /^[a-z]/.test(next)
+    ) {
+      merged.push(current + next);
+      i += 1;
+    } else {
+      merged.push(lines[i]);
+    }
+  }
+  return merged;
+}
+
 function buildStructuredTextFromPDFItems(items: any[], pageWidth: number): string {
   if (!items || items.length === 0) return "";
 
@@ -231,7 +253,11 @@ function buildStructuredTextFromPDFItems(items: any[], pageWidth: number): strin
       const currX = Number(item?.transform?.[4] || 0);
       const prevHeight = Number(prevItem?.height || 0);
       const currHeight = Number(item?.height || 0);
-      const lineThreshold = Math.max(4, Math.max(prevHeight, currHeight) * 0.65);
+      const maxHeight = Math.max(prevHeight, currHeight);
+      const minHeight = Math.min(prevHeight, currHeight);
+      const heightRatio = maxHeight / Math.max(1, minHeight);
+      const referenceHeight = heightRatio > 1.5 ? minHeight : maxHeight;
+      const lineThreshold = Math.max(4, referenceHeight * 0.65);
 
       const movedToNewLine =
         !!prevItem?.hasEOL ||
@@ -257,7 +283,7 @@ function buildStructuredTextFromPDFItems(items: any[], pageWidth: number): strin
   }
 
   flushLine();
-  return lines.join("\n");
+  return mergePDFDropCapLines(lines).join("\n");
 }
 
 async function resolveOutlinePageNumbers(

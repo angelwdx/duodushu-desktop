@@ -163,6 +163,7 @@ class PDFParser(BaseParser):
                         words_data.extend(line_words)
 
                 if region_lines:
+                    region_lines = self._merge_drop_cap_lines(region_lines)
                     text_parts.append("\n".join(region_lines))
                     block_idx += 1
 
@@ -313,6 +314,33 @@ class PDFParser(BaseParser):
             ordered.extend(band)
         return ordered
 
+    @staticmethod
+    def _merge_drop_cap_lines(lines: List[str]) -> List[str]:
+        """
+        合并常见下沉首字母：PDF 会把段首大写字母作为独立行输出，
+        下一行从小写续写，例如 "D" + "id you know..."。
+        """
+        merged: List[str] = []
+        idx = 0
+        while idx < len(lines):
+            current = lines[idx].strip()
+            next_line = lines[idx + 1].strip() if idx + 1 < len(lines) else ""
+            if (
+                len(current) == 1
+                and current.isalpha()
+                and current.isupper()
+                and next_line
+                and next_line[0].islower()
+            ):
+                merged.append(current + next_line)
+                idx += 2
+                continue
+
+            merged.append(lines[idx])
+            idx += 1
+
+        return merged
+
     def _regions_should_share_band(self, upper: Dict[str, Any], lower: Dict[str, Any]) -> bool:
         overlap = min(upper["y1"], lower["y1"]) - max(upper["y0"], lower["y0"])
         min_height = max(min(upper["y1"] - upper["y0"], lower["y1"] - lower["y0"]), 1.0)
@@ -459,18 +487,37 @@ class PDFParser(BaseParser):
         # 粗排：以 y0 为主键，x0 为次键
         rough = sorted(items, key=lambda item: (get_y0(item), get_x0(item)))
 
+        def should_share_visual_line(group: List[Dict], group_max_y1: float, item: Dict) -> bool:
+            y0 = get_y0(item)
+            y1 = get_y1(item)
+            item_h = max(y1 - y0, 0.5)
+            overlap = group_max_y1 - y0
+            if overlap < max(item_h * 0.35, 1.0):
+                return False
+
+            # 下沉首字母等装饰字形会纵向跨越多行。它们与正文行有 bbox
+            # 重叠，但不应把多行正文聚成同一个视觉行后按 x 重排。
+            for existing in group:
+                existing_h = max(get_y1(existing) - get_y0(existing), 0.5)
+                min_h = max(min(existing_h, item_h), 0.5)
+                height_ratio = max(existing_h, item_h) / min_h
+                if height_ratio > 2.5 and abs(get_y0(existing) - y0) > min_h * 0.5:
+                    continue
+
+                pair_overlap = min(get_y1(existing), y1) - max(get_y0(existing), y0)
+                if pair_overlap >= max(min_h * 0.35, 1.0):
+                    return True
+
+            return False
+
         # 将 y 范围有重叠的相邻项归入同一视觉行
         groups: List[List] = []
         current_group: List = [rough[0]]
         group_max_y1: float = get_y1(rough[0])
 
         for item in rough[1:]:
-            y0 = get_y0(item)
             y1 = get_y1(item)
-            item_h = max(y1 - y0, 0.5)
-            overlap = group_max_y1 - y0
-            # 重叠量达到当前元素高度的 35%（或至少 1pt）时，视为同一视觉行
-            if overlap >= max(item_h * 0.35, 1.0):
+            if should_share_visual_line(current_group, group_max_y1, item):
                 current_group.append(item)
                 group_max_y1 = max(group_max_y1, y1)
             else:
