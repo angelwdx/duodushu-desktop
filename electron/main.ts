@@ -759,9 +759,9 @@ function startPythonBackend() {
   let workingDir: string = "";
 
   if (IS_DEV) {
-    dataPath = path.join(appPath, 'backend', 'data');
+    dataPath = app.getPath('userData');
     workingDir = path.join(appPath, 'backend');
-    logToFile(`开发模式 - 使用应用目录: ${appPath}`);
+    logToFile(`开发模式 - 使用本地客户端数据目录: ${dataPath}`);
   } else {
     const portableExeDir = process.env.PORTABLE_EXECUTABLE_DIR;
     const exeDir = portableExeDir ? portableExeDir : path.dirname(process.execPath);

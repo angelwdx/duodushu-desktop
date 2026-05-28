@@ -14,12 +14,10 @@ import { Document, Page as PDFPage, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 
-// Configure PDF.js worker - using CDN version
-const pdfWorkerUrl = `https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.296/build/pdf.worker.min.mjs`;
+// Configure PDF.js worker - using local bundled version
+// 使用本地 worker 确保 PDF.js 版本一致，避免跨机器文本提取差异
+const pdfWorkerUrl = '/pdf.worker.modern.mjs';
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-
-// 注意：PDF 阅读需要联网加载 PDF.js worker 文件（约 700KB）
-// 首次加载后会缓存到浏览器，后续使用缓存版本
 
 const TTS_SPEED_OPTIONS = [
   { value: 1, label: "1.0x" },

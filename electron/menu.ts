@@ -1,7 +1,13 @@
 import { Menu, shell, app, BrowserWindow, MenuItemConstructorOptions, ipcMain } from 'electron';
 
-// 是否为开发模式
-const IS_DEV = !app.isPackaged;
+// 是否为开发模式（使用函数延迟求值）
+function getIsDev(): boolean {
+  try {
+    return !app.isPackaged;
+  } catch {
+    return true; // 默认返回开发模式
+  }
+}
 
 /**
  * 创建应用菜单
@@ -115,7 +121,7 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
         { role: 'zoomIn', label: '放大' },
         { role: 'zoomOut', label: '缩小' },
         { role: 'resetZoom', label: '重置缩放' },
-        ...(IS_DEV ? [
+        ...(getIsDev() ? [
           { type: 'separator' as const },
           { role: 'toggleDevTools' as const, label: '开发者工具' }
         ] : [])
