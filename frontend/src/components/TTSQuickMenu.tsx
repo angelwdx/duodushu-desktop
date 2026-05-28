@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 interface VoiceOption {
   id: string;
@@ -50,11 +51,15 @@ export default function TTSQuickMenu({
   onSpeedChange,
 }: TTSQuickMenuProps) {
   const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ left: 0, bottom: 0 });
   const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (!menuRef.current?.contains(target) && !popoverRef.current?.contains(target)) {
         setOpen(false);
       }
     };
@@ -62,6 +67,35 @@ export default function TTSQuickMenu({
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, []);
+
+  useEffect(() => {
+    if (!open || typeof window === "undefined") return;
+
+    const updatePosition = () => {
+      const rect = buttonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const popoverWidth = 256;
+      const viewportPadding = 12;
+      const left = Math.min(
+        Math.max(viewportPadding, rect.left),
+        window.innerWidth - popoverWidth - viewportPadding,
+      );
+
+      setMenuPosition({
+        left,
+        bottom: window.innerHeight - rect.top + 12,
+      });
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open]);
 
   const activeVoiceLabel = useMemo(() => {
     const matchedVoice = voices.find((option) => option.id === voice);
@@ -76,6 +110,7 @@ export default function TTSQuickMenu({
   return (
     <div ref={menuRef} className="relative shrink-0">
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         className="flex items-center gap-1.5 max-w-[11rem] px-3 py-1.5 rounded-full text-xs font-medium bg-white/80 border border-gray-200/60 text-gray-600 hover:bg-gray-100/80 hover:text-gray-800 transition-colors"
@@ -93,7 +128,11 @@ export default function TTSQuickMenu({
       </button>
 
       {open && (
-        <div className="absolute left-0 bottom-full mb-3 w-64 bg-white/95 backdrop-blur-xl border border-gray-100/60 rounded-2xl shadow-[0_10px_40px_rgba(0,0,0,0.15)] p-3 z-50">
+        createPortal(<div
+          ref={popoverRef}
+          className="fixed w-64 bg-white/95 backdrop-blur-xl border border-gray-100/60 rounded-2xl shadow-[0_10px_40px_rgba(0,0,0,0.15)] p-3 z-[9999]"
+          style={{ left: menuPosition.left, bottom: menuPosition.bottom }}
+        >
           <div className="px-2 pb-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest">朗读设置</div>
 
           <div className="px-2 pb-1 text-[11px] font-semibold text-gray-500">音色</div>
@@ -141,7 +180,7 @@ export default function TTSQuickMenu({
               );
             })}
           </div>
-        </div>
+        </div>, document.body)
       )}
     </div>
   );

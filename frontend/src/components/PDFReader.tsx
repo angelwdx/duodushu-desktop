@@ -679,26 +679,26 @@ export default function PDFReader({
     if (!pageDimensions) return 600;
     const PADDING = 32;
     const SAFETY_MARGIN = 16;
-    const TOOLBAR_HEIGHT = 48;
-    const containerWidth = containerSize.width - PADDING - SAFETY_MARGIN;
-    const containerHeight = containerSize.height - PADDING - SAFETY_MARGIN - TOOLBAR_HEIGHT;
+    const TOOLBAR_HEIGHT = 64;
+    const containerWidth = Math.max(180, containerSize.width - PADDING - SAFETY_MARGIN);
+    const containerHeight = Math.max(180, containerSize.height - PADDING - SAFETY_MARGIN - TOOLBAR_HEIGHT);
 
     // 双页模式下，每页可用宽度减半
     const effectiveContainerWidth = dualPageMode
-      ? (containerWidth - SPREAD_GAP) / 2
+      ? Math.max(120, (containerWidth - SPREAD_GAP) / 2)
       : containerWidth;
 
-    if (fitMode === "width") return effectiveContainerWidth;
+    if (fitMode === "width") return Math.max(120, effectiveContainerWidth);
     if (fitMode === "height") {
       const heightScale = containerHeight / pageDimensions.height;
-      return pageDimensions.width * heightScale;
+      return Math.max(120, pageDimensions.width * heightScale);
     }
     if (fitMode === "page") {
       const widthScale = effectiveContainerWidth / pageDimensions.width;
       const heightScale = containerHeight / pageDimensions.height;
-      return pageDimensions.width * Math.min(widthScale, heightScale);
+      return Math.max(120, pageDimensions.width * Math.min(widthScale, heightScale));
     }
-    return pageDimensions.width * scale;
+    return Math.max(120, pageDimensions.width * scale);
   }, [fitMode, scale, pageDimensions, containerSize, dualPageMode]);
 
   const renderWidth = getActualWidth();
@@ -1909,7 +1909,7 @@ export default function PDFReader({
       {...gestureBind()}
     >
       {viewMode === "pdf" ? (
-        <div className="flex-1 overflow-hidden flex" ref={scrollContainerRef}>
+        <div className="flex-1 overflow-hidden flex min-w-0" ref={scrollContainerRef}>
           {showOutline && outline.length > 0 && (
             <div className="w-64 bg-white border-r overflow-y-auto shrink-0">
               <div className="p-3 border-b bg-gray-50 font-medium text-sm text-gray-700 sticky top-0">
@@ -1963,7 +1963,7 @@ export default function PDFReader({
           )}
 
           <div
-            className="flex-1 overflow-auto p-4 flex justify-center"
+            className="flex-1 overflow-auto p-4 pb-20 flex justify-center min-w-0"
             ref={contentRef}
           >
               {pdfComponent}
@@ -1974,7 +1974,7 @@ export default function PDFReader({
       )}
 
       <div 
-        className="absolute bottom-0 left-0 w-full z-40 flex items-center justify-between gap-6 px-6 py-2 bg-white/90 backdrop-blur-md border-t border-gray-200/50 text-sm"
+        className="absolute bottom-0 left-0 w-full z-40 flex items-center justify-between gap-4 px-4 py-2 bg-white/90 backdrop-blur-md border-t border-gray-200/50 text-sm overflow-x-auto overscroll-x-contain whitespace-nowrap"
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
@@ -2041,7 +2041,7 @@ export default function PDFReader({
                 停止
               </button>
               {/* 当前朗读页 */}
-              <span className="text-xs text-gray-400 pl-0.5 inline-flex min-w-[16em]">
+              <span className="text-xs text-gray-400 pl-0.5 inline-flex min-w-[8em] lg:min-w-[16em]">
                 {tts.currentReadingPage !== null ? (
                   <>
                     <span>{tts.isPaused ? '已暂停' : `第 ${tts.currentReadingPage} 页`}</span>

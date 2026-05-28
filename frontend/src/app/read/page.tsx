@@ -20,6 +20,7 @@ import { createReaderShortcuts, SHORTCUT_TITLES } from "../../lib/shortcuts";
 import { normalizePdfPageText } from "../../lib/ttsText";
 
 const log = createLogger('ReaderPage');
+const READER_SIDEBAR_LAYOUT_KEY = "reader-sidebar-layout-v1";
 
 // Dynamic imports to avoid SSR issues with browser-only libraries
 const PDFReader = dynamic(() => import("../../components/PDFReader"), {
@@ -270,21 +271,89 @@ function ReaderContent() {
   const [rightSidebarWidth, setRightSidebarWidth] = useState(600); // Wider for dictionary/AI
   const [isResizingLeft, setIsResizingLeft] = useState(false);
   const [isResizingRight, setIsResizingRight] = useState(false);
+  const [sidebarMode, setSidebarMode] = useState<"dictionary" | "ai" | "notes">("dictionary");
   const [, setIsMobile] = useState(false);
+  const [sidebarLayoutLoaded, setSidebarLayoutLoaded] = useState(false);
 
   // Handle sidebar resize
   const handleLeftResizeStart = () => setIsResizingLeft(true);
   const handleRightResizeStart = () => setIsResizingRight(true);
 
+  const getResponsiveSidebarBounds = useCallback(() => {
+    if (typeof window === "undefined") {
+      return {
+        leftMax: 600,
+        rightMax: 600,
+      };
+    }
+
+    const viewportWidth = window.innerWidth;
+    return {
+      leftMax: Math.max(280, Math.min(600, Math.floor(viewportWidth * 0.28))),
+      rightMax: Math.max(320, Math.min(600, Math.floor(viewportWidth * 0.42))),
+    };
+  }, []);
+
+  const clampSidebarWidths = useCallback((leftWidth: number, rightWidth: number) => {
+    const { leftMax, rightMax } = getResponsiveSidebarBounds();
+    return {
+      leftWidth: Math.max(280, Math.min(leftMax, leftWidth)),
+      rightWidth: Math.max(320, Math.min(rightMax, rightWidth)),
+    };
+  }, [getResponsiveSidebarBounds]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    try {
+      const saved = localStorage.getItem(READER_SIDEBAR_LAYOUT_KEY);
+      if (!saved) {
+        setSidebarLayoutLoaded(true);
+        return;
+      }
+
+      const parsed = JSON.parse(saved);
+      const nextLeftWidth = typeof parsed.leftWidth === "number" ? parsed.leftWidth : 320;
+      const nextRightWidth = typeof parsed.rightWidth === "number" ? parsed.rightWidth : 600;
+      const clamped = clampSidebarWidths(nextLeftWidth, nextRightWidth);
+
+      setLeftSidebarWidth(clamped.leftWidth);
+      setRightSidebarWidth(clamped.rightWidth);
+      setLeftSidebarCollapsed(parsed.leftCollapsed ?? true);
+      setRightSidebarCollapsed(parsed.rightCollapsed ?? true);
+
+      if (["dictionary", "ai", "notes"].includes(parsed.sidebarMode)) {
+        setSidebarMode(parsed.sidebarMode);
+      }
+    } catch {
+      /* ignore invalid saved layout */
+    } finally {
+      setSidebarLayoutLoaded(true);
+    }
+  }, [clampSidebarWidths]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !sidebarLayoutLoaded) return;
+
+    localStorage.setItem(READER_SIDEBAR_LAYOUT_KEY, JSON.stringify({
+      leftCollapsed: leftSidebarCollapsed,
+      rightCollapsed: rightSidebarCollapsed,
+      leftWidth: leftSidebarWidth,
+      rightWidth: rightSidebarWidth,
+      sidebarMode,
+    }));
+  }, [leftSidebarCollapsed, rightSidebarCollapsed, leftSidebarWidth, rightSidebarWidth, sidebarMode, sidebarLayoutLoaded]);
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
+      const { leftMax, rightMax } = getResponsiveSidebarBounds();
       if (isResizingLeft) {
-        setLeftSidebarWidth(Math.max(320, Math.min(600, e.clientX)));
+        setLeftSidebarWidth(Math.max(280, Math.min(leftMax, e.clientX)));
       }
       if (isResizingRight) {
         const containerWidth = window.innerWidth;
         const newWidth = containerWidth - e.clientX;
-        setRightSidebarWidth(Math.max(320, Math.min(600, newWidth)));
+        setRightSidebarWidth(Math.max(320, Math.min(rightMax, newWidth)));
       }
     };
 
@@ -307,14 +376,16 @@ function ReaderContent() {
         document.removeEventListener("mouseup", handleMouseUp);
       };
     }
-  }, [isResizingLeft, isResizingRight]);
+  }, [getResponsiveSidebarBounds, isResizingLeft, isResizingRight]);
 
   // Check screen size
   useEffect(() => {
     const checkScreen = () => {
       const mobile = window.innerWidth < 768;
       setIsMobile(mobile);
-      // Auto-collapse on mobile
+      setLeftSidebarWidth((width) => clampSidebarWidths(width, 600).leftWidth);
+      setRightSidebarWidth((width) => clampSidebarWidths(320, width).rightWidth);
+      // Only force-collapse on phone-sized screens; desktop widths should honor saved state.
       if (mobile) {
         setLeftSidebarCollapsed(true);
         setRightSidebarCollapsed(true);
@@ -324,13 +395,9 @@ function ReaderContent() {
     checkScreen();
     window.addEventListener("resize", checkScreen);
     return () => window.removeEventListener("resize", checkScreen);
-  }, []);
+  }, [clampSidebarWidths]);
 
   const fileUrl = book?.download_url ? `${getApiUrl()}${book.download_url}` : "";
-
-  // --- AI / Dictionary Toggle ---
-  const [sidebarMode, setSidebarMode] = useState<"dictionary" | "ai" | "notes">
-    ("dictionary");
 
   // --- 键盘快捷键 ---
   const toggleSidebarMode = useCallback((mode: "dictionary" | "ai" | "notes") => {
@@ -932,7 +999,7 @@ function ReaderContent() {
           )}
 
           {/* Center: Universal Reader */}
-          <div className="flex-1 relative bg-gray-50 overflow-hidden flex flex-col min-h-0">
+          <div className="flex-1 relative bg-gray-50 overflow-hidden flex flex-col min-h-0 min-w-0">
             {book?.format?.toLowerCase() === "pdf" ? (
               <PDFReader
                 fileUrl={fileUrl}
@@ -1042,7 +1109,7 @@ function ReaderContent() {
           <div
             className={`${ 
               rightSidebarCollapsed ? "w-0" : "" 
-            } shrink-0 z-20 h-full bg-white border-l shadow-xl flex flex-col`}
+            } shrink-0 z-20 h-full bg-white border-l shadow-xl flex flex-col overflow-hidden`}
             style={!rightSidebarCollapsed ? { width: rightSidebarWidth } : {}}
           >
             {/* Header with close button */}
