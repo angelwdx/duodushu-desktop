@@ -75,9 +75,6 @@ jobs:
           # Disable electron-builder auto-publish to let workflow handle it
           GH_TOKEN: ""
           CSC_IDENTITY_AUTO_DISCOVERY: false
-          # Use Electron mirror for faster download in China
-          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
-          ELECTRON_CUSTOM_DIR: "{{ version }}"
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             source backend/.venv/Scripts/activate
@@ -98,7 +95,7 @@ jobs:
             RETRY_COUNT=$((RETRY_COUNT + 1))
             if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
               echo "Build failed, retrying ($RETRY_COUNT/$MAX_RETRIES)..."
-              sleep 10
+              sleep 15
             fi
           done
           if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
