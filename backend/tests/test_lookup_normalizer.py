@@ -24,3 +24,8 @@ def test_extract_lookup_segments_splits_dashed_tokens():
 def test_normalize_lookup_word_preserves_japanese_terms():
     assert normalize_lookup_word(" 一軒家 ") == "一軒家"
     assert normalize_lookup_word("「夜 市」") == "夜市"
+
+
+def test_normalize_lookup_word_preserves_korean_terms():
+    assert normalize_lookup_word(" 한 국어 ") == "한국어"
+    assert normalize_lookup_word("『테스트』") == "테스트"

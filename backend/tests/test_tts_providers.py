@@ -27,6 +27,11 @@ def test_edge_voice_map_contains_japanese_voices():
     assert EDGE_VOICE_MAP["keita"] == "ja-JP-KeitaNeural"
 
 
+def test_edge_voice_map_contains_korean_voices():
+    assert EDGE_VOICE_MAP["sunhi"] == "ko-KR-SunHiNeural"
+    assert EDGE_VOICE_MAP["injoon"] == "ko-KR-InJoonNeural"
+
+
 def test_edge_voice_map_english_only_keeps_us_and_uk():
     assert "aria" in EDGE_VOICE_MAP
     assert "sonia" in EDGE_VOICE_MAP

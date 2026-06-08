@@ -48,6 +48,9 @@ EDGE_VOICE_MAP: dict[str, str] = {
     # ja-JP
     "nanami":        "ja-JP-NanamiNeural",
     "keita":         "ja-JP-KeitaNeural",
+    # ko-KR
+    "sunhi":         "ko-KR-SunHiNeural",
+    "injoon":        "ko-KR-InJoonNeural",
 }
 
 

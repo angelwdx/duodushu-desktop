@@ -37,6 +37,8 @@ def test_normalize_book_language_handles_common_values():
     assert normalize_book_language("ja-JP") == "ja"
     assert normalize_book_language("en_US") == "en"
     assert normalize_book_language("zh-Hans") == "zh"
+    assert normalize_book_language("ko-KR") == "ko"
+    assert normalize_book_language("kor") == "ko"
     assert normalize_book_language("fr") == "unknown"
 
 
@@ -44,6 +46,11 @@ def test_detect_book_language_prefers_metadata_and_japanese_signal():
     assert detect_book_language("This is a novel written in English.", metadata_language="ja") == "ja"
     assert detect_book_language("これは日本語の小説です。漢字にふりがなを付けたい。") == "ja"
     assert detect_book_language("This is a novel written in English with several paragraphs of plain prose.") == "en"
+
+
+def test_detect_book_language_recognizes_korean_and_chinese_text():
+    assert detect_book_language("이것은 한국어 전자책입니다. 문장이 자연스럽게 이어집니다.") == "ko"
+    assert detect_book_language("这是一本中文电子书，内容主要是连续的中文段落。") == "zh"
 
 
 def test_annotate_japanese_text_adds_ruby_for_common_okurigana_words():

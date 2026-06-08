@@ -258,6 +258,45 @@ class TestDetectColumns:
         assert text == "Hi,!"
         assert [word["text"] for word in words] == ["Hi,!"]
 
+    def test_extract_line_text_and_words_keeps_cjk_text_without_fake_spaces(self):
+        line = {
+            "spans": [
+                {
+                    "chars": [
+                        {"c": "学", "bbox": [10, 10, 20, 22]},
+                        {"c": "校", "bbox": [24, 10, 34, 22]},
+                        {"c": "へ", "bbox": [38, 10, 48, 22]},
+                        {"c": "行", "bbox": [52, 10, 62, 22]},
+                        {"c": "く", "bbox": [66, 10, 76, 22]},
+                    ]
+                }
+            ]
+        }
+
+        text, words = self.parser._extract_line_text_and_words(line)
+
+        assert text == "学校へ行く"
+        assert [word["text"] for word in words] == ["学校へ行く"]
+
+    def test_extract_line_text_and_words_keeps_korean_word_spacing(self):
+        line = {
+            "spans": [
+                {
+                    "chars": [
+                        {"c": "한", "bbox": [10, 10, 20, 22]},
+                        {"c": "국", "bbox": [22, 10, 32, 22]},
+                        {"c": "사", "bbox": [48, 10, 58, 22]},
+                        {"c": "람", "bbox": [60, 10, 70, 22]},
+                    ]
+                }
+            ]
+        }
+
+        text, words = self.parser._extract_line_text_and_words(line)
+
+        assert text == "한국 사람"
+        assert [word["text"] for word in words] == ["한국", "사람"]
+
     def test_short_blocks_still_detect_double_columns(self):
         left_col = [
             make_block(50, 100, 180, 130, text_len=8),

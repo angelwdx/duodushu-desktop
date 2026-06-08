@@ -8,9 +8,10 @@ import TTSQuickMenu from './TTSQuickMenu';
 import { saveEpubState, getEpubState, getEpubLocations, saveEpubLocations } from '../lib/epubCache';
 import { createLogger } from '../lib/logger';
 import { type FuriganaAnnotation, type JapaneseLookupSegment } from '../lib/api';
-import { containsJapaneseText, isJapaneseBookLanguage } from '../lib/japaneseText';
+import { containsEastAsianText, containsJapaneseText, isJapaneseBookLanguage } from '../lib/japaneseText';
 import { ensureFuriganaAnnotations } from '../lib/japaneseFurigana';
 import { preprocessTTSPlainText } from '../lib/ttsText';
+import { normalizeLookupWord } from '../lib/wordLookup';
 
 const log = createLogger('EPUBReader');
 const FURIGANA_PREFERENCE_KEY = 'reader_japanese_furigana_enabled';
@@ -53,9 +54,7 @@ type AnnotationDisplayPiece =
   | { type: 'text'; text: string; start: number; end: number }
   | { type: 'ruby'; base: string; reading: string; start: number; end: number };
 
-const LOOKUP_WORD_CHAR_PATTERN = /[\w\u00C0-\u024F\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヵヶー'-]/;
-const LOOKUP_WORD_EDGE_PATTERN = /^[^A-Za-z0-9\u00C0-\u024F\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヵヶー'-]+|[^A-Za-z0-9\u00C0-\u024F\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヵヶー'-]+$/g;
-const LOOKUP_WORD_EDGE_QUOTES_PATTERN = /^['-]+|['-]+$/g;
+const LOOKUP_WORD_CHAR_PATTERN = /[\w\u00C0-\u024F\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヵヶー\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7af\ud7b0-\ud7ff'-]/;
 const SENTENCE_SPLIT_PATTERN = /[^。！？.!?\n]+[。！？.!?]*/g;
 const FORCE_HORIZONTAL_LAYOUT_STYLE_ID = 'duodushu-force-horizontal-layout';
 const EPUB_STAGE_OVERRIDE_STYLE_ID = 'duodushu-epub-stage-overrides';
@@ -909,19 +908,6 @@ export default function EPUBReader({
       overlay.style.display = 'block';
   }, []);
 
-  const normalizeLookupWord = useCallback((rawWord: string): string => {
-      const trimmed = rawWord
-          .trim()
-          .replace(LOOKUP_WORD_EDGE_PATTERN, '')
-          .replace(LOOKUP_WORD_EDGE_QUOTES_PATTERN, '');
-
-      if (!trimmed) return '';
-      if (containsJapaneseText(trimmed)) {
-          return trimmed.replace(/[ \t\u3000]+/g, '');
-      }
-      return trimmed.toLowerCase();
-  }, []);
-
   const getDisplayPiecesFromAnnotation = useCallback((annotation: FuriganaAnnotation): AnnotationDisplayPiece[] => {
       const pieces: AnnotationDisplayPiece[] = [];
       let cursor = 0;
@@ -1061,7 +1047,7 @@ export default function EPUBReader({
       }
 
       return wrapper;
-  }, [appendAnnotationContentRange, getDisplayPiecesFromAnnotation, normalizeLookupWord]);
+  }, [appendAnnotationContentRange, getDisplayPiecesFromAnnotation]);
 
   // 注意：此函数通过 furiganaEnabledRef.current（而非闭包中的 showFurigana）读取假名开关，
   // 保证被 epub.js hooks 注册的旧引用也能拿到最新状态。
@@ -1255,20 +1241,20 @@ export default function EPUBReader({
           rect: getLookupElementRect(lookupElement),
           sourceNode: lookupElement,
       };
-  }, [getLookupElementRect, normalizeLookupWord]);
+  }, [getLookupElementRect]);
 
   const extractContextSentence = useCallback((rawText: string, target: string): string => {
       const fullText = rawText.replace(/\s+/g, ' ').trim();
       if (!fullText) return '';
 
       const sentences = fullText.match(SENTENCE_SPLIT_PATTERN) || [];
-      const normalizedTarget = containsJapaneseText(target) ? target : target.toLowerCase();
+      const normalizedTarget = containsEastAsianText(target) ? target : target.toLowerCase();
 
       for (const sentence of sentences) {
           const candidate = sentence.trim();
           if (!candidate) continue;
 
-          const haystack = containsJapaneseText(normalizedTarget) ? candidate : candidate.toLowerCase();
+          const haystack = containsEastAsianText(normalizedTarget) ? candidate : candidate.toLowerCase();
           if (haystack.includes(normalizedTarget)) {
               return candidate;
           }
@@ -3099,7 +3085,7 @@ export default function EPUBReader({
                             ? findLookupSegmentAtOffset(textAnnotation.lookup_segments || [], offset)
                             : null;
                         const cleanWord = normalizeLookupWord(lookupSegment?.lookup_text || lookupRange?.toString() || '');
-                        const minLookupLength = containsJapaneseText(cleanWord) ? 1 : 2;
+                        const minLookupLength = containsEastAsianText(cleanWord) ? 1 : 2;
 
                         if (cleanWord && cleanWord.length >= minLookupLength) {
                                 log.debug('Looked up word:', cleanWord);

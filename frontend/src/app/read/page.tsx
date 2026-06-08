@@ -12,12 +12,12 @@ import SelectionToolbar from "../../components/SelectionToolbar";
 import { useGlobalTextSelection } from "../../hooks/useGlobalTextSelection";
 
 import { getApiUrl, trackWordQuery } from "../../lib/api";
-import { containsJapaneseText } from "../../lib/japaneseText";
 import { createLogger } from "../../lib/logger";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { createReaderShortcuts, SHORTCUT_TITLES } from "../../lib/shortcuts";
 import { normalizePdfPageText } from "../../lib/ttsText";
+import { normalizeLookupWord } from "../../lib/wordLookup";
 
 const log = createLogger('ReaderPage');
 const READER_SIDEBAR_LAYOUT_KEY = "reader-sidebar-layout-v1";
@@ -683,24 +683,13 @@ function ReaderContent() {
       setSidebarMode("dictionary");
       setRightSidebarCollapsed(false); // 自动展开右侧栏
 
-      const word = containsJapaneseText(rawWord)
-        ? rawWord
-            .trim()
-            .replace(
-              /^[\s"'“”‘’「」『』（）()【】〔〕［］｛｝〈〉《》、。！？・…—–-]+|[\s"'“”‘’「」『』（）()【】〔〕［］｛｝〈〉《》、。！？・…—–-]+$/g,
-              "",
-            )
-            .replace(/[ \t\u3000]+/g, "")
-        : rawWord
-            .replace(/^[^\w]+|[^\w]+$/g, "")
-            .replace(/[—–]/g, "-")
-            .toLowerCase();
+      const word = normalizeLookupWord(rawWord);
 
       if (!word) return;
 
       // Check if sourceOrContext is a dictionary source ID
       // 改进判断逻辑:如果是同一个词的查询,且参数较短(不像句子),则认为是切换词典源
-      const activeLookupTerm = activeWord?.lookup_term || activeWord?.word;
+      const activeLookupTerm = normalizeLookupWord(activeWord?.lookup_term || activeWord?.word || "") || "";
       const isSwitchingSource = activeLookupTerm === word && sourceOrContext && sourceOrContext.length < 50 && !sourceOrContext.includes(' ');
       const isSource = isSwitchingSource;
 
@@ -732,7 +721,7 @@ function ReaderContent() {
         } else {
           // 页面无文本或未找到（如从生词本列表点击时）——回退到已保存的上下文
           const savedWord = savedWords.find(
-            (w) => w.word.toLowerCase() === word.toLowerCase(),
+            (w) => normalizeLookupWord(w.word) === word,
           );
           contextSentence = savedWord?.primary_context?.context_sentence
             ? savedWord.primary_context.context_sentence

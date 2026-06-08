@@ -7,7 +7,14 @@ import TTSLoadingDots from "./TTSLoadingDots";
 import TTSQuickMenu from "./TTSQuickMenu";
 import { getApiUrl } from "../lib/api";
 import { normalizePdfPageText, preprocessTTSPlainText } from "../lib/ttsText";
-import { getLookupWordFromText, splitTextForWordLookup, splitWordDataForLookup } from "../lib/wordLookup";
+import {
+  containsEastAsianLookupText,
+  getLookupWordFromText,
+  normalizeLookupComparableText,
+  normalizeLookupWord,
+  splitTextForWordLookup,
+  splitWordDataForLookup,
+} from "../lib/wordLookup";
 import { createLogger } from "../lib/logger";
 const logger = createLogger("PDFReader");
 import { Document, Page as PDFPage, pdfjs } from "react-pdf";
@@ -866,11 +873,9 @@ export default function PDFReader({
     )
       return;
 
-    const targetWord = pendingHighlight.word?.toLowerCase() || "";
+    const targetWord = normalizeLookupWord(pendingHighlight.word || "") || "";
     // Clean target context: remove punctuation for fuzzy matching
-    const targetContext = pendingHighlight.text
-      ? pendingHighlight.text.toLowerCase().replace(/[^\w\s]/g, "")
-      : "";
+    const targetContext = normalizeLookupComparableText(pendingHighlight.text || "");
 
     if (!targetWord && !targetContext) return;
 
@@ -881,38 +886,43 @@ export default function PDFReader({
     const candidates = processedWords
       .map((w, i) => ({ w, i }))
       .filter(
-        ({ w }) =>
-          targetWord &&
-          (w.text.toLowerCase() === targetWord ||
-            w.text.toLowerCase().includes(targetWord)),
+        ({ w }) => {
+          const normalizedWord = normalizeLookupWord(w.text) || "";
+          return targetWord && (normalizedWord === targetWord || normalizedWord.includes(targetWord));
+        },
       );
 
     if (candidates.length > 0) {
       if (targetContext && candidates.length > 1) {
+        const useEastAsianContext = containsEastAsianLookupText(targetContext);
         // Disambiguate using context
         for (const { w, i } of candidates) {
           // Extract a window of words around the candidate
           const windowSize = 20;
           const start = Math.max(0, i - windowSize);
           const end = Math.min(processedWords.length, i + windowSize);
-          const contextWindow = processedWords
+          const contextWindow = normalizeLookupComparableText(
+            processedWords
             .slice(start, end)
-            .map((pw) => pw.text.toLowerCase().replace(/[^\w\s]/g, ""))
-            .join(" ");
+            .map((pw) => pw.text)
+            .join(useEastAsianContext ? "" : " "),
+          );
 
-          // Simple scoring: check if targetContext is roughly in contextWindow
-          // We can check overlap tokens
-          const contextTokens = targetContext.split(/\s+/);
-          const windowTokens = contextWindow.split(/\s+/);
-          
-          let overlap = 0;
-          for (const token of contextTokens) {
-             if (windowTokens.includes(token)) overlap++;
+          let score = 0;
+          if (useEastAsianContext) {
+            if (contextWindow.includes(targetContext)) {
+              score = targetContext.length;
+            }
+          } else {
+            const contextTokens = targetContext.split(/\s+/);
+            const windowTokens = contextWindow.split(/\s+/);
+            let overlap = 0;
+            for (const token of contextTokens) {
+               if (windowTokens.includes(token)) overlap++;
+            }
+            score = overlap / (contextTokens.length || 1);
           }
-           
-          // Normalize score by length
-          const score = overlap / (contextTokens.length || 1);
-          
+
           if (score > bestScore) {
             bestScore = score;
             bestMatch = w;

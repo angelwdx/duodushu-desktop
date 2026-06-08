@@ -440,6 +440,7 @@ export interface TTSConfigEdge {
   voice: string;
   voice_japanese: string;
   voice_chinese: string;
+  voice_korean: string;
   speed: number;
 }
 export interface TTSConfigOpenAIApi {
@@ -477,7 +478,7 @@ export interface TTSCacheInfo {
 
 const DEFAULT_TTS_CONFIG: TTSConfig = {
   provider: 'edge',
-  edge: { voice: 'aria', voice_japanese: 'nanami', voice_chinese: 'xiaoxiao', speed: 1 },
+  edge: { voice: 'aria', voice_japanese: 'nanami', voice_chinese: 'xiaoxiao', voice_korean: 'sunhi', speed: 1 },
   openai_api: { base_url: 'https://api.openai.com/v1', api_key: '', model: 'tts-1', voice: 'alloy', speed: 1 },
   qwen3: { base_url: 'http://127.0.0.1:18790/v1', model: 'tts-1', voice: '塔塔', voice_japanese: '', speed: 1 },
 };

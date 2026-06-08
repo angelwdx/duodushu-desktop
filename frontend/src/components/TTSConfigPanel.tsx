@@ -47,6 +47,11 @@ const EDGE_VOICES_ZH = [
   { id: 'yunxi', label: 'Yunxi（中文男声）' },
 ];
 
+const EDGE_VOICES_KO = [
+  { id: 'sunhi', label: 'SunHi（韩语女声）' },
+  { id: 'injoon', label: 'InJoon（韩语男声）' },
+];
+
 const TTS_SPEED_OPTIONS = [
   { value: '1', label: '1.0x' },
   { value: '1.1', label: '1.1x' },
@@ -120,7 +125,7 @@ export default function TTSConfigPanel() {
   const resetToDefaults = () => {
     setConfig({
       provider: 'edge',
-      edge: { voice: 'aria', voice_japanese: 'nanami', voice_chinese: 'xiaoxiao', speed: 1 },
+      edge: { voice: 'aria', voice_japanese: 'nanami', voice_chinese: 'xiaoxiao', voice_korean: 'sunhi', speed: 1 },
       openai_api: { base_url: 'https://api.openai.com/v1', api_key: '', model: 'tts-1', voice: 'alloy', speed: 1 },
       qwen3: { base_url: 'http://127.0.0.1:18790/v1', model: 'tts-1', voice: '塔塔', voice_japanese: '', speed: 1 },
     });
@@ -265,6 +270,12 @@ export default function TTSConfigPanel() {
             value={config.edge.voice_chinese}
             onChange={v => updateEdge({ voice_chinese: v })}
             options={EDGE_VOICES_ZH.map(v => ({ value: v.id, label: v.label }))}
+          />
+          <SelectField
+            label="韩语默认音色"
+            value={config.edge.voice_korean}
+            onChange={v => updateEdge({ voice_korean: v })}
+            options={EDGE_VOICES_KO.map(v => ({ value: v.id, label: v.label }))}
           />
           <SelectField
             label="默认速度"

@@ -1,4 +1,5 @@
 const LOOKUP_SEGMENT_RE = /[A-Za-zÀ-ɏ]+(?:['’][A-Za-zÀ-ɏ]+)*/g;
+const LOOKUP_SEGMENT_FULL_RE = /^[A-Za-zÀ-ɏ]+(?:['’][A-Za-zÀ-ɏ]+)*$/;
 const OCR_JOIN_STOPWORDS = new Set([
   "a", "an", "and", "as", "at", "be", "but", "by", "for", "from", "if",
   "in", "into", "is", "it", "of", "on", "or", "than", "that", "the", "to",
@@ -9,6 +10,11 @@ const CONTRACTION_WORDS = new Set([
   "it's", "that's", "what's", "who's", "there's", "here's", "let's", "he's",
   "she's", "how's", "where's", "when's", "why's",
 ]);
+const LOOKUP_EAST_ASIAN_EDGE_PATTERN = /^[\s\u3000"'“”‘’「」『』（）()【】〔〕［］｛｝〈〉《》、。！？・…—–-]+|[\s\u3000"'“”‘’「」『』（）()【】〔〕［］｛｝〈〉《》、。！？・…—–-]+$/g;
+const HAN_CHAR_RE = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF々〆ヵヶ]/;
+const KANA_CHAR_RE = /[\u3040-\u30FFー]/;
+const HANGUL_CHAR_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uAC00-\uD7AF\uD7B0-\uD7FF]/;
+const EAST_ASIAN_CHAR_RE = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF々〆ヵヶー\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uAC00-\uD7AF\uD7B0-\uD7FF]/;
 
 type LookupSegment = {
   raw: string;
@@ -26,6 +32,27 @@ type SplittableWordData = {
   block_id?: number;
 };
 
+function isLatinChar(char: string): boolean {
+  return /^[A-Za-zÀ-ɏ]$/.test(char);
+}
+
+function isHanChar(char: string): boolean {
+  return HAN_CHAR_RE.test(char);
+}
+
+function isKanaChar(char: string): boolean {
+  return KANA_CHAR_RE.test(char);
+}
+
+function isHangulChar(char: string): boolean {
+  return HANGUL_CHAR_RE.test(char);
+}
+
+export function containsEastAsianLookupText(text?: string | null): boolean {
+  if (!text) return false;
+  return EAST_ASIAN_CHAR_RE.test(text);
+}
+
 export function normalizeLookupWord(raw: string): string | null {
   if (!raw) return null;
 
@@ -34,7 +61,14 @@ export function normalizeLookupWord(raw: string): string | null {
 
   word = word.replace(/[’]/g, "'");
 
-  const directMatch = word.match(/^[A-Za-zÀ-ɏ]+(?:'[A-Za-zÀ-ɏ]+)*$/);
+  if (containsEastAsianLookupText(word)) {
+    const normalized = word
+      .replace(LOOKUP_EAST_ASIAN_EDGE_PATTERN, "")
+      .replace(/[ \t\u3000]+/g, "");
+    return normalized || null;
+  }
+
+  const directMatch = word.match(LOOKUP_SEGMENT_FULL_RE);
   if (!directMatch) {
     const segments = word.match(LOOKUP_SEGMENT_RE);
     if (!segments || segments.length === 0) return null;
@@ -54,26 +88,152 @@ export function normalizeLookupWord(raw: string): string | null {
   return word || null;
 }
 
+export function normalizeLookupComparableText(text: string): string {
+  if (!text) return "";
+
+  const normalized = text.replace(/[’]/g, "'").trim();
+  if (!normalized) return "";
+
+  if (containsEastAsianLookupText(normalized)) {
+    return normalized
+      .replace(LOOKUP_EAST_ASIAN_EDGE_PATTERN, "")
+      .replace(/[ \t\u3000、。！？・…，．,:;；]+/g, "");
+  }
+
+  return normalized
+    .toLowerCase()
+    .replace(/[^a-z0-9\u00C0-\u024F'\s]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function createLookupSegment(raw: string, start: number, end: number): LookupSegment | null {
+  const normalized = normalizeLookupWord(raw);
+  if (!normalized) return null;
+  return { raw, normalized, start, end };
+}
+
+function splitLongHanRun(text: string, start: number): LookupSegment[] {
+  const segments: LookupSegment[] = [];
+  if (text.length <= 4) {
+    const segment = createLookupSegment(text, start, start + text.length);
+    return segment ? [segment] : [];
+  }
+
+  let offset = 0;
+  while (offset < text.length) {
+    const remaining = text.length - offset;
+    let chunkLength = remaining;
+    if (remaining > 4) {
+      chunkLength = offset === 0 && remaining % 2 === 1 ? 3 : 2;
+    }
+
+    const chunk = text.slice(offset, offset + chunkLength);
+    const segment = createLookupSegment(chunk, start + offset, start + offset + chunkLength);
+    if (segment) segments.push(segment);
+    offset += chunkLength;
+  }
+
+  return segments;
+}
+
+function splitLongKanaRun(text: string, start: number): LookupSegment[] {
+  const segments: LookupSegment[] = [];
+  if (text.length <= 8) {
+    const segment = createLookupSegment(text, start, start + text.length);
+    return segment ? [segment] : [];
+  }
+
+  for (let offset = 0; offset < text.length; offset += 4) {
+    const chunk = text.slice(offset, offset + 4);
+    const segment = createLookupSegment(chunk, start + offset, start + offset + chunk.length);
+    if (segment) segments.push(segment);
+  }
+
+  return segments;
+}
+
 export function getLookupSegments(text: string): LookupSegment[] {
   if (!text) return [];
 
-  const directSegments = Array.from(text.matchAll(LOOKUP_SEGMENT_RE)).map((match) => {
-    const raw = match[0];
-    const start = match.index ?? 0;
-    return {
-      raw,
-      normalized: normalizeLookupWord(raw) ?? raw.replace(/[’]/g, "'").toLowerCase(),
-      start,
-      end: start + raw.length,
-    };
-  });
+  const directSegments: LookupSegment[] = [];
+  let offset = 0;
+
+  while (offset < text.length) {
+    const current = text[offset];
+    if (!current) break;
+
+    if (isLatinChar(current)) {
+      let end = offset + 1;
+      while (end < text.length) {
+        const next = text[end];
+        if (isLatinChar(next)) {
+          end += 1;
+          continue;
+        }
+        if ((next === "'" || next === "’") && end + 1 < text.length && isLatinChar(text[end + 1])) {
+          end += 2;
+          continue;
+        }
+        break;
+      }
+
+      const segment = createLookupSegment(text.slice(offset, end), offset, end);
+      if (segment) directSegments.push(segment);
+      offset = end;
+      continue;
+    }
+
+    if (isHangulChar(current)) {
+      let end = offset + 1;
+      while (end < text.length && isHangulChar(text[end])) {
+        end += 1;
+      }
+      const segment = createLookupSegment(text.slice(offset, end), offset, end);
+      if (segment) directSegments.push(segment);
+      offset = end;
+      continue;
+    }
+
+    if (isHanChar(current)) {
+      let end = offset + 1;
+      while (end < text.length && isHanChar(text[end])) {
+        end += 1;
+      }
+      while (end < text.length && isKanaChar(text[end])) {
+        end += 1;
+      }
+
+      const raw = text.slice(offset, end);
+      const segments = /[\u3040-\u30FFー]/.test(raw) ? splitLongKanaRun(raw, offset) : splitLongHanRun(raw, offset);
+      directSegments.push(...segments);
+      offset = end;
+      continue;
+    }
+
+    if (isKanaChar(current)) {
+      let end = offset + 1;
+      while (end < text.length && isKanaChar(text[end])) {
+        end += 1;
+      }
+      directSegments.push(...splitLongKanaRun(text.slice(offset, end), offset));
+      offset = end;
+      continue;
+    }
+
+    offset += 1;
+  }
 
   if (directSegments.length !== 1) {
     return directSegments;
   }
 
   const onlySegment = directSegments[0];
-  if (onlySegment.raw.length < 7 || onlySegment.raw.length !== text.length || /[^A-Za-zÀ-ɏ]/.test(text)) {
+  if (
+    onlySegment.raw.length < 7 ||
+    onlySegment.raw.length !== text.length ||
+    !LOOKUP_SEGMENT_FULL_RE.test(text)
+  ) {
     return directSegments;
   }
 
@@ -105,7 +265,24 @@ export function getLookupWordFromText(text: string, clickRatio = 0.5): string | 
 }
 
 export function splitTextForWordLookup(text: string): string[] {
-  return text.split(/([A-Za-zÀ-ɏ]+(?:['’][A-Za-zÀ-ɏ]+)*)/);
+  if (!text) return [];
+
+  const segments = getLookupSegments(text);
+  if (segments.length === 0) return [text];
+
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const segment of segments) {
+    if (segment.start > cursor) {
+      parts.push(text.slice(cursor, segment.start));
+    }
+    parts.push(text.slice(segment.start, segment.end));
+    cursor = segment.end;
+  }
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+  return parts;
 }
 
 export function splitWordDataForLookup<T extends SplittableWordData>(word: T): T[] {

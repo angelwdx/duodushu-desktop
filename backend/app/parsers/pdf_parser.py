@@ -7,6 +7,7 @@ PDF解析器 - 使用 PyMuPDF (fitz) 进行文字提取
 
 import fitz  # PyMuPDF
 import logging
+import re
 from pathlib import Path
 from .base import BaseParser
 from typing import Dict, Any, List, Tuple, Optional
@@ -16,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 INLINE_PUNCTUATION = set(",.;:!?)]}%")
 OPENING_PUNCTUATION = set("([{")
+CJK_CHAR_RE = re.compile(r"[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF々〆ヵヶー]")
+HANGUL_CHAR_RE = re.compile(r"[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uAC00-\uD7AF\uD7B0-\uD7FF]")
 
 
 class PDFParser(BaseParser):
@@ -459,9 +462,25 @@ class PDFParser(BaseParser):
         if gap <= 0:
             return False
 
+        if self._is_cjk_char(prev_c) and self._is_cjk_char(curr_c):
+            threshold = max(5.0, min(max(prev_width, curr_width) * 0.95, 14.0))
+            return gap > threshold
+
+        if self._is_hangul_char(prev_c) and self._is_hangul_char(curr_c):
+            threshold = max(3.0, min(max(prev_width, curr_width) * 0.75, 12.0))
+            return gap > threshold
+
         # 对英文字体常见 kerning 做保守容忍；gap 明显大于字符宽度时才补空格。
         threshold = max(1.2, min(max(prev_width, curr_width) * 0.35, 8.0))
         return gap > threshold
+
+    @staticmethod
+    def _is_cjk_char(char: str) -> bool:
+        return bool(CJK_CHAR_RE.fullmatch(char))
+
+    @staticmethod
+    def _is_hangul_char(char: str) -> bool:
+        return bool(HANGUL_CHAR_RE.fullmatch(char))
 
     @staticmethod
     def _sort_visual_line_order(items: List[Dict], get_y0, get_y1, get_x0) -> List[Dict]:

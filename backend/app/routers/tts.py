@@ -23,7 +23,7 @@ OPENAI_PRESET_VOICES = [
 
 DEFAULT_TTS_CONFIG = {
     "provider": "edge",
-    "edge": {"voice": "aria", "voice_japanese": "nanami", "voice_chinese": "xiaoxiao", "speed": 1.0},
+    "edge": {"voice": "aria", "voice_japanese": "nanami", "voice_chinese": "xiaoxiao", "voice_korean": "sunhi", "speed": 1.0},
     "openai_api": {"base_url": "https://api.openai.com/v1", "api_key": "", "model": "tts-1", "voice": "alloy", "speed": 1.0},
     "qwen3": {"base_url": "http://127.0.0.1:18790/v1", "model": "tts-1", "voice": "塔塔", "voice_japanese": "", "speed": 1.0},
 }
@@ -192,6 +192,7 @@ class TTSConfigEdge(BaseModel):
     voice: str = "default"
     voice_japanese: str = "nanami"
     voice_chinese: str = "xiaoxiao"
+    voice_korean: str = "sunhi"
     speed: float = 1.0
 
 

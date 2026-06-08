@@ -1,3 +1,5 @@
+import { normalizeBookLanguage } from "./japaneseText";
+
 export function repairBrokenEnglishWords(text: string): string {
   if (!text) return "";
 
@@ -498,7 +500,7 @@ function normalizeQuotesForTTS(text: string): string {
   return normalized;
 }
 
-export type TTSContentLanguage = "en" | "zh" | "ja";
+export type TTSContentLanguage = "en" | "zh" | "ja" | "ko";
 
 function countMatches(text: string, pattern: RegExp): number {
   return text.match(pattern)?.length || 0;
@@ -509,23 +511,29 @@ export function detectTTSContentLanguage(
   fallbackLanguage?: string | null,
 ): TTSContentLanguage {
   const compact = text.replace(/\s+/g, "");
-  const fallback = (fallbackLanguage || "").trim().toLowerCase();
+  const fallback = normalizeBookLanguage(fallbackLanguage);
   const kanaCount = countMatches(compact, /[\u3040-\u30FF]/g);
   const cjkCount = countMatches(compact, /[\u3400-\u9FFF\uF900-\uFAFF]/g);
+  const hangulCount = countMatches(compact, /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uAC00-\uD7AF\uD7B0-\uD7FF]/g);
 
   if (kanaCount >= 2 || (kanaCount > 0 && cjkCount > 0)) {
     return "ja";
   }
 
+  if (hangulCount > 0 && hangulCount >= cjkCount) {
+    return "ko";
+  }
+
   if (cjkCount > 0) {
-    if (fallback.startsWith("ja")) {
+    if (fallback === "ja") {
       return "ja";
     }
     return "zh";
   }
 
-  if (fallback.startsWith("ja")) return "ja";
-  if (fallback.startsWith("zh")) return "zh";
+  if (fallback === "ja") return "ja";
+  if (fallback === "zh") return "zh";
+  if (fallback === "ko") return "ko";
   return "en";
 }
 
@@ -664,7 +672,8 @@ export function preprocessMarkdownTTSPlainText(text: string, language?: string |
 export function preprocessTTSPlainText(text: string, language?: string | null): string {
   if (!text) return "";
   let processed = removeInvisibleCharactersForTTS(text);
-  const isJapanese = typeof language === "string" && language.toLowerCase().startsWith("ja");
+  const normalizedLanguage = normalizeBookLanguage(language);
+  const isEastAsian = normalizedLanguage === "ja" || normalizedLanguage === "zh" || normalizedLanguage === "ko";
 
   // 过滤常见的纯页码页脚，避免 PDF 朗读把页码念出来。
   processed = processed.replace(/(?:^|\n)\s*[-–—]?\s*Page\s+\d+\s*[-–—]?\s*(?=\n|$)/gim, "\n");
@@ -674,7 +683,7 @@ export function preprocessTTSPlainText(text: string, language?: string | null): 
   processed = processed.replace(/(\d+)\s*\n+\s*(st|nd|rd|th)\b/gi, "$1$2");
   processed = processed.replace(/(?:^|\n)\s*\d+\s*(?=\n|$)/gm, "\n");
   processed = removeDecorativeSymbolsForTTS(processed);
-  if (!isJapanese) {
+  if (!isEastAsian) {
     processed = normalizeQuotesForTTS(processed);
     processed = repairBrokenEnglishWordsForTTS(processed);
 

@@ -16,7 +16,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import type { TTSConfig as StoredTTSConfig, TTSVoiceOption as ApiTTSVoiceOption } from '../lib/api';
 import { createLogger } from '../lib/logger';
-import { isJapaneseBookLanguage } from '../lib/japaneseText';
+import { normalizeBookLanguage } from '../lib/japaneseText';
 
 const log = createLogger('useFullTextTTS');
 
@@ -64,8 +64,13 @@ const EDGE_VOICES_ZH = [
   { id: 'yunxi', label: 'Yunxi（中文男声）' },
 ] as const;
 
+const EDGE_VOICES_KO = [
+  { id: 'sunhi', label: 'SunHi（韩语女声）' },
+  { id: 'injoon', label: 'InJoon（韩语男声）' },
+] as const;
+
 type TTSProvider = 'edge' | 'openai_api' | 'qwen3';
-type TTSLanguage = 'default' | 'ja' | 'zh';
+type TTSLanguage = 'default' | 'ja' | 'zh' | 'ko';
 
 export type TTSVoice = string;
 export type TTSVoiceOption = {
@@ -113,13 +118,10 @@ export interface UseFullTextTTSReturn {
 }
 
 function getTTSLanguage(bookLanguage?: string | null): TTSLanguage {
-  if (isJapaneseBookLanguage(bookLanguage)) return 'ja';
-
-  const normalized = bookLanguage?.trim().toLowerCase();
-  if (normalized === 'zh' || normalized?.startsWith('zh-')) {
-    return 'zh';
+  const normalized = normalizeBookLanguage(bookLanguage);
+  if (normalized === 'ja' || normalized === 'zh' || normalized === 'ko') {
+    return normalized;
   }
-
   return 'default';
 }
 
@@ -140,6 +142,9 @@ function getConfiguredVoice(config: StoredTTSConfig, provider: TTSProvider, ttsL
   }
   if (ttsLanguage === 'zh') {
     return config.edge.voice_chinese?.trim() || 'xiaoxiao';
+  }
+  if (ttsLanguage === 'ko') {
+    return config.edge.voice_korean?.trim() || 'sunhi';
   }
   return config.edge.voice?.trim() || 'aria';
 }
@@ -186,6 +191,8 @@ function buildReaderVoiceOptions(
     ? EDGE_VOICES_JA
     : ttsLanguage === 'zh'
       ? EDGE_VOICES_ZH
+      : ttsLanguage === 'ko'
+        ? EDGE_VOICES_KO
       : EDGE_VOICES_EN;
 
   edgeVoices.forEach((edgeVoice) => {
@@ -571,6 +578,8 @@ export function useFullTextTTS({
             nextConfig.edge.voice_japanese = voiceRef.current;
           } else if (ttsLanguage === 'zh') {
             nextConfig.edge.voice_chinese = voiceRef.current;
+          } else if (ttsLanguage === 'ko') {
+            nextConfig.edge.voice_korean = voiceRef.current;
           } else {
             nextConfig.edge.voice = voiceRef.current;
           }

@@ -139,6 +139,9 @@ function DictionarySidebar({
       if (detectedLanguage === "zh") {
         return config.edge.voice_chinese?.trim() || "xiaoxiao";
       }
+      if (detectedLanguage === "ko") {
+        return config.edge.voice_korean?.trim() || "sunhi";
+      }
       return config.edge.voice?.trim() || "aria";
     };
 
