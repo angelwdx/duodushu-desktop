@@ -227,6 +227,148 @@ def test_lookup_word_prefers_lemma_before_original(monkeypatch):
     assert result["lemma_from"] == "spot"
 
 
+def test_get_lookup_terms_generates_korean_fallbacks(monkeypatch):
+    known_terms = {
+        "학교", "먹다", "공부하다", "좋다", "가다", "나무라다",
+        "시작하다", "말하다", "끌리다", "크다", "작다", "보이다", "무채색",
+        "개성있다", "기다리다", "테이블", "힘있다", "없다", "약속시간", "늦다",
+        "않다", "되다", "나오다", "남자", "가느다랗다", "원인", "신경쓰이다",
+        "브래지어",
+    }
+
+    monkeypatch.setattr(dict_service, "_candidate_exists", lambda candidate: candidate in known_terms)
+
+    def assert_terms_start(word, expected_prefix):
+        assert dict_service._get_lookup_terms(word)[: len(expected_prefix)] == expected_prefix
+
+    assert_terms_start("학교에", ["학교에", "학교"])
+    assert_terms_start("먹어요", ["먹어요", "먹다"])
+    assert_terms_start("공부해요", ["공부해요", "공부하다"])
+    assert_terms_start("좋아요", ["좋아요", "좋다"])
+    assert_terms_start("갑니다", ["갑니다", "가다"])
+    assert_terms_start("갔다", ["갔다", "가다"])
+    assert_terms_start("나무라자", ["나무라자", "나무라다"])
+    assert_terms_start("나무라라", ["나무라라", "나무라다"])
+    assert_terms_start("먹어라", ["먹어라", "먹다"])
+    assert_terms_start("공부해라", ["공부해라", "공부하다"])
+    assert_terms_start("시작하기", ["시작하기", "시작하다"])
+    assert_terms_start("말하자면", ["말하자면", "말하다"])
+    assert_terms_start("끌리지도", ["끌리지도", "끌리다"])
+    assert_terms_start("크지도", ["크지도", "크다"])
+    assert_terms_start("작지도", ["작지도", "작다"])
+    assert_terms_start("보이는", ["보이는", "보이다"])
+    assert_terms_start("무채색의", ["무채색의", "무채색"])
+    assert_terms_start("개성있어 보이는", ["개성있어 보이는", "개성있다", "보이다"])
+    assert_terms_start("개성있어", ["개성있어", "개성있다"])
+    assert_terms_start("기다리는", ["기다리는", "기다리다"])
+    assert_terms_start("테이블로", ["테이블로", "테이블"])
+    assert_terms_start("힘있지도", ["힘있지도", "힘있다"])
+    assert_terms_start("없어 보였기", ["없어 보였기", "없다", "보이다"])
+    assert_terms_start("약속시간에", ["약속시간에", "약속시간"])
+    assert_terms_start("늦을까봐", ["늦을까봐", "늦다"])
+    assert_terms_start("않아도", ["않아도", "않다"])
+    assert_terms_start("되었으며", ["되었으며", "되다"])
+    assert_terms_start("나오는", ["나오는", "나오다"])
+    assert_terms_start("남자들과", ["남자들과", "남자"])
+    assert_terms_start("가느다란", ["가느다란", "가느다랗다"])
+    assert_terms_start("원인이었던", ["원인이었던", "원인"])
+    assert_terms_start("작은", ["작은", "작다"])
+    assert_terms_start("신경쓰이지", ["신경쓰이지", "신경쓰이다"])
+    assert_terms_start("브래지어를", ["브래지어를", "브래지어"])
+
+
+def test_lookup_word_uses_korean_fallback_for_imported_dictionary(monkeypatch):
+    class StubDictManager:
+        def lookup_word(self, word, source=None):
+            if source == "KoreanDict" and word == "먹다":
+                return {
+                    "word": "먹다",
+                    "source": "KoreanDict",
+                    "html_content": "<div>to eat</div>",
+                    "meanings": [{"partOfSpeech": "v.", "definitions": [{"definition": "to eat"}]}],
+                }
+            return None
+
+        def word_exists(self, word):
+            return word == "먹다"
+
+    monkeypatch.setattr(dict_service, "get_dict_manager", lambda: StubDictManager())
+    monkeypatch.setattr(dict_service.ecdict_service, "get_word_details", lambda word: None)
+
+    result = dict_service.lookup_word(db=None, word="먹어요", source="KoreanDict")
+
+    assert result is not None
+    assert result["word"] == "먹다"
+    assert result["lookup_term"] == "먹어요"
+    assert result["lemma_from"] == "먹다"
+
+
+def test_lookup_word_all_sources_limits_korean_to_korean_dictionaries(monkeypatch):
+    lookup_calls = []
+
+    class StubDictManager:
+        def get_dicts(self):
+            return [
+                {"name": "Oxford", "type": "imported", "is_active": True},
+                {"name": "韩语", "type": "imported", "is_active": True},
+                {"name": "大辞泉", "type": "imported", "is_active": True},
+            ]
+
+        def lookup_word(self, word, source=None):
+            lookup_calls.append((word, source))
+            if source == "韩语" and word == "먹다":
+                return {
+                    "word": "먹다",
+                    "source": "韩语",
+                    "html_content": "<div>to eat</div>",
+                    "meanings": [{"partOfSpeech": "v.", "definitions": [{"definition": "to eat"}]}],
+                }
+            return None
+
+        def word_exists(self, word):
+            return word == "먹다"
+
+    monkeypatch.setattr(dict_service, "get_dict_manager", lambda: StubDictManager())
+    monkeypatch.setattr(dict_service.ecdict_service, "get_word_details", lambda word: None)
+
+    result = dict_service.lookup_word_all_sources(db=None, word="먹어요")
+
+    assert result is not None
+    assert result["word"] == "먹다"
+    assert result["source"] == "韩语"
+    assert ("먹어요", "Oxford") not in lookup_calls
+    assert ("먹어요", "大辞泉") not in lookup_calls
+    assert lookup_calls == [("먹어요", "韩语"), ("먹다", "韩语")]
+
+
+def test_cached_korean_result_ignores_stale_word(monkeypatch):
+    class Row:
+        def __init__(self, data):
+            self.data = data
+
+    class Query:
+        def __init__(self, row):
+            self.row = row
+
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return self.row
+
+    class StubDB:
+        def __init__(self, row):
+            self.row = row
+
+        def query(self, _model):
+            return Query(self.row)
+
+    stale_row = Row({"word": "브래지다", "source": "AI"})
+    result = dict_service._get_cached_dictionary_result(StubDB(stale_row), "브래지어를", "브래지어")
+
+    assert result is None
+
+
 def test_jmdict_service_returns_known_japanese_entry():
     result = jmdict_service.get_word_details("一軒家")
 

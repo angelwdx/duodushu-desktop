@@ -10,7 +10,7 @@ from ..services import (
     jmdict_service,
     open_dict_service,
 )
-from ..services.book_language_service import contains_japanese_text
+from ..services.book_language_service import contains_japanese_text, contains_korean_text
 from ..services.japanese_text_service import get_japanese_lookup_terms
 from ..utils.lookup_normalizer import normalize_lookup_word
 from app import config
@@ -18,6 +18,7 @@ import requests
 import json
 import string
 import logging
+import re
 
 # 懒加载 DictManager，避免循环导入
 _dict_manager = None
@@ -265,6 +266,68 @@ _IRREGULAR_LEMMAS = {
 _NOUN_VERB_POS = {"n", "v"}
 _VERB_LIKE_POS = {"n", "v", "j"}
 _COMPARATIVE_POS = {"j", "r"}
+_HANGUL_BASE_CODE = 0xAC00
+_HANGUL_INITIAL_COUNT = 19
+_HANGUL_MEDIAL_COUNT = 21
+_HANGUL_FINAL_COUNT = 28
+_KOREAN_STRIPPABLE_FINALS = {4, 8, 16, 17, 20}
+_KOREAN_VOWEL_DECONTRACTION_MAP = {
+    1: 0,
+    9: 8,
+    10: 11,
+    14: 13,
+    15: 16,
+}
+_KOREAN_PARTICLE_SUFFIXES = (
+    "으로는", "에게서", "한테서", "께서는", "에서는", "에게는", "한테는", "으로도",
+    "들과는", "들에게", "들까지", "들부터", "들처럼", "들보다", "들과", "들",
+    "이라도", "라고는", "이라고", "로부터", "으로", "에서", "에게", "한테", "께서",
+    "까지", "부터", "처럼", "보다", "라도", "마저", "마다", "만은", "만도", "으로",
+    "이나", "나마", "이나", "나", "은", "는", "이", "가", "을", "를", "에", "도",
+    "와", "과", "랑", "로", "의", "만",
+)
+_KOREAN_HADA_SUFFIXES = (
+    "했습니다", "했어요", "했다", "했던", "한다고", "한다", "합니다", "하네요", "하니",
+    "하면", "하며", "하는", "하고", "하자", "하라", "해서", "해라", "해요", "해도", "해야",
+    "해야지", "해야죠", "해야만", "해야", "해", "한", "할", "함",
+)
+_KOREAN_COPULA_SUFFIXES = (
+    "이십니까", "입니까", "입니다", "이에요", "예요", "이야", "야", "이었다", "였어요", "였다",
+)
+_KOREAN_PREDICATE_SUFFIXES = (
+    "었습니다", "았습니다", "었어요", "았어요", "겠어요", "겠습니다", "었으며", "았으며",
+    "였으며", "셨습니까", "십니까", "십시오", "습니다", "네요", "군요", "거든요", "세요",
+    "아요", "어요", "여요", "에요", "지요", "죠", "었으니", "았으니", "였으니",
+    "었으니까", "았으니까", "였으니까", "었기", "았기", "였기", "어도", "아도",
+    "여도", "도록", "으니", "으니까", "는다면서요", "다면서요", "다니까", "답니다",
+    "잖냐", "느니", "다니", "라니", "거든", "으며", "면서", "는데", "지만",
+    "려고", "려는지", "려는", "려다", "려고", "려", "었다", "았다", "였다",
+    "겠다", "는다", "ㄴ다", "는다", "니다", "어서", "아서", "여서", "으면",
+    "면", "다는", "다고", "다는지", "는지", "는다고", "는다는", "는답니다",
+    "다고", "다는", "다고요", "며", "듯", "고", "게", "지", "니", "는", "은",
+    "을", "어", "아", "여",
+)
+_KOREAN_COMMAND_SUFFIX_RULES = (
+    ("어라", 1, False),
+    ("아라", 1, False),
+    ("여라", 1, False),
+    ("거라", 1, False),
+    ("너라", 1, False),
+    ("자면", 2, False),
+    ("라", 2, True),
+    ("자", 2, True),
+)
+_KOREAN_NOMINAL_SUFFIX_RULES = (
+    "하기", "기는", "기를", "기도", "기로", "기만", "기에", "기",
+)
+_KOREAN_COPULA_NOUN_SUFFIXES = (
+    "이었던", "였던", "이었다는", "였다는", "이었다니", "였다니", "이었다", "였다", "이라니", "이니",
+)
+_KOREAN_INTENTION_SUFFIXES = (
+    "을까봐", "ㄹ까봐", "을까 봐", "ㄹ까 봐", "까봐", "을까", "ㄹ까", "까",
+)
+_KOREAN_STRIPPED_PRIORITY_EXCEPTIONS = {"브래지어"}
+_KOREAN_PHRASE_SPLIT_RE = re.compile(r"[\s,，、/·]+")
 
 
 @lru_cache(maxsize=4096)
@@ -321,6 +384,29 @@ def _is_japanese_lookup(word: str) -> bool:
     return contains_japanese_text(word)
 
 
+def _is_korean_lookup(word: str) -> bool:
+    return contains_korean_text(word)
+
+
+def _is_korean_dict_name(dict_name: Optional[str]) -> bool:
+    if not dict_name:
+        return False
+
+    normalized_name = dict_name.lower()
+    return any(
+        marker in normalized_name
+        for marker in ("韩", "韓", "korean", "krdict", "한국", "조선")
+    )
+
+
+def _get_imported_dicts_for_lookup(dict_names: List[str], original_word: str) -> List[str]:
+    if not _is_korean_lookup(original_word):
+        return dict_names
+
+    korean_dicts = [dict_name for dict_name in dict_names if _is_korean_dict_name(dict_name)]
+    return korean_dicts or dict_names
+
+
 def _lookup_jmdict_terms(original_word: str, lookup_terms: List[str]) -> Optional[Dict]:
     for term in lookup_terms:
         result = jmdict_service.get_word_details(term)
@@ -331,6 +417,236 @@ def _lookup_jmdict_terms(original_word: str, lookup_terms: List[str]) -> Optiona
             result["lemma_from"] = term
         return result
     return None
+
+
+def _decompose_hangul_syllable(char: str) -> Optional[Tuple[int, int, int]]:
+    if len(char) != 1:
+        return None
+
+    offset = ord(char) - _HANGUL_BASE_CODE
+    if offset < 0 or offset >= _HANGUL_INITIAL_COUNT * _HANGUL_MEDIAL_COUNT * _HANGUL_FINAL_COUNT:
+        return None
+
+    initial = offset // (_HANGUL_MEDIAL_COUNT * _HANGUL_FINAL_COUNT)
+    medial = (offset % (_HANGUL_MEDIAL_COUNT * _HANGUL_FINAL_COUNT)) // _HANGUL_FINAL_COUNT
+    final = offset % _HANGUL_FINAL_COUNT
+    return initial, medial, final
+
+
+def _compose_hangul_syllable(initial: int, medial: int, final: int) -> str:
+    return chr(
+        _HANGUL_BASE_CODE
+        + (((initial * _HANGUL_MEDIAL_COUNT) + medial) * _HANGUL_FINAL_COUNT)
+        + final
+    )
+
+
+def _replace_last_hangul_syllable(text: str, *, medial: Optional[int] = None, final: Optional[int] = None) -> Optional[str]:
+    if not text:
+        return None
+
+    decomposed = _decompose_hangul_syllable(text[-1])
+    if not decomposed:
+        return None
+
+    initial_idx, medial_idx, final_idx = decomposed
+    next_medial = medial_idx if medial is None else medial
+    next_final = final_idx if final is None else final
+    return f"{text[:-1]}{_compose_hangul_syllable(initial_idx, next_medial, next_final)}"
+
+
+def _append_unique_term(terms: List[str], candidate: str) -> None:
+    if not candidate:
+        return
+    if candidate not in terms:
+        terms.append(candidate)
+
+
+def _expand_korean_stem_variants(stem: str) -> List[str]:
+    variants: List[str] = []
+
+    def append_with_decontracted_vowel(candidate: str, *, prefer_decontracted: bool = False) -> None:
+        decomposed_candidate = _decompose_hangul_syllable(candidate[-1]) if candidate else None
+        if not decomposed_candidate:
+            _append_unique_term(variants, candidate)
+            return
+        mapped_medial = _KOREAN_VOWEL_DECONTRACTION_MAP.get(decomposed_candidate[1])
+        if mapped_medial is None:
+            _append_unique_term(variants, candidate)
+            return
+        expanded_candidate = _replace_last_hangul_syllable(
+            candidate,
+            medial=mapped_medial,
+            final=decomposed_candidate[2],
+        )
+        if prefer_decontracted and expanded_candidate:
+            _append_unique_term(variants, expanded_candidate)
+        _append_unique_term(variants, candidate)
+        if not prefer_decontracted and expanded_candidate:
+            _append_unique_term(variants, expanded_candidate)
+
+    decomposed = _decompose_hangul_syllable(stem[-1]) if stem else None
+    if decomposed and decomposed[2] in _KOREAN_STRIPPABLE_FINALS:
+        stripped = _replace_last_hangul_syllable(stem, final=0)
+        if stripped:
+            append_with_decontracted_vowel(stripped, prefer_decontracted=True)
+
+    append_with_decontracted_vowel(stem)
+
+    return variants
+
+
+def _build_korean_lookup_terms_from_stem(stem: str, *, include_bare: bool, include_da: bool) -> List[str]:
+    terms: List[str] = []
+    if stem.endswith(("있", "없")):
+        if include_bare:
+            _append_unique_term(terms, stem)
+        if include_da:
+            _append_unique_term(terms, f"{stem}다")
+        return terms
+
+    for variant in _expand_korean_stem_variants(stem):
+        if include_bare:
+            _append_unique_term(terms, variant)
+        if include_da:
+            _append_unique_term(terms, f"{variant}다")
+    return terms
+
+
+def _build_korean_copula_terms(stem: str) -> List[str]:
+    terms: List[str] = []
+    _append_unique_term(terms, stem)
+    _append_unique_term(terms, f"{stem}이다")
+    return terms
+
+
+def _build_korean_h_irregular_terms(form: str) -> List[str]:
+    if len(form) < 2 or not form.endswith("란"):
+        return []
+
+    return [f"{form[:-1]}랗다"]
+
+
+def _build_korean_b_irregular_terms(form: str) -> List[str]:
+    if form.endswith("스러워") and len(form) > len("스러워"):
+        return [f"{form[:-3]}스럽다"]
+    return []
+
+
+def _get_korean_lookup_candidates(word: str, validate_candidates: bool = True) -> List[str]:
+    candidates: List[str] = []
+    original_exists = _candidate_exists(word) if validate_candidates else False
+
+    def add_candidates(items: List[str]) -> None:
+        for item in items:
+            if item and item != word:
+                _append_unique_term(candidates, item)
+
+    def process_form(form: str, *, skip_original_exists: bool) -> None:
+        for suffix in _KOREAN_COPULA_NOUN_SUFFIXES:
+            if form.endswith(suffix) and len(form) > len(suffix):
+                stem = form[: -len(suffix)]
+                add_candidates(_build_korean_copula_terms(stem))
+
+        add_candidates(_build_korean_h_irregular_terms(form))
+        add_candidates(_build_korean_b_irregular_terms(form))
+
+        for suffix in _KOREAN_HADA_SUFFIXES:
+            if form.endswith(suffix) and len(form) > len(suffix):
+                add_candidates([f"{form[: -len(suffix)]}하다"])
+
+        for suffix in _KOREAN_COPULA_SUFFIXES:
+            if form.endswith(suffix) and len(form) > len(suffix):
+                stem = form[: -len(suffix)]
+                add_candidates(_build_korean_lookup_terms_from_stem(stem, include_bare=True, include_da=False))
+
+        for suffix, min_stem_length, skip_when_original_exists in _KOREAN_COMMAND_SUFFIX_RULES:
+            if not form.endswith(suffix) or len(form) <= len(suffix):
+                continue
+            stem = form[: -len(suffix)]
+            if len(stem) < min_stem_length:
+                continue
+            if skip_when_original_exists and skip_original_exists:
+                continue
+            add_candidates(_build_korean_lookup_terms_from_stem(stem, include_bare=False, include_da=True))
+
+        for suffix in _KOREAN_PREDICATE_SUFFIXES:
+            if form.endswith(suffix) and len(form) > len(suffix):
+                stem = form[: -len(suffix)]
+                if suffix.startswith("였"):
+                    add_candidates([f"{stem}이다", stem])
+                add_candidates(_build_korean_lookup_terms_from_stem(stem, include_bare=False, include_da=True))
+
+        for suffix in _KOREAN_INTENTION_SUFFIXES:
+            if form.endswith(suffix) and len(form) > len(suffix):
+                stem = form[: -len(suffix)]
+                add_candidates(_build_korean_lookup_terms_from_stem(stem, include_bare=False, include_da=True))
+
+        for suffix in _KOREAN_NOMINAL_SUFFIX_RULES:
+            if form.endswith(suffix) and len(form) > len(suffix):
+                stem = form[: -len(suffix)]
+                if suffix.startswith("하"):
+                    add_candidates([f"{stem}하다"])
+                add_candidates(_build_korean_lookup_terms_from_stem(stem, include_bare=False, include_da=True))
+
+    phrase_parts = [part for part in _KOREAN_PHRASE_SPLIT_RE.split(word) if part]
+    if len(phrase_parts) > 1:
+        for part in phrase_parts:
+            for candidate in _get_korean_lookup_candidates(part, validate_candidates=validate_candidates):
+                _append_unique_term(candidates, candidate)
+
+        for part in phrase_parts:
+            if validate_candidates:
+                if _candidate_exists(part):
+                    _append_unique_term(candidates, part)
+            else:
+                _append_unique_term(candidates, part)
+
+        if validate_candidates:
+            return [candidate for candidate in candidates if _candidate_exists(candidate)]
+        return candidates
+
+    process_form(word, skip_original_exists=original_exists)
+
+    stripped_forms = [word]
+    seen_stripped = {word}
+    ordered_stripped_forms: List[str] = []
+    for _ in range(2):
+        next_forms: List[str] = []
+        for form in stripped_forms:
+            for suffix in sorted(_KOREAN_PARTICLE_SUFFIXES, key=len, reverse=True):
+                if not form.endswith(suffix) or len(form) <= len(suffix):
+                    continue
+                stripped = form[: -len(suffix)]
+                if stripped in seen_stripped:
+                    continue
+                seen_stripped.add(stripped)
+                ordered_stripped_forms.append(stripped)
+                next_forms.append(stripped)
+        stripped_forms = next_forms
+        if not stripped_forms:
+            break
+
+    for stripped in ordered_stripped_forms:
+        if stripped in _KOREAN_STRIPPED_PRIORITY_EXCEPTIONS or _candidate_exists(stripped):
+            add_candidates([stripped])
+            process_form(stripped, skip_original_exists=False)
+        else:
+            process_form(stripped, skip_original_exists=False)
+            add_candidates([stripped])
+
+    if len(word) > 1 and word.endswith("다"):
+        stem = word[:-1]
+        add_candidates(_build_korean_lookup_terms_from_stem(stem, include_bare=False, include_da=True))
+
+    decomposed = _decompose_hangul_syllable(word[-1]) if word else None
+    if decomposed and decomposed[2] in _KOREAN_STRIPPABLE_FINALS:
+        add_candidates(_build_korean_lookup_terms_from_stem(word, include_bare=False, include_da=True))
+
+    if not validate_candidates:
+        return candidates
+
+    return [candidate for candidate in candidates if _candidate_exists(candidate)]
 
 
 def _get_lemma_candidates(word: str, validate_candidates: bool = True) -> List[str]:
@@ -570,6 +886,13 @@ def _get_lookup_terms(word: str, prefer_lemma: bool = True) -> List[str]:
     if _is_japanese_lookup(word):
         return get_japanese_lookup_terms(word)
 
+    if _is_korean_lookup(word):
+        terms = [word]
+        for candidate in _get_korean_lookup_candidates(word, validate_candidates=False):
+            if candidate != word:
+                terms.append(candidate)
+        return terms
+
     lemma_candidates = _get_lemma_candidates(word, validate_candidates=True)
     if not prefer_lemma:
         terms = [word]
@@ -584,6 +907,45 @@ def _get_lookup_terms(word: str, prefer_lemma: bool = True) -> List[str]:
             terms.append(lemma)
     terms.append(word)
     return terms
+
+
+def _get_preferred_fallback_term(original_word: str, lookup_terms: List[str]) -> str:
+    for term in lookup_terms:
+        if term.lower() != original_word.lower():
+            return term
+    return original_word
+
+
+def _get_cached_dictionary_result(db: Optional[Session], original_word: str, fallback_term: str) -> Optional[Dict]:
+    if db is None:
+        return None
+
+    is_korean_lookup = _is_korean_lookup(original_word)
+    for cache_key in dict.fromkeys([original_word.lower(), fallback_term.lower()]):
+        db_res = db.query(CacheDictionary).filter(func.lower(CacheDictionary.word) == cache_key).first()
+        if not db_res:
+            continue
+
+        data = dict(db_res.data or {})
+        cached_word = (data.get("word") or "").strip()
+        if is_korean_lookup and cached_word:
+            valid_korean_words = {original_word.lower(), fallback_term.lower()}
+            if cached_word.lower() not in valid_korean_words:
+                logger.info(
+                    "[lookup_word_all_sources] Ignoring stale Korean cache for word '%s': cached word '%s' does not match fallback '%s'",
+                    original_word,
+                    cached_word,
+                    fallback_term,
+                )
+                continue
+
+        data["lookup_term"] = original_word
+        data["cached"] = True
+        if data.get("word") and data["word"].lower() != original_word.lower():
+            data.setdefault("lemma_from", data["word"])
+        return data
+
+    return None
 
 
 def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
@@ -610,12 +972,14 @@ def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
         dicts = dict_manager.get_dicts()
         # 过滤出启用的导入词典（排除内置词典）
         active_imported_dicts = [d["name"] for d in dicts if d.get("type") == "imported" and d.get("is_active", True)]
+        lookup_imported_dicts = _get_imported_dicts_for_lookup(active_imported_dicts, original_word)
 
         lookup_terms = _get_lookup_terms(original_word, prefer_lemma=True)
+        fallback_term = _get_preferred_fallback_term(original_word, lookup_terms)
 
         # 查询所有启用的词典。优先按原型查询，找不到再回退到原词。
         results = []
-        for dict_name in active_imported_dicts:
+        for dict_name in lookup_imported_dicts:
             try:
                 matched_word = original_word
                 matched_lemma = None
@@ -639,7 +1003,7 @@ def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
                     result_word = result.get("word")
                     if result_word and result_word.lower() != original_word.lower():
                         matched_word = result_word
-                        if result_word.lower() in [candidate.lower() for candidate in _get_lemma_candidates(original_word, validate_candidates=True)]:
+                        if result_word.lower() in [candidate.lower() for candidate in lookup_terms]:
                             matched_lemma = result_word
 
                     supplement = ecdict_service.get_word_details(matched_word) or ecdict_service.get_word_details(original_word)
@@ -697,15 +1061,21 @@ def lookup_word_all_sources(db: Session, word: str) -> Optional[Dict]:
                     ],
                 }
 
+            cached_result = _get_cached_dictionary_result(db, original_word, fallback_term)
+            if cached_result:
+                logger.info(f"[lookup_word_all_sources] Found cached fallback for word: {word}")
+                return cached_result
+
             # ECDICT 也没找到，尝试 AI 兜底查询
             logger.info(f"[lookup_word_all_sources] Not found in any imported dict or ECDICT, trying AI fallback for word: {word}")
             try:
                 from ..services import supplier_factory
 
                 # 使用 AI 定义单词
-                prompt = f"""Please define the English word "{word}" in the following JSON format:
+                prompt_word = fallback_term
+                prompt = f"""Please define the word "{prompt_word}" in the following JSON format. If the original lookup form "{original_word}" is inflected, define its dictionary form:
 {{
-    "word": "{word}",
+    "word": "{prompt_word}",
     "phonetic": "[phonetic transcription if available]",
     "meanings": [
         {{
@@ -750,7 +1120,7 @@ Return ONLY the JSON, no other text."""
                     logger.info(f"[lookup_word_all_sources] Parsed AI data for word {word}: {ai_data}")
 
                     # 构造返回结果
-                    ai_word = lookup_terms[0] if lookup_terms else original_word
+                    ai_word = fallback_term
                     result = {
                         "word": ai_word,
                         "lookup_term": original_word,
@@ -776,6 +1146,11 @@ Return ONLY the JSON, no other text."""
                         # 获取第一个中文翻译作为整体翻译
                         if definitions and definitions[0].get("translation"):
                             result["chinese_translation"] = definitions[0]["translation"]
+
+                    if db is not None:
+                        cache_service.save_dictionary_cache(db, original_word.lower(), result)
+                        if fallback_term.lower() != original_word.lower():
+                            cache_service.save_dictionary_cache(db, fallback_term.lower(), result)
 
                     logger.info(f"[lookup_word_all_sources] AI fallback successful for word: {word}")
                     return result
@@ -849,11 +1224,20 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
     # 保存原始查询词，用于后续词形还原
     original_word = word
     is_japanese_lookup = _is_japanese_lookup(original_word)
+    is_korean_lookup = _is_korean_lookup(original_word)
 
     lookup_terms = _get_lookup_terms(original_word, prefer_lemma=True)
+    fallback_term = _get_preferred_fallback_term(original_word, lookup_terms)
 
     if source == JMDICT_SOURCE or (is_japanese_lookup and source == ""):
         return _lookup_jmdict_terms(original_word, lookup_terms)
+
+    if is_korean_lookup and source == "":
+        return lookup_word_all_sources(db, word)
+
+    if is_korean_lookup and source and source not in ("AI", "ECDICT") and not _is_korean_dict_name(source):
+        logger.info("Skipping non-Korean source '%s' for Korean word '%s'", source, word)
+        return None
 
     # 1. Try Imported MDX Dictionaries FIRST
     imported_res = None
@@ -1008,7 +1392,7 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
                         ai_result["source"] = "AI"
                         ai_result["cached"] = False
                         ai_result["lookup_term"] = original_word
-                        ai_result["word"] = lookup_terms[0] if lookup_terms else original_word
+                        ai_result["word"] = fallback_term
                         if ai_result["word"].lower() != original_word.lower():
                             ai_result["lemma_from"] = ai_result["word"]
 
@@ -1068,9 +1452,9 @@ def lookup_word(db: Session, word: str, source: Optional[str] = None) -> Optiona
 
     # 如果没有指定 source，返回默认的错误页面
     return {
-        "word": lookup_terms[0] if lookup_terms else original_word,
+        "word": fallback_term,
         "lookup_term": original_word,
-        "lemma_from": lookup_terms[0] if lookup_terms and lookup_terms[0].lower() != original_word.lower() else None,
+        "lemma_from": fallback_term if fallback_term.lower() != original_word.lower() else None,
         "phonetic": "/.../",
         "meanings": [],
         "html_content": f"<div class='error'>No definition found for '{word}'</div>",

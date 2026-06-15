@@ -44,6 +44,12 @@ def contains_japanese_text(text: Optional[str]) -> bool:
     return bool(HIRAGANA_RE.search(text) or KATAKANA_RE.search(text) or KANJI_RE.search(text))
 
 
+def contains_korean_text(text: Optional[str]) -> bool:
+    if not text:
+        return False
+    return bool(HANGUL_RE.search(text))
+
+
 def detect_book_language(text: Optional[str], metadata_language: Optional[str] = None) -> str:
     normalized_metadata = normalize_book_language(metadata_language)
     if normalized_metadata != "unknown":

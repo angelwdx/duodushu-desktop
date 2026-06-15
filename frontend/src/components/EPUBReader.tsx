@@ -12,7 +12,7 @@ import { type FuriganaAnnotation, type JapaneseLookupSegment } from '../lib/api'
 import { containsEastAsianText, containsJapaneseText, isJapaneseBookLanguage } from '../lib/japaneseText';
 import { ensureFuriganaAnnotations } from '../lib/japaneseFurigana';
 import { preprocessTTSPlainText } from '../lib/ttsText';
-import { normalizeLookupWord } from '../lib/wordLookup';
+import { getLookupSegmentAtTextOffset, normalizeLookupWord } from '../lib/wordLookup';
 
 const log = createLogger('EPUBReader');
 const FURIGANA_PREFERENCE_KEY = 'reader_japanese_furigana_enabled';
@@ -1342,6 +1342,14 @@ export default function EPUBReader({
           return expandedRange;
       }
 
+      const directSegment = getLookupSegmentAtTextOffset(text, offset);
+      if (directSegment) {
+          const expandedRange = doc.createRange();
+          safeSetRangeStart(expandedRange, textNode, directSegment.start);
+          safeSetRangeEnd(expandedRange, textNode, directSegment.end);
+          return expandedRange;
+      }
+
       const anchorIndex =
           offset < text.length && LOOKUP_WORD_CHAR_PATTERN.test(text[offset])
               ? offset
@@ -2321,7 +2329,12 @@ export default function EPUBReader({
                         const lookupSegment = textAnnotation
                             ? findLookupSegmentAtOffset(textAnnotation.lookup_segments || [], offset)
                             : null;
-                        const word = normalizeLookupWord(lookupSegment?.lookup_text || wordRange?.toString() || '');
+                        const fallbackSegment = textNode
+                            ? getLookupSegmentAtTextOffset(textNode.textContent ?? '', offset)
+                            : null;
+                        const word = lookupSegment?.lookup_text
+                            ? normalizeLookupWord(lookupSegment.lookup_text)
+                            : fallbackSegment?.normalized || normalizeLookupWord(wordRange?.toString() || '');
 
                         if (wordRange && word) {
                             positionOverlayElement(overlay, getRangeVisualRect(wordRange));
@@ -3092,7 +3105,12 @@ export default function EPUBReader({
                         const lookupSegment = textAnnotation
                             ? findLookupSegmentAtOffset(textAnnotation.lookup_segments || [], offset)
                             : null;
-                        const cleanWord = normalizeLookupWord(lookupSegment?.lookup_text || lookupRange?.toString() || '');
+                        const fallbackSegment = textNode
+                            ? getLookupSegmentAtTextOffset(textNode.textContent ?? '', offset)
+                            : null;
+                        const cleanWord = lookupSegment?.lookup_text
+                            ? normalizeLookupWord(lookupSegment.lookup_text)
+                            : fallbackSegment?.normalized || normalizeLookupWord(lookupRange?.toString() || '');
                         const minLookupLength = containsEastAsianText(cleanWord) ? 1 : 2;
 
                         if (cleanWord && cleanWord.length >= minLookupLength) {

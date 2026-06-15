@@ -33,6 +33,12 @@ try {
         sample.expected,
         sample.note,
       );
+    } else if (sample.kind === "normalize") {
+      assert.equal(
+        helper.normalizeLookupWord(sample.text),
+        sample.expected,
+        sample.note,
+      );
     } else if (sample.kind === "segments") {
       assert.deepEqual(
         helper.getLookupSegments(sample.text).map((item) => item.normalized),

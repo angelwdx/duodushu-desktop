@@ -14,9 +14,10 @@ const LOOKUP_EAST_ASIAN_EDGE_PATTERN = /^[\s\u3000"'“”‘’「」『』（�
 const HAN_CHAR_RE = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF々〆ヵヶ]/;
 const KANA_CHAR_RE = /[\u3040-\u30FFー]/;
 const HANGUL_CHAR_RE = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uAC00-\uD7AF\uD7B0-\uD7FF]/;
+const HANGUL_TEXT_RE = /^[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uAC00-\uD7AF\uD7B0-\uD7FF]+$/;
 const EAST_ASIAN_CHAR_RE = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF々〆ヵヶー\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uAC00-\uD7AF\uD7B0-\uD7FF]/;
 
-type LookupSegment = {
+export type LookupSegment = {
   raw: string;
   normalized: string;
   start: number;
@@ -53,6 +54,18 @@ export function containsEastAsianLookupText(text?: string | null): boolean {
   return EAST_ASIAN_CHAR_RE.test(text);
 }
 
+function normalizeHangulInlineSpaces(text: string): string {
+  const normalized = text.replace(/[ \t\u3000]+/g, " ").trim();
+  const parts = normalized.split(" ");
+  if (parts.length <= 1) return normalized;
+
+  if (parts.every((part) => HANGUL_TEXT_RE.test(part)) && parts.some((part) => part.length <= 1)) {
+    return parts.join("");
+  }
+
+  return normalized;
+}
+
 export function normalizeLookupWord(raw: string): string | null {
   if (!raw) return null;
 
@@ -62,9 +75,10 @@ export function normalizeLookupWord(raw: string): string | null {
   word = word.replace(/[’]/g, "'");
 
   if (containsEastAsianLookupText(word)) {
-    const normalized = word
-      .replace(LOOKUP_EAST_ASIAN_EDGE_PATTERN, "")
-      .replace(/[ \t\u3000]+/g, "");
+    const withoutEdgePunctuation = word.replace(LOOKUP_EAST_ASIAN_EDGE_PATTERN, "");
+    const normalized = HANGUL_CHAR_RE.test(withoutEdgePunctuation)
+      ? normalizeHangulInlineSpaces(withoutEdgePunctuation)
+      : withoutEdgePunctuation.replace(/[ \t\u3000]+/g, "");
     return normalized || null;
   }
 
@@ -241,27 +255,40 @@ export function getLookupSegments(text: string): LookupSegment[] {
   return inferredSegments.length > 1 ? inferredSegments : directSegments;
 }
 
-export function getLookupWordFromText(text: string, clickRatio = 0.5): string | null {
+export function getLookupSegmentAtTextOffset(text: string, offset: number): LookupSegment | null {
   const segments = getLookupSegments(text);
   if (segments.length === 0) return null;
-  if (segments.length === 1) return segments[0].normalized;
 
-  const clampedRatio = Number.isFinite(clickRatio) ? Math.min(1, Math.max(0, clickRatio)) : 0.5;
-  const clickPos = text.length * clampedRatio;
+  const clampedOffset = Number.isFinite(offset)
+    ? Math.min(Math.max(0, offset), text.length)
+    : 0;
 
-  let best = segments[0];
+  let best: LookupSegment | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
 
   for (const segment of segments) {
-    const center = (segment.start + segment.end) / 2;
-    const distance = Math.abs(center - clickPos);
+    if (clampedOffset >= segment.start && clampedOffset <= segment.end) {
+      return segment;
+    }
+
+    const distance =
+      clampedOffset < segment.start
+        ? segment.start - clampedOffset
+        : clampedOffset - segment.end;
+
     if (distance < bestDistance) {
       best = segment;
       bestDistance = distance;
     }
   }
 
-  return best.normalized;
+  return best;
+}
+
+export function getLookupWordFromText(text: string, clickRatio = 0.5): string | null {
+  const clampedRatio = Number.isFinite(clickRatio) ? Math.min(1, Math.max(0, clickRatio)) : 0.5;
+  const segment = getLookupSegmentAtTextOffset(text, text.length * clampedRatio);
+  return segment?.normalized || null;
 }
 
 export function splitTextForWordLookup(text: string): string[] {

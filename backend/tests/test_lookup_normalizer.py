@@ -29,3 +29,4 @@ def test_normalize_lookup_word_preserves_japanese_terms():
 def test_normalize_lookup_word_preserves_korean_terms():
     assert normalize_lookup_word(" 한 국어 ") == "한국어"
     assert normalize_lookup_word("『테스트』") == "테스트"
+    assert normalize_lookup_word("개성있어 보이는") == "개성있어 보이는"

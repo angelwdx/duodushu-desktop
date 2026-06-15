@@ -1,0 +1,274 @@
+.dictionary-scope-krdict {
+  font-family: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic",
+    "Pretendard", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.85;
+  color: #1f2937;
+  background: #ffffff;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.dictionary-scope-krdict *,
+.dictionary-scope-krdict *::before,
+.dictionary-scope-krdict *::after {
+  box-sizing: border-box;
+}
+
+.dictionary-scope-krdict .hgglhh_16 {
+  font: inherit;
+  color: inherit;
+}
+
+.dictionary-scope-krdict .search_detail {
+  padding: 18px 20px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.dictionary-scope-krdict .search_detail + .search_detail {
+  margin-top: 16px;
+}
+
+.dictionary-scope-krdict p,
+.dictionary-scope-krdict dl,
+.dictionary-scope-krdict dd,
+.dictionary-scope-krdict ul {
+  margin: 0;
+}
+
+.dictionary-scope-krdict ul {
+  padding-left: 1.3rem;
+}
+
+.dictionary-scope-krdict li + li,
+.dictionary-scope-krdict dl + dl,
+.dictionary-scope-krdict p + p,
+.dictionary-scope-krdict .sense_info + .sense_info,
+.dictionary-scope-krdict .subsense_info + .subsense_info {
+  margin-top: 0.5rem;
+}
+
+.dictionary-scope-krdict .word_explain_tit {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dictionary-scope-krdict .head_tit.group,
+.dictionary-scope-krdict .word_head_box,
+.dictionary-scope-krdict .word_head_box dl,
+.dictionary-scope-krdict .heading_wrap dl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dictionary-scope-krdict .word_head {
+  font-size: 1.75rem;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #111827;
+}
+
+.dictionary-scope-krdict .word_head_box {
+  gap: 10px 14px;
+  color: #475569;
+  font-size: 0.95rem;
+}
+
+.dictionary-scope-krdict .word_head_box dl,
+.dictionary-scope-krdict .heading_wrap dl {
+  gap: 6px;
+}
+
+.dictionary-scope-krdict .word_head_box dt,
+.dictionary-scope-krdict .heading_wrap dt,
+.dictionary-scope-krdict .huoyong .manyLang11 {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.dictionary-scope-krdict .word_head_box dd,
+.dictionary-scope-krdict .heading_wrap dd {
+  margin: 0;
+}
+
+.dictionary-scope-krdict .word_att_type1 {
+  color: #b45309;
+  font-weight: 700;
+}
+
+.dictionary-scope-krdict .multiTrans,
+.dictionary-scope-krdict .multiSenseDef,
+.dictionary-scope-krdict .subMultiTrans,
+.dictionary-scope-krdict .subMultiSenseDef {
+  color: #0f172a;
+}
+
+.dictionary-scope-krdict .multiTrans,
+.dictionary-scope-krdict .senseDef,
+.dictionary-scope-krdict .multiSenseDef,
+.dictionary-scope-krdict .subSenseDef,
+.dictionary-scope-krdict .subMultiTrans,
+.dictionary-scope-krdict .subMultiSenseDef {
+  margin-top: 0.55rem;
+}
+
+.dictionary-scope-krdict .multiTrans,
+.dictionary-scope-krdict .multiSenseDef {
+  font-weight: 700;
+  font-size: 1.02rem;
+}
+
+.dictionary-scope-krdict .senseDef,
+.dictionary-scope-krdict .subSenseDef {
+  color: #334155;
+  font-weight: 600;
+}
+
+.dictionary-scope-krdict .sense_list,
+.dictionary-scope-krdict .subsense_list,
+.dictionary-scope-krdict .pattern_info,
+.dictionary-scope-krdict .relation_info,
+.dictionary-scope-krdict .grammar_info,
+.dictionary-scope-krdict .conju_info,
+.dictionary-scope-krdict .idiom_wrap,
+.dictionary-scope-krdict .proverb_wrap {
+  margin-top: 0.85rem;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.dictionary-scope-krdict .sense_order,
+.dictionary-scope-krdict .subsense_order,
+.dictionary-scope-krdict .pattern_order,
+.dictionary-scope-krdict .relation_order {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  margin-right: 0.45rem;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 0.76rem;
+  font-weight: 700;
+  vertical-align: text-top;
+}
+
+.dictionary-scope-krdict .example_info,
+.dictionary-scope-krdict .pattern_example,
+.dictionary-scope-krdict .relation_example {
+  margin-top: 0.7rem;
+  padding: 10px 12px;
+  border-left: 3px solid #93c5fd;
+  border-radius: 0 8px 8px 0;
+  background: #eff6ff;
+}
+
+.dictionary-scope-krdict .pattern_info .manyLang11,
+.dictionary-scope-krdict .relation_info .manyLang11,
+.dictionary-scope-krdict .grammar_info .manyLang11,
+.dictionary-scope-krdict .conju_info .manyLang11,
+.dictionary-scope-krdict .idiom_tit dt,
+.dictionary-scope-krdict .idiom_title dt {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #ecfeff;
+  color: #0f766e;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.dictionary-scope-krdict .idiom_title dd,
+.dictionary-scope-krdict .idiom_tit em,
+.dictionary-scope-krdict .star_wrap,
+.dictionary-scope-krdict .star {
+  color: #475569;
+}
+
+.dictionary-scope-krdict .chi_info,
+.dictionary-scope-krdict .tiaozhuan {
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.dictionary-scope-krdict .tiaozhuan:hover {
+  text-decoration: underline;
+}
+
+.dictionary-scope-krdict .chi_info i {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-left: 4px;
+  border: 1px solid #93c5fd;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 0.72rem;
+  font-style: normal;
+}
+
+.dictionary-scope-krdict .chi_info i::before {
+  content: "汉";
+}
+
+.dictionary-scope-krdict .sound,
+.dictionary-scope-krdict .sliderkit-nav,
+.dictionary-scope-krdict .multi_sliderkit,
+.dictionary-scope-krdict .datu,
+.dictionary-scope-krdict .xiaotu {
+  display: none !important;
+}
+
+.dictionary-scope-krdict img {
+  display: none;
+}
+
+.dictionary-scope-krdict .manyLang11.blind,
+.dictionary-scope-krdict .blind,
+.dictionary-scope-krdict #chi_tooltip_layer,
+.dictionary-scope-krdict legend,
+.dictionary-scope-krdict caption,
+.dictionary-scope-krdict .senseDefNo,
+.dictionary-scope-krdict .subSenseDefNo {
+  display: none !important;
+}
+
+.dictionary-scope-krdict table {
+  width: 100%;
+  margin-top: 0.75rem;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.dictionary-scope-krdict th,
+.dictionary-scope-krdict td {
+  padding: 8px 10px;
+  border: 1px solid #dbe3ee;
+  vertical-align: top;
+}
+
+.dictionary-scope-krdict th {
+  background: #f8fafc;
+  color: #334155;
+  text-align: left;
+  font-weight: 700;
+}

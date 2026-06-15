@@ -10,6 +10,7 @@ const ECDICTDictionary = lazy(() => import('./dictionary/ECDICTDictionary'));
 const JMDICTDictionary = lazy(() => import('./dictionary/JMDICTDictionary'));
 const DJSDictionary = lazy(() => import('./dictionary/DJSDictionary'));
 const RHSJCDDictionary = lazy(() => import('./dictionary/RHSJCDDictionary'));
+const KRDictDictionary = lazy(() => import('./dictionary/KRDictDictionary'));
 
 interface DictionaryContentProps {
   word: string;
@@ -44,6 +45,16 @@ function DictionaryContent({
       html.includes('rhsjcd.css')
     ) {
       return RHSJCDDictionary;
+    }
+    if (
+      s.includes('krdict') ||
+      s.includes('韩国语') ||
+      s.includes('韓國語') ||
+      html.includes('hgglhh_16') ||
+      html.includes('word_explain_tit') ||
+      html.includes('word_head_box')
+    ) {
+      return KRDictDictionary;
     }
     if (s.includes('朗文') || s.includes('longman')) return LongmanDictionary;
     if (s.includes('牛津') || s.includes('oxford') || s.includes('oald')) return OxfordDictionary;
