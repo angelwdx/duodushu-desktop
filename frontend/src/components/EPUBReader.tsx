@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import ReaderToolbarPopover from './ReaderToolbarPopover';
 import { useReaderGestures } from '../hooks/useReaderGestures';
 import { useFullTextTTS } from '../hooks/useFullTextTTS';
 import TTSLoadingDots from './TTSLoadingDots';
@@ -126,6 +127,7 @@ export default function EPUBReader({
   const isJumpingRef = useRef<boolean>(false);
   const contentSyncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const appearanceMenuRef = useRef<HTMLDivElement>(null);
+  const appearanceMenuButtonRef = useRef<HTMLButtonElement>(null);
   const lastProcessedJumpTs = useRef<number>(0);
   const jumpRequestedBeforeReadyRef = useRef<{ dest: string | number; text?: string; word?: string; ts: number } | null>(null);
   const hasUserProgressChangeRef = useRef(false);
@@ -848,9 +850,15 @@ export default function EPUBReader({
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (appearanceMenuRef.current && !appearanceMenuRef.current.contains(event.target as Node)) {
-        setShowAppearanceMenu(false);
+      const target = event.target as Node;
+      if (
+        appearanceMenuRef.current?.contains(target) ||
+        appearanceMenuButtonRef.current?.contains(target)
+      ) {
+        return;
       }
+
+      setShowAppearanceMenu(false);
     };
     if (showAppearanceMenu) {
       document.addEventListener('mousedown', handleClickOutside);
@@ -3685,6 +3693,8 @@ export default function EPUBReader({
         {/* Appearance Settings */}
         <div className="relative">
              <button
+                ref={appearanceMenuButtonRef}
+                type="button"
                 onClick={() => setShowAppearanceMenu(!showAppearanceMenu)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${showAppearanceMenu ? "bg-black/5 text-gray-900" : "hover:bg-black/5 text-gray-700"}`}
                 title="外观设置"
@@ -3693,8 +3703,13 @@ export default function EPUBReader({
                 <span>外观</span>
              </button>
              
-             {showAppearanceMenu && (
-                <div ref={appearanceMenuRef} className="absolute bottom-full right-0 mb-4 w-72 bg-white/95 backdrop-blur-xl border border-gray-100/50 rounded-2xl shadow-[0_10px_40px_rgba(0,0,0,0.15)] p-4 z-50 flex flex-col gap-4 origin-bottom-right animate-in fade-in zoom-in-95 duration-200">
+             <ReaderToolbarPopover
+               open={showAppearanceMenu}
+               anchorRef={appearanceMenuButtonRef}
+               popoverRef={appearanceMenuRef}
+               popoverWidth={288}
+               className="w-72 bg-white/95 backdrop-blur-xl border border-gray-100/50 rounded-2xl shadow-[0_10px_40px_rgba(0,0,0,0.15)] p-4 flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-200"
+             >
                   {/* View Settings */}
                   <div>
                     <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">视图设置</div>
@@ -3777,8 +3792,7 @@ export default function EPUBReader({
                          </div>
                       </div>
                   </div>
-                </div>
-             )}
+            </ReaderToolbarPopover>
         </div>
       </div>
     </div>

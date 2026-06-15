@@ -3,6 +3,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { useReaderGestures } from "../hooks/useReaderGestures";
 import { useFullTextTTS } from "../hooks/useFullTextTTS";
+import ReaderToolbarPopover from "./ReaderToolbarPopover";
 import TTSLoadingDots from "./TTSLoadingDots";
 import TTSQuickMenu from "./TTSQuickMenu";
 import { getApiUrl } from "../lib/api";
@@ -553,7 +554,11 @@ export default function PDFReader({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const pageContainerRef = useRef<HTMLDivElement>(null);
-  const zoomMenuRef = useRef<HTMLDivElement>(null);
+  const toolbarMenuGroupRef = useRef<HTMLDivElement>(null);
+  const calibrationButtonRef = useRef<HTMLButtonElement>(null);
+  const calibrationPopoverRef = useRef<HTMLDivElement>(null);
+  const zoomButtonRef = useRef<HTMLButtonElement>(null);
+  const zoomPopoverRef = useRef<HTMLDivElement>(null);
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
   const loadedReaderPrefsKeyRef = useRef<string | null>(null);
   const skipNextReaderPrefsSaveRef = useRef(false);
@@ -995,19 +1000,31 @@ export default function PDFReader({
   }, [shouldScrollToHighlight, hoveredWord]);
 
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
+    if (!showZoomMenu && !showDebug) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
       if (
-        zoomMenuRef.current &&
-        !zoomMenuRef.current.contains(e.target as Node)
-      )
-        setShowZoomMenu(false);
+        toolbarMenuGroupRef.current?.contains(target) ||
+        calibrationPopoverRef.current?.contains(target) ||
+        zoomPopoverRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      setShowDebug(false);
+      setShowZoomMenu(false);
     };
-    if (showZoomMenu) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () =>
-        document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [showZoomMenu]);
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [showDebug, showZoomMenu]);
+
+  useEffect(() => {
+    if (viewMode === "pdf") return;
+    setShowDebug(false);
+    setShowZoomMenu(false);
+  }, [viewMode]);
 
   useEffect(() => {
     if (dualPageMode && currentSpread.length > 1) {
@@ -1910,7 +1927,7 @@ export default function PDFReader({
 
   return (
     <div 
-      className={`flex flex-col h-full bg-gray-100 ${isSelecting ? "pdf-reading-mode--selecting" : ""}`} 
+      className={`relative flex flex-col h-full bg-gray-100 ${isSelecting ? "pdf-reading-mode--selecting" : ""}`} 
       ref={containerRef} 
       data-reader-type="pdf"
       style={{ touchAction: 'pan-y' }} // 允许垂直滚动和选择，消除 use-gesture 警告
@@ -1984,10 +2001,11 @@ export default function PDFReader({
       )}
 
       <div 
-        className="absolute bottom-0 left-0 w-full z-40 flex items-center justify-between gap-4 px-4 py-2 bg-white/90 backdrop-blur-md border-t border-gray-200/50 text-sm overflow-x-auto overscroll-x-contain whitespace-nowrap"
+        className="absolute bottom-0 left-0 w-full z-40"
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
+        <div className="flex items-center justify-between gap-4 px-4 py-2 bg-white/90 backdrop-blur-md border-t border-gray-200/50 text-sm overflow-x-auto overscroll-x-contain whitespace-nowrap">
         {/* ── 朗读控制区 ── */}
         <div className="flex items-center gap-2 shrink-0">
           {/* 音色选择：始终可见，朗读前就可以选 */}
@@ -2142,24 +2160,34 @@ export default function PDFReader({
         <div className="w-px h-4 bg-gray-300/50"></div>
 
         <div
-          ref={zoomMenuRef}
+          ref={toolbarMenuGroupRef}
           className={`relative flex items-center gap-2 ${viewMode === "text" ? "opacity-30 pointer-events-none grayscale" : ""}`}
         >
           {/* Calibration Button */}
              {/* Calibration */}
              <button 
-                onClick={() => setShowDebug(!showDebug)}
+                ref={calibrationButtonRef}
+                type="button"
+                onClick={() => {
+                  setShowZoomMenu(false);
+                  setShowDebug((prev) => !prev);
+                }}
                 className={`p-1.5 rounded-full transition-all ${showDebug ? "bg-red-50 text-red-600" : "hover:bg-black/5 text-gray-400 hover:text-gray-700"}`}
                 title="校准模式"
              >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
              </button>
 
-          {showDebug && (
-            <div className="absolute bottom-full mb-2 right-0 bg-white border rounded-lg shadow-lg p-3 min-w-[200px] z-50 flex flex-col gap-2">
-              <div className="text-xs font-bold text-gray-700 mb-1">
-                坐标校准 (单位: PDF点)
-              </div>
+          <ReaderToolbarPopover
+            open={showDebug}
+            anchorRef={calibrationButtonRef}
+            popoverRef={calibrationPopoverRef}
+            popoverWidth={224}
+            className="w-56 bg-white/95 backdrop-blur-xl border border-gray-100/60 rounded-2xl shadow-[0_10px_40px_rgba(0,0,0,0.15)] p-3 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-200"
+          >
+             <div className="text-xs font-bold text-gray-700 mb-1">
+               坐标校准 (单位: PDF点)
+             </div>
               <div className="flex items-center justify-between text-xs">
                 <span>X 偏移:</span>
                 <div className="flex items-center gap-1">
@@ -2204,25 +2232,34 @@ export default function PDFReader({
                   </button>
                 </div>
               </div>
-            </div>
-          )}
-
+          </ReaderToolbarPopover>
+ 
              {/* Zoom Trigger */}
              <div className="relative">
                  <button
-                    onClick={() => setShowZoomMenu(!showZoomMenu)}
+                    ref={zoomButtonRef}
+                    type="button"
+                    onClick={() => {
+                      setShowDebug(false);
+                      setShowZoomMenu((prev) => !prev);
+                    }}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors hover:bg-black/5 text-gray-700 min-w-[3.5rem] justify-center"
                  >
                     <span>{getZoomDisplayText()}</span>
                     <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                  </button>
-                 
+                  
                  {/* Zoom Menu Popover */}
-                 {showZoomMenu && (
-                    <div className="absolute bottom-full right-0 mb-4 w-52 bg-white/95 backdrop-blur-xl border border-gray-100/50 rounded-2xl shadow-[0_10px_40px_rgba(0,0,0,0.15)] p-3 z-50 flex flex-col gap-1 origin-bottom-right animate-in fade-in zoom-in-95 duration-200">
-                        <div className="px-3 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest">视图设置</div>
-                        <button onClick={() => setFitModeOption("width")} className={`w-full text-left px-3 py-2 text-sm rounded-xl flex items-center justify-between transition-colors ${fitMode === "width" ? "bg-blue-50/80 text-blue-600" : "hover:bg-gray-100/80 text-gray-700"}`}>
-                            适合宽度 <kbd className="text-[10px] bg-white/50 px-1 rounded border border-black/5">W</kbd>
+                 <ReaderToolbarPopover
+                   open={showZoomMenu}
+                   anchorRef={zoomButtonRef}
+                   popoverRef={zoomPopoverRef}
+                   popoverWidth={208}
+                   className="w-52 bg-white/95 backdrop-blur-xl border border-gray-100/50 rounded-2xl shadow-[0_10px_40px_rgba(0,0,0,0.15)] p-3 flex flex-col gap-1 animate-in fade-in zoom-in-95 duration-200"
+                 >
+                       <div className="px-3 py-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest">视图设置</div>
+                       <button onClick={() => setFitModeOption("width")} className={`w-full text-left px-3 py-2 text-sm rounded-xl flex items-center justify-between transition-colors ${fitMode === "width" ? "bg-blue-50/80 text-blue-600" : "hover:bg-gray-100/80 text-gray-700"}`}>
+                           适合宽度 <kbd className="text-[10px] bg-white/50 px-1 rounded border border-black/5">W</kbd>
                         </button>
                         <button onClick={() => setFitModeOption("height")} className={`w-full text-left px-3 py-2 text-sm rounded-xl flex items-center justify-between transition-colors ${fitMode === "height" ? "bg-blue-50/80 text-blue-600" : "hover:bg-gray-100/80 text-gray-700"}`}>
                             适合高度 <kbd className="text-[10px] bg-white/50 px-1 rounded border border-black/5">H</kbd>
@@ -2275,9 +2312,9 @@ export default function PDFReader({
                             首页为封面
                           </button>
                         )}
-                    </div>
-                 )}
+                 </ReaderToolbarPopover>
              </div>
+        </div>
         </div>
       </div>
     </div>
