@@ -17,6 +17,7 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 import type { TTSConfig as StoredTTSConfig, TTSVoiceOption as ApiTTSVoiceOption } from '../lib/api';
 import { createLogger } from '../lib/logger';
 import { normalizeBookLanguage } from '../lib/japaneseText';
+import { detectTTSContentLanguage } from '../lib/ttsText';
 
 const log = createLogger('useFullTextTTS');
 
@@ -366,7 +367,34 @@ export function useFullTextTTS({
   pageChangeDelay = 600,
   pageStep = 1,
 }: UseFullTextTTSOptions): UseFullTextTTSReturn {
-  const ttsLanguage = getTTSLanguage(bookLanguage);
+  const ttsLanguage = (() => {
+    let textSample = '';
+    try {
+      if (getCurrentPageText) {
+        textSample = getCurrentPageText();
+      } else if (getPageText) {
+        textSample = getPageText(currentPage);
+      }
+    } catch (e) {
+      log.debug('Failed to get page text for language detection:', e);
+    }
+
+    if (textSample) {
+      const detected = detectTTSContentLanguage(textSample, bookLanguage);
+      if (detected === 'ja' || detected === 'ko') {
+        return detected;
+      }
+      if (detected === 'zh' && normalizeBookLanguage(bookLanguage) !== 'en') {
+        return 'zh';
+      }
+    }
+
+    const normalized = normalizeBookLanguage(bookLanguage);
+    if (normalized === 'ja' || normalized === 'zh' || normalized === 'ko') {
+      return normalized;
+    }
+    return 'default';
+  })();
   const isJapaneseTTSLanguage = ttsLanguage === 'ja';
   const getInitialSpeed = () => {
     if (typeof window === 'undefined') return 1;
@@ -382,7 +410,7 @@ export function useFullTextTTS({
   const [currentReadingPage, setCurrentReadingPage] = useState<number | null>(null);
   const [currentChunkText, setCurrentChunkText]     = useState<string | null>(null);
   const [voice, setVoiceState] = useState<TTSVoice>(
-    buildVoiceKey('edge', ttsLanguage === 'ja' ? 'nanami' : ttsLanguage === 'zh' ? 'xiaoxiao' : 'aria'),
+    buildVoiceKey('edge', ttsLanguage === 'ja' ? 'nanami' : ttsLanguage === 'zh' ? 'xiaoxiao' : ttsLanguage === 'ko' ? 'sunhi' : 'aria'),
   );
   const [voices, setVoices] = useState<TTSVoiceOption[]>([]);
   const [provider, setProvider] = useState<TTSProvider>('edge');
@@ -406,7 +434,7 @@ export function useFullTextTTS({
   const getNextPageTextRef = useRef(getNextPageText);
   const totalPagesRef      = useRef(totalPages);
   const onPageChangeRef    = useRef(onPageChange);
-  const voiceRef           = useRef(ttsLanguage === 'ja' ? 'nanami' : ttsLanguage === 'zh' ? 'xiaoxiao' : 'aria');
+  const voiceRef           = useRef(ttsLanguage === 'ja' ? 'nanami' : ttsLanguage === 'zh' ? 'xiaoxiao' : ttsLanguage === 'ko' ? 'sunhi' : 'aria');
   const pageChangeDelayRef = useRef(pageChangeDelay);
   const pageStepRef        = useRef(pageStep);
   const speedRef           = useRef(speed);
@@ -520,12 +548,14 @@ export function useFullTextTTS({
         persistReadyRef.current = true;
       } catch {
         if (!cancelled) {
-          const fallbackVoice = ttsLanguage === 'ja' ? 'nanami' : ttsLanguage === 'zh' ? 'xiaoxiao' : 'aria';
+           const fallbackVoice = ttsLanguage === 'ja' ? 'nanami' : ttsLanguage === 'zh' ? 'xiaoxiao' : ttsLanguage === 'ko' ? 'sunhi' : 'aria';
           const fallbackLabel = ttsLanguage === 'ja'
             ? 'Nanami（日语女声）'
             : ttsLanguage === 'zh'
               ? 'Xiaoxiao（中文女声）'
-              : 'Aria (美式女声)';
+              : ttsLanguage === 'ko'
+                ? 'SunHi（韩语女声）'
+                : 'Aria (美式女声)';
           const fallbackVoices = [{
             id: buildVoiceKey('edge', fallbackVoice),
             label: `Edge TTS · ${fallbackLabel}`,
