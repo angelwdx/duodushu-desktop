@@ -233,7 +233,7 @@ def test_get_lookup_terms_generates_korean_fallbacks(monkeypatch):
         "시작하다", "말하다", "끌리다", "크다", "작다", "보이다", "무채색",
         "개성있다", "기다리다", "테이블", "힘있다", "없다", "약속시간", "늦다",
         "않다", "되다", "나오다", "남자", "가느다랗다", "원인", "신경쓰이다",
-        "브래지어",
+        "브래지어", "손",
     }
 
     monkeypatch.setattr(dict_service, "_candidate_exists", lambda candidate: candidate in known_terms)
@@ -247,6 +247,7 @@ def test_get_lookup_terms_generates_korean_fallbacks(monkeypatch):
     assert_terms_start("좋아요", ["좋아요", "좋다"])
     assert_terms_start("갑니다", ["갑니다", "가다"])
     assert_terms_start("갔다", ["갔다", "가다"])
+    assert_terms_start("있다면", ["있다면", "있다"])
     assert_terms_start("나무라자", ["나무라자", "나무라다"])
     assert_terms_start("나무라라", ["나무라라", "나무라다"])
     assert_terms_start("먹어라", ["먹어라", "먹다"])
@@ -261,6 +262,8 @@ def test_get_lookup_terms_generates_korean_fallbacks(monkeypatch):
     assert_terms_start("개성있어 보이는", ["개성있어 보이는", "개성있다", "보이다"])
     assert_terms_start("개성있어", ["개성있어", "개성있다"])
     assert_terms_start("기다리는", ["기다리는", "기다리다"])
+    assert_terms_start("나는", ["나는", "나"])
+    assert_terms_start("손을", ["손을", "손"])
     assert_terms_start("테이블로", ["테이블로", "테이블"])
     assert_terms_start("힘있지도", ["힘있지도", "힘있다"])
     assert_terms_start("없어 보였기", ["없어 보였기", "없다", "보이다"])
@@ -301,6 +304,39 @@ def test_lookup_word_uses_korean_fallback_for_imported_dictionary(monkeypatch):
     assert result["word"] == "먹다"
     assert result["lookup_term"] == "먹어요"
     assert result["lemma_from"] == "먹다"
+
+
+def test_lookup_word_prefers_korean_stem_over_exact_particle_form(monkeypatch):
+    class StubDictManager:
+        def lookup_word(self, word, source=None):
+            if source == "KoreanDict" and word == "적":
+                return {
+                    "word": "적",
+                    "source": "KoreanDict",
+                    "html_content": "<div>experience</div>",
+                    "meanings": [{"partOfSpeech": "n.", "definitions": [{"definition": "experience"}]}],
+                }
+            if source == "KoreanDict" and word == "적이":
+                return {
+                    "word": "적이",
+                    "source": "KoreanDict",
+                    "html_content": "<div>exact form</div>",
+                    "meanings": [{"partOfSpeech": "n.", "definitions": [{"definition": "exact form"}]}],
+                }
+            return None
+
+        def word_exists(self, word):
+            return word == "적"
+
+    monkeypatch.setattr(dict_service, "get_dict_manager", lambda: StubDictManager())
+    monkeypatch.setattr(dict_service.ecdict_service, "get_word_details", lambda word: None)
+
+    result = dict_service.lookup_word(db=None, word="적이", source="KoreanDict")
+
+    assert result is not None
+    assert result["word"] == "적"
+    assert result["lookup_term"] == "적이"
+    assert result["lemma_from"] == "적"
 
 
 def test_lookup_word_all_sources_limits_korean_to_korean_dictionaries(monkeypatch):
