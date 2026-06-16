@@ -43,7 +43,9 @@ def test_normalize_book_language_handles_common_values():
 
 
 def test_detect_book_language_prefers_metadata_and_japanese_signal():
-    assert detect_book_language("This is a novel written in English.", metadata_language="ja") == "ja"
+    # 新逻辑：优先根据文本特征判断，避免错误的 metadata 误导
+    # 如果 metadata 说是日文但文本中一个假名都没有，说明 metadata 错误，不应信任
+    assert detect_book_language("This is a novel written in English.", metadata_language="ja") == "en"
     assert detect_book_language("これは日本語の小説です。漢字にふりがなを付けたい。") == "ja"
     assert detect_book_language("This is a novel written in English with several paragraphs of plain prose.") == "en"
 
