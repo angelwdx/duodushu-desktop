@@ -1,7 +1,7 @@
 # 多读书 (Duodushu) 桌面客户端
 
-**版本**: 1.0.5
-**最后更新**: 2026-04-17
+**版本**: 1.2.3
+**最后更新**: 2026-06-16
 
 一款**本地优先（Local-First）且支持绿色便携（Portable）**的沉浸式英语学习工作站。现已全面支持 Windows 和 MacOS。
 
@@ -15,7 +15,7 @@
 
 ### 安装模式（MacOS）
 
-1. 下载 `Duodushu-1.0.5-arm64.dmg`
+1. 下载 `Duodushu-1.2.3-arm64.dmg`
 2. 将 `Duodushu.app` 拖入 Applications 文件夹
 3. **解决"已损坏"提示**: 由于应用暂未签署 Apple 开发者证书，从浏览器下载的版本会被 macOS 误报为"已损坏"。请在终端运行以下指令解决：
    ```bash
@@ -38,6 +38,13 @@ npm run dev
 ```
 
 ## ✨ 最新更新
+
+### v1.2.3
+- ✅ **韩语支持** - 新增韩语词典查询与词干提取功能，支持韩语电子书阅读与查词
+- ✅ **智能语言检测** - TTS 系统可动态检测页面文本中的韩语语言并自动切换对应音色
+- ✅ **韩语优先级优化** - 优化韩语查询词项优先级排序，提升查词准确性
+- ✅ **阅读器体验** - 修复阅读器底部弹层遮挡问题
+- ✅ **语言检测增强** - 改进书籍语言检测逻辑，优先根据文本特征判断，避免错误的 metadata 误导
 
 ### v1.0.5
 - ✅ **笔记持久化** - 划线笔记从 localStorage 迁移到 SQLite 数据库，重启、更新后笔记永不丢失
@@ -67,7 +74,7 @@ npm run dev
 - ✅ **智能网络感知** - 内置离线模式检测，断网时自动降级 UI 并禁用 AI 联网功能
 - ✅ **AI 深度辅助** - 支持多模型（GPT/Claude/DeepSeek等）辅助阅读与智能问答
 - ✅ **沉浸式阅读** - 支持 PDF/EPUB/TXT 阅读，集成 Edge TTS 与本地 Qwen3 TTS 朗读
-- ✅ **词典联动** - 支持多种自定义词典（Mdict），内置生词本与智能复习算法（支持导出 CSV/Anki）
+- ✅ **词典联动** - 支持多种自定义词典（Mdict）、日文/韩语词典，内置生词本与智能复习算法（支持导出 CSV/Anki）
 
 ## 📖 文档导航
 
@@ -107,15 +114,15 @@ duodushu-desktop/
 
 - 桌面端自动更新基于 `electron-updater`，发布源为 GitHub Releases
 - 当前自动更新仓库为 `angelwdx/duodushu-desktop`
-- 推送形如 `v1.0.5` 的 tag 后，会自动触发 [`.github/workflows/build.yml`](./.github/workflows/build.yml)
+- 推送形如 `v1.2.3` 的 tag 后，会自动触发 [`.github/workflows/build.yml`](./.github/workflows/build.yml)
 - 工作流会分别构建 macOS 和 Windows 安装包，并自动创建 GitHub Release
 
 ### 发布新版
 
 ```bash
 git add -A && git commit -m "feat: ..."
-git tag v1.0.x
-git push origin main && git push origin v1.0.x
+git tag v1.2.x
+git push origin main && git push origin v1.2.x
 ```
 
 详见 [部署指南](./docs/DEPLOYMENT.md)
@@ -133,7 +140,24 @@ git push origin main && git push origin v1.0.x
 
 ## 🎯 路线图 (Roadmap)
 
-### v1.0.x（当前稳定版）
+### v1.2.x（当前稳定版）
+- ✅ **韩语支持** — 完整的韩语词典查询、词干提取、TTS 动态语言检测
+- ✅ **书籍语言检测增强** — 优先根据文本特征判断，避免错误的 metadata 误导
+- ✅ **阅读器体验优化** — 修复底部弹层遮挡问题
+- ✅ **全局内容搜索 (FTS5)** — 跨书搜索书名与书中全文，点击结果直达对应页面并高亮
+- ✅ **笔记持久化** — 划线笔记存入 SQLite，永久保存，支持导出 Markdown
+- ✅ **macOS 托盘单击修复** — 单击即可显示/隐藏窗口
+- ✅ **TTS 缓存扩容** — 支持最大 10GB / 50,000 条音频缓存
+- ✅ **全局快捷键与原生菜单逻辑重构 (Cmd+F / Cmd+Shift+Space)**
+- ✅ **离线模式与网络状态智能检测**
+- ✅ **多窗口支持 (Multi-Window Reading)**
+- ✅ **系统托盘与双击文件关联支持**
+- ✅ **全自动更新流程与生产构建流水线优化 (GitHub Actions)**
+- ✅ **本地 Qwen3 TTS 集成与阅读器朗读控制增强**
+- ✅ **PDF 下沉首字母修复与朗读/查词文本统一**
+
+> [!TIP]
+> 推荐使用 `v1.2.3` 版本以获取当前最完整的桌面端沉浸阅读体验，包含最新的韩语支持功能。
 - ✅ **全局内容搜索 (FTS5)** — 跨书搜索书名与书中全文，点击结果直达对应页面并高亮
 - ✅ **笔记持久化** — 划线笔记存入 SQLite，永久保存，支持导出 Markdown
 - ✅ **macOS 托盘单击修复** — 单击即可显示/隐藏窗口
